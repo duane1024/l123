@@ -85,6 +85,15 @@ pub trait Engine {
     fn define_name(&mut self, _name: &str, _range: Range) -> Result<()> {
         Err(EngineError::Unsupported("define_name"))
     }
+    fn delete_name(&mut self, _name: &str) -> Result<()> {
+        Err(EngineError::Unsupported("delete_name"))
+    }
+    /// Name of the worksheet at this sheet ID, as the engine knows it.
+    /// Used when constructing Excel-shape formulas that include a sheet
+    /// qualifier (e.g. `Sheet1!$A$1:$A$5`).
+    fn sheet_name(&self, _id: SheetId) -> Option<String> {
+        None
+    }
     fn save_xlsx(&self, _path: &Path) -> Result<()> {
         Err(EngineError::Unsupported("save_xlsx"))
     }

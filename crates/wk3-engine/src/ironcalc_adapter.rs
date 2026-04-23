@@ -11,7 +11,7 @@ use std::path::Path;
 use ironcalc::base::{expressions::utils::number_to_column, Model};
 use ironcalc::export::save_to_xlsx;
 
-use wk3_core::{Address, SheetId, Value};
+use wk3_core::{address::col_to_letters, Address, Range, SheetId, Value};
 
 use crate::engine::{CellView, Engine, EngineError, Result};
 
@@ -134,6 +134,39 @@ impl Engine for IronCalcEngine {
         self.extend_sheets_to(id)
     }
 
+    fn define_name(&mut self, name: &str, range: Range) -> Result<()> {
+        let r = range.normalized();
+        let sheet_name = self.sheet_name(r.start.sheet).ok_or_else(|| {
+            EngineError::BadAddress(format!("unknown sheet {:?}", r.start.sheet))
+        })?;
+        let formula = format!(
+            "{}!${}${}:${}${}",
+            sheet_name,
+            col_to_letters(r.start.col),
+            r.start.row + 1,
+            col_to_letters(r.end.col),
+            r.end.row + 1,
+        );
+        self.model
+            .new_defined_name(name, None, &formula)
+            .map_err(EngineError::Backend)
+    }
+
+    fn delete_name(&mut self, name: &str) -> Result<()> {
+        self.model
+            .delete_defined_name(name, None)
+            .map_err(EngineError::Backend)
+    }
+
+    fn sheet_name(&self, id: SheetId) -> Option<String> {
+        let idx = self.sheet_index(id) as usize;
+        self.model
+            .workbook
+            .worksheets
+            .get(idx)
+            .map(|ws| ws.get_name())
+    }
+
     fn save_xlsx(&self, path: &Path) -> Result<()> {
         let path_str = path.to_str().ok_or_else(|| {
             EngineError::Backend(format!("non-UTF8 path: {}", path.display()))
@@ -181,6 +214,41 @@ mod tests {
         e.recalc();
         let cv = e.get_cell(Address::new(SheetId::A, 0, 0)).unwrap();
         assert_eq!(cv.value, Value::Text("hello".into()));
+    }
+
+    #[test]
+    fn named_range_can_be_defined_and_used_in_formula() {
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "10").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "20").unwrap();
+        let r = Range {
+            start: Address::new(SheetId::A, 0, 0),
+            end: Address::new(SheetId::A, 0, 1),
+        };
+        e.define_name("revenue", r).unwrap();
+        e.set_user_input(Address::new(SheetId::A, 1, 0), "=SUM(revenue)").unwrap();
+        e.recalc();
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 1, 0)).unwrap().value,
+            Value::Number(30.0)
+        );
+    }
+
+    #[test]
+    fn delete_name_removes_it() {
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "42").unwrap();
+        let r = Range::single(Address::new(SheetId::A, 0, 0));
+        e.define_name("tax", r).unwrap();
+        e.delete_name("tax").unwrap();
+        // Re-defining the same name should now succeed.
+        e.define_name("tax", r).unwrap();
+    }
+
+    #[test]
+    fn sheet_name_is_sheet1_by_default() {
+        let e = IronCalcEngine::new().unwrap();
+        assert_eq!(e.sheet_name(SheetId::A).as_deref(), Some("Sheet1"));
     }
 
     #[test]

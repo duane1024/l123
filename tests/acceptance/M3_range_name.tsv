@@ -1,0 +1,61 @@
+# /Range Name Create|Delete — named ranges usable in formulas.
+#
+# /RNC prompts for a name, then POINT for the range; stores the name →
+# range mapping in the engine so later formulas may reference it.
+# /RND takes a name and deletes it.
+
+# Seed A1=10, A2=20.
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+HOME
+
+# /RNC → name prompt, then POINT.
+KEY /
+KEY R
+KEY N
+KEY C
+ASSERT_PANEL_L3   Enter name
+
+KEYS sales
+ENTER
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   range
+DOWN
+ASSERT_PANEL_L3   A:A1..A:A2
+ENTER
+ASSERT_MODE       READY
+
+# A formula referencing the name evaluates correctly.
+DOWN
+DOWN
+ASSERT_POINTER    A:A4
+KEY @
+KEYS SUM(sales)
+ENTER
+ASSERT_CELL       A:A4  30
+
+# /RND removes the name. The formula's cell recomputes to ERR/NA — we
+# don't pin down the exact error string here (it's engine-specific);
+# re-defining the same name should now succeed without a duplicate
+# error.
+KEY /
+KEY R
+KEY N
+KEY D
+ASSERT_PANEL_L3   Enter name to delete
+KEYS sales
+ENTER
+ASSERT_MODE       READY
+
+HOME
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS sales
+ENTER
+ENTER
+ASSERT_MODE       READY

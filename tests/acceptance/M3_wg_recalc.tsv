@@ -1,0 +1,37 @@
+# /Worksheet Global Recalc Automatic|Manual toggles the recalc mode.
+# Manual stops auto-recalc and lights the CALC indicator; F9 or switching
+# back to Automatic clears it.
+
+# Seed: A1 = 10, B1 = +A1*2 (auto-recalcs in Automatic mode)
+KEYS 10
+RIGHT
+KEY +
+KEYS A1*2
+ENTER
+HOME
+ASSERT_CELL       A:B1  20
+ASSERT_STATUS     Ctrl-C to quit
+
+# /WGRM → switch to Manual
+KEY /
+KEY W
+KEY G
+KEY R
+KEY M
+ASSERT_MODE       READY
+
+# Change A1 to 100. In Manual mode, B1 does NOT auto-recompute;
+# CALC indicator lights up.
+KEYS 100
+ENTER
+ASSERT_CELL       A:B1  20
+ASSERT_STATUS     CALC
+
+# /WGRA switches back to Automatic; this triggers recalc and clears CALC.
+KEY /
+KEY W
+KEY G
+KEY R
+KEY A
+ASSERT_CELL       A:B1  200
+ASSERT_STATUS     Ctrl-C to quit

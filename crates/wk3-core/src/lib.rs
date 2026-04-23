@@ -12,7 +12,7 @@ pub mod value;
 
 pub use address::{Address, Range, SheetId};
 pub use contents::{format_number_general, CellContents};
-pub use format::{Format, FormatKind};
+pub use format::{format_number, Format, FormatKind};
 pub use label::LabelPrefix;
 pub use mode::Mode;
 pub use value::{ErrKind, Value};

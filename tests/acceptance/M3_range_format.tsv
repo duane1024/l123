@@ -1,0 +1,77 @@
+# Authenticity Contract #7 — /Range Format with per-cell formats.
+# Tests the complete cascade: /RF<kind>[decimals]~<range>~.
+
+KEYS 1234.5
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 1234.5
+
+# /RFF → prompt for decimals (default 2) → POINT → apply Fixed 2.
+KEY /
+KEY R
+KEY F
+KEY F
+ASSERT_PANEL_L3   decimal places
+ASSERT_PANEL_L2   2
+
+ENTER
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   format
+
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (F2) 1234.5
+ASSERT_CELL       A:A1  1234.50
+
+# /RFC with decimals typed explicitly (replaces default).
+KEY /
+KEY R
+KEY F
+KEY C
+ASSERT_PANEL_L2   2
+KEY 0
+ASSERT_PANEL_L2   0
+ENTER
+ENTER
+ASSERT_PANEL_L1   A:A1: (C0) 1234.5
+ASSERT_CELL       A:A1  $1234
+
+# /RFP percent 1 decimal
+KEYS 0.5
+ENTER
+DOWN
+KEYS 0.25
+ENTER
+HOME
+KEY /
+KEY R
+KEY F
+KEY P
+KEY 1
+ENTER
+DOWN
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (P1) 0.5
+ASSERT_CELL       A:A1  50.0%
+ASSERT_CELL       A:A2  25.0%
+
+# /RFG resets to General format (no decimals prompt needed).
+HOME
+KEY /
+KEY R
+KEY F
+KEY G
+ASSERT_MODE       POINT
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) 0.5
+ASSERT_CELL       A:A1  0.5
+
+# /RFR resets to default — tag disappears (cell inherits General).
+HOME
+KEY /
+KEY R
+KEY F
+KEY R
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) 0.5

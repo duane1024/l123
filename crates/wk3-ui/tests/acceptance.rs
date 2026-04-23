@@ -234,4 +234,8 @@ transcripts! {
     m3_copy            => "M3_copy.tsv",
     m3_move            => "M3_move.tsv",
     m3_range_label     => "M3_range_label.tsv",
+    m3_range_format    => "M3_range_format.tsv",
+    m3_wg_recalc       => "M3_wg_recalc.tsv",
+    m3_ws_col_width    => "M3_ws_col_width.tsv",
+    m3_range_name      => "M3_range_name.tsv",
 }

@@ -1,0 +1,36 @@
+# /Worksheet Column Set-Width — numeric prompt for a new width on the
+# current column. Non-default widths surface as `[Wn]` on control panel
+# line 1, after any format tag (SPEC §12).
+
+ASSERT_POINTER    A:A1
+KEYS 42
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) 42
+
+# /WCS opens the width prompt.
+KEY /
+KEY W
+KEY C
+KEY S
+ASSERT_PANEL_L3   column width
+ASSERT_PANEL_L2   9
+
+# Type new width 15 and Enter.
+KEY 1
+KEY 5
+ENTER
+
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (G) [W15] 42
+
+# Moving to another cell in the same column should also show [W15].
+DOWN
+KEYS hi
+ENTER
+ASSERT_PANEL_L1   A:A2: [W15] 'hi
+
+# Column B keeps the default width — no tag.
+RIGHT
+KEYS 7
+ENTER
+ASSERT_PANEL_L1   A:B2: (G) 7

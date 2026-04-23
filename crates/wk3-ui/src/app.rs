@@ -25,8 +25,8 @@ use ratatui::{
     Terminal,
 };
 use wk3_core::{
-    address::col_to_letters, label::is_value_starter, Address, CellContents, LabelPrefix, Mode,
-    Range, SheetId, Value,
+    address::col_to_letters, label::is_value_starter, Address, CellContents, Format, FormatKind,
+    LabelPrefix, Mode, Range, SheetId, Value,
 };
 use wk3_engine::{Engine, IronCalcEngine, RecalcMode};
 use wk3_menu::{self as menu, Action, MenuBody, MenuItem};
@@ -62,6 +62,8 @@ pub struct App {
     viewport_col_offset: u16,
     viewport_row_offset: u32,
     cells: HashMap<Address, CellContents>,
+    cell_formats: HashMap<Address, Format>,
+    col_widths: HashMap<(SheetId, u16), u8>,
     entry: Option<Entry>,
     default_label_prefix: LabelPrefix,
     engine: IronCalcEngine,
@@ -69,6 +71,51 @@ pub struct App {
     recalc_pending: bool,
     menu: Option<MenuState>,
     point: Option<PointState>,
+    prompt: Option<PromptState>,
+    /// Transient slot for the two-step /Range Name Create flow — the
+    /// typed name is stashed here after the prompt step and consumed by
+    /// commit_point.
+    pending_name: Option<String>,
+}
+
+/// Numeric (or short-text) prompt state for commands that need an argument
+/// before descending into POINT. E.g. /RFC → "Enter number of decimal
+/// places (0..15): 2" → then POINT for the range.
+#[derive(Debug, Clone)]
+struct PromptState {
+    label: String,
+    buffer: String,
+    /// What the command wants to do once the prompt commits.
+    next: PromptNext,
+    /// True while the buffer still holds the auto-filled default. The
+    /// first printable keystroke clears it (1-2-3 "typed input replaces
+    /// the default" convention).
+    fresh: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PromptNext {
+    /// Then go to POINT and apply `Format { kind, decimals: <buffer> }`.
+    RangeFormat { kind: FormatKind },
+    /// Set the current column's width to the buffered number.
+    WorksheetColumnSetWidth,
+    /// After the user types a name, stash it and go to POINT for the range.
+    RangeNameCreate,
+    /// After the user types a name, delete it from the engine.
+    RangeNameDelete,
+}
+
+impl PromptNext {
+    fn accepts_char(self, c: char) -> bool {
+        match self {
+            PromptNext::RangeFormat { .. } | PromptNext::WorksheetColumnSetWidth => {
+                c.is_ascii_digit()
+            }
+            PromptNext::RangeNameCreate | PromptNext::RangeNameDelete => {
+                c.is_ascii_alphanumeric() || c == '_'
+            }
+        }
+    }
 }
 
 /// Transient state while the user is selecting a cell/range in POINT mode.
@@ -91,6 +138,10 @@ enum PendingCommand {
     MoveFrom,
     MoveTo { source: Range },
     RangeLabel { new_prefix: LabelPrefix },
+    RangeFormat { format: Format },
+    /// `pending_name` on App carries the name; on commit, define it over
+    /// the selected range.
+    RangeNameCreate,
 }
 
 impl PendingCommand {
@@ -102,6 +153,8 @@ impl PendingCommand {
             PendingCommand::MoveFrom => "Enter range to move FROM:",
             PendingCommand::MoveTo { .. } => "Enter range to move TO:",
             PendingCommand::RangeLabel { .. } => "Enter range for label-prefix change:",
+            PendingCommand::RangeFormat { .. } => "Enter range to format:",
+            PendingCommand::RangeNameCreate => "Enter range for the named range:",
         }
     }
 }
@@ -141,6 +194,8 @@ impl App {
             viewport_col_offset: 0,
             viewport_row_offset: 0,
             cells: HashMap::new(),
+            cell_formats: HashMap::new(),
+            col_widths: HashMap::new(),
             entry: None,
             default_label_prefix: LabelPrefix::Apostrophe,
             engine: IronCalcEngine::new().expect("IronCalc engine init"),
@@ -148,6 +203,8 @@ impl App {
             recalc_pending: false,
             menu: None,
             point: None,
+            prompt: None,
+            pending_name: None,
         }
     }
 
@@ -254,6 +311,13 @@ impl App {
         // Ctrl-C (Ctrl-Break alias) always exits.
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
             self.running = false;
+            return;
+        }
+        // A command argument prompt takes precedence over the mode-based
+        // dispatcher — it intercepts keystrokes while the mode indicator
+        // continues to reflect the underlying state (MENU/POINT/etc).
+        if self.prompt.is_some() {
+            self.handle_key_prompt(k);
             return;
         }
         match self.mode {
@@ -494,6 +558,25 @@ impl App {
             Action::WorksheetInsertColumn => self.insert_col_at_pointer(1),
             Action::WorksheetDeleteRow => self.delete_row_at_pointer(1),
             Action::WorksheetDeleteColumn => self.delete_col_at_pointer(1),
+            Action::WorksheetGlobalRecalcAutomatic => {
+                self.recalc_mode = RecalcMode::Automatic;
+                // Switching into Automatic catches up on any pending work.
+                self.do_recalc();
+                self.close_menu();
+            }
+            Action::WorksheetGlobalRecalcManual => {
+                self.recalc_mode = RecalcMode::Manual;
+                self.close_menu();
+            }
+            Action::WorksheetColumnSetWidth => self.start_col_width_prompt(),
+            Action::RangeNameCreate => self.start_name_prompt(
+                "Enter name:",
+                PromptNext::RangeNameCreate,
+            ),
+            Action::RangeNameDelete => self.start_name_prompt(
+                "Enter name to delete:",
+                PromptNext::RangeNameDelete,
+            ),
             Action::RangeErase => self.begin_point(PendingCommand::RangeErase),
             Action::Copy => self.begin_point(PendingCommand::CopyFrom),
             Action::Move => self.begin_point(PendingCommand::MoveFrom),
@@ -503,6 +586,20 @@ impl App {
                 .begin_point(PendingCommand::RangeLabel { new_prefix: LabelPrefix::Quote }),
             Action::RangeLabelCenter => self
                 .begin_point(PendingCommand::RangeLabel { new_prefix: LabelPrefix::Caret }),
+            Action::RangeFormatFixed => self.start_decimals_prompt(FormatKind::Fixed),
+            Action::RangeFormatScientific => self.start_decimals_prompt(FormatKind::Scientific),
+            Action::RangeFormatCurrency => self.start_decimals_prompt(FormatKind::Currency),
+            Action::RangeFormatComma => self.start_decimals_prompt(FormatKind::Comma),
+            Action::RangeFormatPercent => self.start_decimals_prompt(FormatKind::Percent),
+            Action::RangeFormatGeneral => self.begin_point(PendingCommand::RangeFormat {
+                format: Format::GENERAL,
+            }),
+            Action::RangeFormatReset => self.begin_point(PendingCommand::RangeFormat {
+                format: Format::RESET,
+            }),
+            Action::RangeFormatText => self.begin_point(PendingCommand::RangeFormat {
+                format: Format { kind: FormatKind::Text, decimals: 0 },
+            }),
             // Subsequent cycles wire these. For now, descent is a no-op.
             _ => self.close_menu(),
         }
@@ -658,7 +755,156 @@ impl App {
                 self.execute_range_label(range, new_prefix);
                 self.mode = Mode::Ready;
             }
+            PendingCommand::RangeFormat { format } => {
+                self.execute_range_format(range, format);
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::RangeNameCreate => {
+                if let Some(name) = self.pending_name.take() {
+                    let _ = self.engine.define_name(&name, range);
+                    self.engine.recalc();
+                    self.refresh_formula_caches();
+                }
+                self.mode = Mode::Ready;
+            }
         }
+    }
+
+    // ---------------- command-argument prompt ----------------
+
+    fn start_decimals_prompt(&mut self, kind: FormatKind) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter number of decimal places (0..15):".into(),
+            buffer: "2".into(),
+            next: PromptNext::RangeFormat { kind },
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_col_width_prompt(&mut self) {
+        self.menu = None;
+        let current = self.col_width_of(self.pointer.sheet, self.pointer.col);
+        self.prompt = Some(PromptState {
+            label: "Enter column width (1..240):".into(),
+            buffer: current.to_string(),
+            next: PromptNext::WorksheetColumnSetWidth,
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_name_prompt(&mut self, label: &str, next: PromptNext) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: label.into(),
+            buffer: String::new(),
+            next,
+            // An empty buffer has nothing to "replace" on first keystroke;
+            // fresh only matters for defaults.
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Width of `col` in `sheet`. Returns the stored width, or the default
+    /// (9) if none is set.
+    fn col_width_of(&self, sheet: SheetId, col: u16) -> u8 {
+        self.col_widths.get(&(sheet, col)).copied().unwrap_or(9)
+    }
+
+    fn handle_key_prompt(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Enter => self.commit_prompt(),
+            KeyCode::Esc => self.cancel_prompt(),
+            KeyCode::Backspace => {
+                if let Some(p) = self.prompt.as_mut() {
+                    if p.fresh {
+                        p.buffer.clear();
+                        p.fresh = false;
+                    } else {
+                        p.buffer.pop();
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(p) = self.prompt.as_mut() {
+                    if !p.next.accepts_char(c) {
+                        return;
+                    }
+                    if p.fresh {
+                        p.buffer.clear();
+                        p.fresh = false;
+                    }
+                    p.buffer.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn cancel_prompt(&mut self) {
+        self.prompt = None;
+        self.mode = Mode::Ready;
+    }
+
+    fn commit_prompt(&mut self) {
+        let Some(p) = self.prompt.take() else {
+            self.mode = Mode::Ready;
+            return;
+        };
+        match p.next {
+            PromptNext::RangeFormat { kind } => {
+                let decimals: u8 = p.buffer.parse().unwrap_or(2);
+                let decimals = decimals.min(15);
+                let format = Format { kind, decimals };
+                self.begin_point(PendingCommand::RangeFormat { format });
+            }
+            PromptNext::WorksheetColumnSetWidth => {
+                let width: u8 = p.buffer.parse().unwrap_or(9).clamp(1, 240);
+                let key = (self.pointer.sheet, self.pointer.col);
+                if width == 9 {
+                    self.col_widths.remove(&key);
+                } else {
+                    self.col_widths.insert(key, width);
+                }
+                self.mode = Mode::Ready;
+            }
+            PromptNext::RangeNameCreate => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                self.pending_name = Some(p.buffer);
+                self.begin_point(PendingCommand::RangeNameCreate);
+            }
+            PromptNext::RangeNameDelete => {
+                if !p.buffer.is_empty() {
+                    let _ = self.engine.delete_name(&p.buffer);
+                    self.engine.recalc();
+                    self.refresh_formula_caches();
+                }
+                self.mode = Mode::Ready;
+            }
+        }
+    }
+
+    // ---------------- range-format execution ----------------
+
+    fn execute_range_format(&mut self, range: Range, format: Format) {
+        let r = range.normalized();
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                if matches!(format.kind, FormatKind::Reset) {
+                    self.cell_formats.remove(&addr);
+                } else {
+                    self.cell_formats.insert(addr, format);
+                }
+            }
+        }
+        // No recalc needed — format is presentation only.
     }
 
     fn execute_range_label(&mut self, range: Range, new_prefix: LabelPrefix) {
@@ -906,15 +1152,30 @@ impl App {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // Line 1: "<addr>: [(fmt)] <readout>" left; mode indicator right.
+        // Line 1: "<addr>: [(fmt) [Wn]] <readout>" left; mode indicator right.
         let readout = self.cell_readout_for_line1();
-        let tag = self.format_tag_for_line1();
-        let left = if readout.is_empty() {
+        let format_tag = self.format_tag_for_line1();
+        let width_tag = self.width_tag_for_line1();
+        let mut tags: Vec<&str> = Vec::new();
+        if !format_tag.is_empty() {
+            tags.push(&format_tag);
+        }
+        if !width_tag.is_empty() {
+            tags.push(&width_tag);
+        }
+        let left = if readout.is_empty() && tags.is_empty() {
             format!(" {}: ", self.pointer.display_full())
-        } else if tag.is_empty() {
+        } else if tags.is_empty() {
             format!(" {}: {}", self.pointer.display_full(), readout)
+        } else if readout.is_empty() {
+            format!(" {}: {}", self.pointer.display_full(), tags.join(" "))
         } else {
-            format!(" {}: {} {}", self.pointer.display_full(), tag, readout)
+            format!(
+                " {}: {} {}",
+                self.pointer.display_full(),
+                tags.join(" "),
+                readout
+            )
         };
         let mode_str = self.mode.indicator();
         let pad = (area.width as usize)
@@ -926,16 +1187,24 @@ impl App {
             Span::raw(" "),
         ]);
 
-        // Line 2 & 3 depend on mode.
-        let (line2, line3) = match self.mode {
-            Mode::Menu => self.render_menu_lines(),
-            Mode::Point => self.render_point_lines(),
-            _ => {
-                let l2 = match self.entry.as_ref() {
-                    Some(e) => Line::from(format!(" {}", e.buffer)),
-                    None => Line::from(""),
-                };
-                (l2, Line::from(""))
+        // Line 2 & 3 depend on mode. A command-argument prompt takes
+        // precedence over the mode-specific rendering.
+        let (line2, line3) = if let Some(p) = self.prompt.as_ref() {
+            (
+                Line::from(format!(" {}", p.buffer)),
+                Line::from(format!(" {}", p.label)),
+            )
+        } else {
+            match self.mode {
+                Mode::Menu => self.render_menu_lines(),
+                Mode::Point => self.render_point_lines(),
+                _ => {
+                    let l2 = match self.entry.as_ref() {
+                        Some(e) => Line::from(format!(" {}", e.buffer)),
+                        None => Line::from(""),
+                    };
+                    (l2, Line::from(""))
+                }
             }
         };
 
@@ -1010,14 +1279,35 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Parenthesized format tag (e.g. `(G)`) for the current cell. Empty
-    /// for cells without a numeric value. M2 hard-codes General for all
-    /// numeric cells; per-cell formats land with /Range Format in M3.
+    /// Parenthesized format tag (e.g. `(G)`, `(C2)`, `(F3)`) for the current
+    /// cell. Empty for labels, empty cells, or cells using `Reset` format.
     fn format_tag_for_line1(&self) -> String {
         match self.cells.get(&self.pointer) {
             Some(CellContents::Constant(Value::Number(_)))
-            | Some(CellContents::Formula { .. }) => "(G)".into(),
+            | Some(CellContents::Formula { .. }) => match self.format_for_cell(self.pointer).tag() {
+                Some(s) => format!("({s})"),
+                None => String::new(),
+            },
             _ => String::new(),
+        }
+    }
+
+    /// Resolve the format for a given cell — the per-cell override if set,
+    /// else General.
+    fn format_for_cell(&self, addr: Address) -> Format {
+        self.cell_formats
+            .get(&addr)
+            .copied()
+            .unwrap_or(Format::GENERAL)
+    }
+
+    /// `[Wn]` tag when the current column's width is non-default.
+    fn width_tag_for_line1(&self) -> String {
+        let w = self.col_width_of(self.pointer.sheet, self.pointer.col);
+        if w == 9 {
+            String::new()
+        } else {
+            format!("[W{w}]")
         }
     }
 
@@ -1081,7 +1371,8 @@ impl App {
                 }
                 // Content
                 if let Some(contents) = self.cells.get(&addr) {
-                    draw_cell_contents(buf, x, y, COL_WIDTH, contents, cell_style);
+                    let fmt = self.format_for_cell(addr);
+                    draw_cell_contents(buf, x, y, COL_WIDTH, contents, cell_style, fmt);
                 }
             }
         }
@@ -1188,11 +1479,9 @@ fn write_centered(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, styl
     }
 }
 
-/// Render a cell's contents into a fixed-width slot.
-/// - Labels honor their prefix alignment (`'` left, `"` right, `^` center,
-///   `\` repeats the text across cell width, `|` treated as left-align for
-///   now — it's a print-only marker).
-/// - Numbers render right-aligned in General format.
+/// Render a cell's contents into a fixed-width slot. The cell's `format`
+/// controls numeric display (decimals, currency, percent, etc.); labels
+/// ignore the format and honor their prefix alignment only.
 fn draw_cell_contents(
     buf: &mut Buffer,
     x: u16,
@@ -1200,19 +1489,22 @@ fn draw_cell_contents(
     width: u16,
     contents: &CellContents,
     style: Style,
+    format: Format,
 ) {
     let w = width as usize;
     let rendered = match contents {
         CellContents::Empty => return,
         CellContents::Label { prefix, text } => render_label(*prefix, text, w),
-        CellContents::Constant(v) => match render_value_in_cell(v, w) {
+        CellContents::Constant(v) => match render_value_in_cell(v, w, format) {
             Some(s) => s,
             None => return,
         },
-        CellContents::Formula { cached_value: Some(v), .. } => match render_value_in_cell(v, w) {
-            Some(s) => s,
-            None => return,
-        },
+        CellContents::Formula { cached_value: Some(v), .. } => {
+            match render_value_in_cell(v, w, format) {
+                Some(s) => s,
+                None => return,
+            }
+        }
         // Unevaluated formula: leave blank.
         CellContents::Formula { cached_value: None, .. } => return,
     };
@@ -1221,9 +1513,20 @@ fn draw_cell_contents(
     }
 }
 
-fn render_value_in_cell(v: &Value, width: usize) -> Option<String> {
+fn render_value_in_cell(v: &Value, width: usize, format: Format) -> Option<String> {
     match v {
-        Value::Number(n) => Some(right_pad(&wk3_core::format_number_general(*n), width, true)),
+        Value::Number(n) => {
+            let s = wk3_core::format_number(*n, format);
+            // Overflow: if the number doesn't fit the column, fill with
+            // asterisks (Authenticity Contract §20.9). General format
+            // would normally switch to scientific first; for M3 we
+            // short-circuit to asterisks as the visible failure.
+            if s.chars().count() > width && !matches!(format.kind, FormatKind::General) {
+                Some("*".repeat(width))
+            } else {
+                Some(right_pad(&s, width, true))
+            }
+        }
         Value::Text(s) => Some(right_pad(s, width, false)),
         Value::Bool(b) => Some(right_pad(if *b { "TRUE" } else { "FALSE" }, width, true)),
         Value::Error(e) => Some(right_pad(e.lotus_tag(), width, true)),
