@@ -1,0 +1,21 @@
+# F9 (CALC) triggers a recalculation. In the default Automatic mode, the
+# CALC indicator never shows on the status line (each commit auto-recalcs)
+# and F9 is idempotent — values do not change on a second press.
+
+KEYS 10
+DOWN
+KEYS 20
+DOWN
+KEY @
+KEYS SUM(A1..A2)
+ENTER
+ASSERT_CELL     A:A3  30
+ASSERT_STATUS   Ctrl-C to quit
+# CALC indicator absent (status right-hand chunk contains only the quit hint).
+
+F 9
+ASSERT_CELL     A:A3  30
+
+F 9
+F 9
+ASSERT_CELL     A:A3  30

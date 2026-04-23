@@ -1,0 +1,25 @@
+# `/Quit` — Y/N confirm leaf.
+# /Q descends into the Yes/No submenu.
+# /QN returns to READY (cancel).
+# /QY ends the session.
+
+ASSERT_MODE       READY
+ASSERT_RUNNING    true
+
+# /Q
+KEY /
+KEY Q
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   No
+ASSERT_PANEL_L2   Yes
+
+# /QN → back to READY, session continues
+KEY N
+ASSERT_MODE       READY
+ASSERT_RUNNING    true
+
+# /QY → ends session
+KEY /
+KEY Q
+KEY Y
+ASSERT_RUNNING    false

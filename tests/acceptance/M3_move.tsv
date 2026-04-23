@@ -1,0 +1,31 @@
+# /Move — two-POINT flow; source cells are cleared after the move.
+
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+HOME
+
+KEY /
+KEY M
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  FROM
+
+DOWN
+ENTER
+# Transition to TO point.
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  TO
+
+RIGHT
+RIGHT
+ENTER
+ASSERT_MODE      READY
+
+# Source cleared.
+ASSERT_CELL      A:A1
+ASSERT_CELL      A:A2
+# Destination has the values.
+ASSERT_CELL      A:C1  10
+ASSERT_CELL      A:C2  20

@@ -26,8 +26,10 @@ use ratatui::{
 };
 use wk3_core::{
     address::col_to_letters, label::is_value_starter, Address, CellContents, LabelPrefix, Mode,
-    SheetId, Value,
+    Range, SheetId, Value,
 };
+use wk3_engine::{Engine, IronCalcEngine, RecalcMode};
+use wk3_menu::{self as menu, Action, MenuBody, MenuItem};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
@@ -62,6 +64,72 @@ pub struct App {
     cells: HashMap<Address, CellContents>,
     entry: Option<Entry>,
     default_label_prefix: LabelPrefix,
+    engine: IronCalcEngine,
+    recalc_mode: RecalcMode,
+    recalc_pending: bool,
+    menu: Option<MenuState>,
+    point: Option<PointState>,
+}
+
+/// Transient state while the user is selecting a cell/range in POINT mode.
+#[derive(Debug, Clone)]
+struct PointState {
+    /// Anchor corner. `None` after a single Esc — in that state the
+    /// pointer moves freely without growing a range; a second Esc cancels.
+    anchor: Option<Address>,
+    /// Which command initiated POINT, so that `Enter` routes the selected
+    /// range back to the right handler.
+    pending: PendingCommand,
+}
+
+/// Commands in progress that are waiting on one more POINT selection.
+#[derive(Debug, Clone, Copy)]
+enum PendingCommand {
+    RangeErase,
+    CopyFrom,
+    CopyTo { source: Range },
+    MoveFrom,
+    MoveTo { source: Range },
+    RangeLabel { new_prefix: LabelPrefix },
+}
+
+impl PendingCommand {
+    fn prompt(self) -> &'static str {
+        match self {
+            PendingCommand::RangeErase => "Enter range to erase:",
+            PendingCommand::CopyFrom => "Enter range to copy FROM:",
+            PendingCommand::CopyTo { .. } => "Enter range to copy TO:",
+            PendingCommand::MoveFrom => "Enter range to move FROM:",
+            PendingCommand::MoveTo { .. } => "Enter range to move TO:",
+            PendingCommand::RangeLabel { .. } => "Enter range for label-prefix change:",
+        }
+    }
+}
+
+/// Transient state used while the user is navigating the slash menu.
+#[derive(Debug, Clone)]
+struct MenuState {
+    /// Letters descended into, longest-ago first.
+    path: Vec<char>,
+    /// Index into the currently-visible level.
+    highlight: usize,
+    /// Message to display on line 3 — typically the last-selected leaf's
+    /// identifier when it was `NotImplemented`.
+    message: Option<&'static str>,
+}
+
+impl MenuState {
+    fn fresh() -> Self {
+        Self { path: Vec::new(), highlight: 0, message: None }
+    }
+
+    fn level(&self) -> &'static [MenuItem] {
+        menu::current_level(&self.path)
+    }
+
+    fn highlighted(&self) -> Option<&'static MenuItem> {
+        self.level().get(self.highlight)
+    }
 }
 
 impl App {
@@ -75,7 +143,24 @@ impl App {
             cells: HashMap::new(),
             entry: None,
             default_label_prefix: LabelPrefix::Apostrophe,
+            engine: IronCalcEngine::new().expect("IronCalc engine init"),
+            recalc_mode: RecalcMode::Automatic,
+            recalc_pending: false,
+            menu: None,
+            point: None,
         }
+    }
+
+    pub fn recalc_mode(&self) -> RecalcMode {
+        self.recalc_mode
+    }
+
+    pub fn set_recalc_mode(&mut self, mode: RecalcMode) {
+        self.recalc_mode = mode;
+    }
+
+    pub fn recalc_pending(&self) -> bool {
+        self.recalc_pending
     }
 
     pub fn run() -> anyhow::Result<()> {
@@ -174,6 +259,8 @@ impl App {
         match self.mode {
             Mode::Ready => self.handle_key_ready(k),
             Mode::Label | Mode::Value | Mode::Edit => self.handle_key_entry(k),
+            Mode::Menu => self.handle_key_menu(k),
+            Mode::Point => self.handle_key_point(k),
             _ => {}
         }
     }
@@ -192,6 +279,8 @@ impl App {
             KeyCode::PageDown => self.move_pointer(0, 20),
             KeyCode::PageUp => self.move_pointer(0, -20),
             KeyCode::F(2) => self.begin_edit(),
+            KeyCode::F(9) => self.do_recalc(),
+            KeyCode::Char('/') => self.open_menu(),
             KeyCode::Char(c) => self.begin_entry(c),
             _ => {}
         }
@@ -274,14 +363,11 @@ impl App {
             self.mode = Mode::Ready;
             return;
         };
-        let contents = match entry.kind {
+        let mut contents = match entry.kind {
             EntryKind::Label(prefix) => CellContents::Label { prefix, text: entry.buffer },
             EntryKind::Value => match entry.buffer.parse::<f64>() {
                 Ok(n) => CellContents::Constant(Value::Number(n)),
-                Err(_) => CellContents::Label {
-                    prefix: self.default_label_prefix,
-                    text: entry.buffer,
-                },
+                Err(_) => CellContents::Formula { expr: entry.buffer, cached_value: None },
             },
             // EDIT commits re-parse the full source buffer so the user can
             // change prefix or type (label ↔ value) via the first-char rule.
@@ -289,12 +375,497 @@ impl App {
                 CellContents::from_source(&entry.buffer, self.default_label_prefix)
             }
         };
+        self.push_to_engine(&contents);
+        match self.recalc_mode {
+            RecalcMode::Automatic => {
+                self.engine.recalc();
+                self.refresh_formula_caches();
+                self.recalc_pending = false;
+                // Pick up the just-computed value for the committed cell.
+                if let CellContents::Formula { expr, .. } = &contents {
+                    let view = self.engine.get_cell(self.pointer).ok();
+                    let cached = view.map(|v| v.value);
+                    contents = CellContents::Formula {
+                        expr: expr.clone(),
+                        cached_value: cached,
+                    };
+                }
+            }
+            RecalcMode::Manual => {
+                self.recalc_pending = true;
+            }
+        }
         if contents.is_empty() {
             self.cells.remove(&self.pointer);
         } else {
             self.cells.insert(self.pointer, contents);
         }
         self.mode = Mode::Ready;
+    }
+
+    /// Explicit recalculation — invoked by F9 in READY mode. Safe to call
+    /// repeatedly; no-op in terms of values but always clears the pending
+    /// flag.
+    fn do_recalc(&mut self) {
+        self.engine.recalc();
+        self.refresh_formula_caches();
+        self.recalc_pending = false;
+    }
+
+    // ---------------- MENU mode ----------------
+
+    fn open_menu(&mut self) {
+        self.menu = Some(MenuState::fresh());
+        self.mode = Mode::Menu;
+    }
+
+    fn close_menu(&mut self) {
+        self.menu = None;
+        self.mode = Mode::Ready;
+    }
+
+    fn handle_key_menu(&mut self, k: KeyEvent) {
+        let Some(state) = self.menu.as_mut() else {
+            self.mode = Mode::Ready;
+            return;
+        };
+        match k.code {
+            KeyCode::Esc => {
+                if state.path.is_empty() {
+                    self.close_menu();
+                } else {
+                    state.path.pop();
+                    state.highlight = 0;
+                    state.message = None;
+                }
+            }
+            KeyCode::Left => {
+                let len = state.level().len();
+                if len > 0 {
+                    state.highlight = (state.highlight + len - 1) % len;
+                    state.message = None;
+                }
+            }
+            KeyCode::Right | KeyCode::Tab => {
+                let len = state.level().len();
+                if len > 0 {
+                    state.highlight = (state.highlight + 1) % len;
+                    state.message = None;
+                }
+            }
+            KeyCode::Home => {
+                state.highlight = 0;
+                state.message = None;
+            }
+            KeyCode::End => {
+                let len = state.level().len();
+                state.highlight = len.saturating_sub(1);
+                state.message = None;
+            }
+            KeyCode::Enter => self.descend_highlighted(),
+            KeyCode::Char(c) => self.descend_by_letter(c),
+            _ => {}
+        }
+    }
+
+    fn descend_highlighted(&mut self) {
+        let Some(state) = self.menu.as_ref() else { return };
+        let Some(item) = state.highlighted() else { return };
+        self.descend_into(item);
+    }
+
+    fn descend_by_letter(&mut self, c: char) {
+        let Some(state) = self.menu.as_ref() else { return };
+        let level = state.level();
+        let item = level.iter().find(|m| m.letter.eq_ignore_ascii_case(&c)).copied();
+        if let Some(item) = item {
+            self.descend_into(&item);
+        }
+    }
+
+    fn execute_action(&mut self, action: Action) {
+        match action {
+            Action::Cancel => self.close_menu(),
+            Action::Quit => {
+                self.running = false;
+                self.close_menu();
+            }
+            Action::WorksheetInsertRow => self.insert_row_at_pointer(1),
+            Action::WorksheetInsertColumn => self.insert_col_at_pointer(1),
+            Action::WorksheetDeleteRow => self.delete_row_at_pointer(1),
+            Action::WorksheetDeleteColumn => self.delete_col_at_pointer(1),
+            Action::RangeErase => self.begin_point(PendingCommand::RangeErase),
+            Action::Copy => self.begin_point(PendingCommand::CopyFrom),
+            Action::Move => self.begin_point(PendingCommand::MoveFrom),
+            Action::RangeLabelLeft => self
+                .begin_point(PendingCommand::RangeLabel { new_prefix: LabelPrefix::Apostrophe }),
+            Action::RangeLabelRight => self
+                .begin_point(PendingCommand::RangeLabel { new_prefix: LabelPrefix::Quote }),
+            Action::RangeLabelCenter => self
+                .begin_point(PendingCommand::RangeLabel { new_prefix: LabelPrefix::Caret }),
+            // Subsequent cycles wire these. For now, descent is a no-op.
+            _ => self.close_menu(),
+        }
+    }
+
+    fn insert_row_at_pointer(&mut self, n: u32) {
+        let sheet = self.pointer.sheet;
+        let at = self.pointer.row;
+        if self.engine.insert_rows(sheet, at, n).is_ok() {
+            shift_cells_rows(&mut self.cells, sheet, at, n as i64);
+            self.engine.recalc();
+            self.refresh_formula_caches();
+        }
+        self.close_menu();
+    }
+
+    fn delete_row_at_pointer(&mut self, n: u32) {
+        let sheet = self.pointer.sheet;
+        let at = self.pointer.row;
+        if self.engine.delete_rows(sheet, at, n).is_ok() {
+            // Remove the deleted rows from our map, then shift the rest up.
+            self.cells
+                .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
+            shift_cells_rows(&mut self.cells, sheet, at + n, -(n as i64));
+            self.engine.recalc();
+            self.refresh_formula_caches();
+        }
+        self.close_menu();
+    }
+
+    fn insert_col_at_pointer(&mut self, n: u16) {
+        let sheet = self.pointer.sheet;
+        let at = self.pointer.col;
+        if self.engine.insert_cols(sheet, at, n).is_ok() {
+            shift_cells_cols(&mut self.cells, sheet, at, n as i32);
+            self.engine.recalc();
+            self.refresh_formula_caches();
+        }
+        self.close_menu();
+    }
+
+    // ---------------- POINT mode ----------------
+
+    fn begin_point(&mut self, pending: PendingCommand) {
+        self.menu = None;
+        self.point = Some(PointState { anchor: Some(self.pointer), pending });
+        self.mode = Mode::Point;
+    }
+
+    fn cancel_point(&mut self) {
+        self.point = None;
+        self.mode = Mode::Ready;
+    }
+
+    /// Range currently highlighted. If the user has unanchored (single Esc),
+    /// this collapses to the pointer's cell.
+    fn highlight_range(&self) -> Range {
+        match self.point.as_ref().and_then(|p| p.anchor) {
+            Some(anchor) => Range { start: anchor, end: self.pointer }.normalized(),
+            None => Range::single(self.pointer),
+        }
+    }
+
+    fn handle_key_point(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Up => self.move_pointer(0, -1),
+            KeyCode::Down => self.move_pointer(0, 1),
+            KeyCode::Left => self.move_pointer(-1, 0),
+            KeyCode::Right => self.move_pointer(1, 0),
+            KeyCode::Home => {
+                self.pointer = Address::A1;
+                self.scroll_into_view();
+            }
+            KeyCode::PageDown => self.move_pointer(0, 20),
+            KeyCode::PageUp => self.move_pointer(0, -20),
+            KeyCode::Enter => self.commit_point(),
+            KeyCode::Esc => self.esc_in_point(),
+            KeyCode::Char('.') => self.period_in_point(),
+            _ => {}
+        }
+    }
+
+    /// Esc during POINT: first press unanchors (pointer moves free); second
+    /// press cancels the pending command back to READY.
+    fn esc_in_point(&mut self) {
+        let Some(ps) = self.point.as_mut() else { return };
+        if ps.anchor.is_some() {
+            ps.anchor = None;
+        } else {
+            self.cancel_point();
+        }
+    }
+
+    /// `.` during POINT: if unanchored, anchor at current pointer. If
+    /// anchored, cycle the free corner clockwise.
+    fn period_in_point(&mut self) {
+        let Some(ps) = self.point.as_mut() else { return };
+        match ps.anchor {
+            None => ps.anchor = Some(self.pointer),
+            Some(anchor) => {
+                let (min_c, max_c) = (self.pointer.col.min(anchor.col), self.pointer.col.max(anchor.col));
+                let (min_r, max_r) = (self.pointer.row.min(anchor.row), self.pointer.row.max(anchor.row));
+                // Classify the current free corner (= pointer) and rotate.
+                let at_min_col = self.pointer.col == min_c;
+                let at_min_row = self.pointer.row == min_r;
+                let (new_col, new_row, new_anchor_col, new_anchor_row) = match (at_min_col, at_min_row) {
+                    // TL → TR
+                    (true, true) => (max_c, min_r, min_c, max_r),
+                    // TR → BR
+                    (false, true) => (max_c, max_r, min_c, min_r),
+                    // BR → BL
+                    (false, false) => (min_c, max_r, max_c, min_r),
+                    // BL → TL
+                    (true, false) => (min_c, min_r, max_c, max_r),
+                };
+                self.pointer = Address::new(self.pointer.sheet, new_col, new_row);
+                ps.anchor = Some(Address::new(anchor.sheet, new_anchor_col, new_anchor_row));
+                self.scroll_into_view();
+            }
+        }
+    }
+
+    fn commit_point(&mut self) {
+        let Some(ps) = self.point.take() else {
+            self.mode = Mode::Ready;
+            return;
+        };
+        let range = match ps.anchor {
+            Some(a) => Range { start: a, end: self.pointer }.normalized(),
+            None => Range::single(self.pointer),
+        };
+        match ps.pending {
+            PendingCommand::RangeErase => {
+                self.execute_range_erase(range);
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::CopyFrom => self.transition_point(PendingCommand::CopyTo { source: range }),
+            PendingCommand::MoveFrom => self.transition_point(PendingCommand::MoveTo { source: range }),
+            PendingCommand::CopyTo { source } => {
+                // Destination anchor is the pointer's current position,
+                // regardless of how the TO range was painted — for M3
+                // this is the common case (single-cell destination anchor).
+                let dest = self.pointer;
+                self.execute_copy(source, dest);
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::MoveTo { source } => {
+                let dest = self.pointer;
+                self.execute_move(source, dest);
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::RangeLabel { new_prefix } => {
+                self.execute_range_label(range, new_prefix);
+                self.mode = Mode::Ready;
+            }
+        }
+    }
+
+    fn execute_range_label(&mut self, range: Range, new_prefix: LabelPrefix) {
+        let r = range.normalized();
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                if let Some(CellContents::Label { prefix, .. }) = self.cells.get_mut(&addr) {
+                    *prefix = new_prefix;
+                }
+            }
+        }
+        // No engine push: label prefix is a display-layer property the
+        // engine doesn't track. No recalc needed.
+    }
+
+    /// Transition to the next POINT step of a two-step command. Pointer
+    /// returns to the source's top-left so the user can anchor and navigate
+    /// to the destination.
+    fn transition_point(&mut self, next: PendingCommand) {
+        let source_tl = match next {
+            PendingCommand::CopyTo { source } | PendingCommand::MoveTo { source } => source.start,
+            _ => self.pointer,
+        };
+        self.pointer = source_tl;
+        self.scroll_into_view();
+        self.point = Some(PointState {
+            anchor: Some(self.pointer),
+            pending: next,
+        });
+        // mode stays POINT
+    }
+
+    fn execute_copy(&mut self, source: Range, dest_anchor: Address) {
+        let src_cells = self.collect_cells_in_range(source);
+        self.write_cells_at_offset(&src_cells, source.start, dest_anchor);
+        self.engine.recalc();
+        self.refresh_formula_caches();
+    }
+
+    fn execute_move(&mut self, source: Range, dest_anchor: Address) {
+        let src_cells = self.collect_cells_in_range(source);
+        self.write_cells_at_offset(&src_cells, source.start, dest_anchor);
+        // Clear the source cells (but only ones not overlapping the destination).
+        let dest_range = Range {
+            start: dest_anchor,
+            end: Address::new(
+                dest_anchor.sheet,
+                dest_anchor.col + (source.end.col - source.start.col),
+                dest_anchor.row + (source.end.row - source.start.row),
+            ),
+        };
+        for (src, _) in &src_cells {
+            if !dest_range.contains(*src) {
+                self.cells.remove(src);
+                let _ = self.engine.clear_cell(*src);
+            }
+        }
+        self.engine.recalc();
+        self.refresh_formula_caches();
+    }
+
+    fn collect_cells_in_range(&self, range: Range) -> Vec<(Address, CellContents)> {
+        let r = range.normalized();
+        let mut out = Vec::new();
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                if let Some(c) = self.cells.get(&addr) {
+                    out.push((addr, c.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Write cells to their new positions offset so that `src_origin` maps
+    /// to `dest_anchor`. Formulas are pushed as-is (reference adjustment on
+    /// copy is deferred to a later cycle).
+    fn write_cells_at_offset(
+        &mut self,
+        cells: &[(Address, CellContents)],
+        src_origin: Address,
+        dest_anchor: Address,
+    ) {
+        for (src, contents) in cells {
+            let dst = Address::new(
+                dest_anchor.sheet,
+                dest_anchor.col + (src.col - src_origin.col),
+                dest_anchor.row + (src.row - src_origin.row),
+            );
+            self.cells.insert(dst, contents.clone());
+            self.push_to_engine_at(dst, contents);
+        }
+    }
+
+    /// Like `push_to_engine` but for an arbitrary address (not
+    /// `self.pointer`). Used during Copy/Move.
+    fn push_to_engine_at(&mut self, addr: Address, contents: &CellContents) {
+        let result = match contents {
+            CellContents::Empty => self.engine.clear_cell(addr),
+            CellContents::Label { text, .. } => {
+                self.engine.set_user_input(addr, &format!("'{text}"))
+            }
+            CellContents::Constant(Value::Number(n)) => self
+                .engine
+                .set_user_input(addr, &wk3_core::format_number_general(*n)),
+            CellContents::Constant(Value::Text(s)) => {
+                self.engine.set_user_input(addr, &format!("'{s}"))
+            }
+            CellContents::Constant(_) => Ok(()),
+            CellContents::Formula { expr, .. } => {
+                let excel = wk3_parse::to_engine_source(expr);
+                self.engine.set_user_input(addr, &excel)
+            }
+        };
+        let _ = result;
+    }
+
+    fn execute_range_erase(&mut self, range: Range) {
+        let r = range.normalized();
+        // Single-sheet only for now; 3D ranges arrive with M5.
+        let sheet = r.start.sheet;
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(sheet, col, row);
+                self.cells.remove(&addr);
+                let _ = self.engine.clear_cell(addr);
+            }
+        }
+        self.engine.recalc();
+        self.refresh_formula_caches();
+    }
+
+    fn delete_col_at_pointer(&mut self, n: u16) {
+        let sheet = self.pointer.sheet;
+        let at = self.pointer.col;
+        if self.engine.delete_cols(sheet, at, n).is_ok() {
+            self.cells
+                .retain(|a, _| !(a.sheet == sheet && a.col >= at && a.col < at + n));
+            shift_cells_cols(&mut self.cells, sheet, at + n, -(n as i32));
+            self.engine.recalc();
+            self.refresh_formula_caches();
+        }
+        self.close_menu();
+    }
+
+    fn descend_into(&mut self, item: &MenuItem) {
+        match item.body {
+            MenuBody::Submenu(_) => {
+                if let Some(state) = self.menu.as_mut() {
+                    state.path.push(item.letter);
+                    state.highlight = 0;
+                    state.message = None;
+                }
+            }
+            MenuBody::Action(action) => self.execute_action(action),
+            MenuBody::NotImplemented(tag) => {
+                if let Some(state) = self.menu.as_mut() {
+                    state.message = Some(tag);
+                }
+            }
+        }
+    }
+
+    /// Translate the cell's contents into the form IronCalc expects and
+    /// push it. Labels are stored with a `'` prefix so the engine treats
+    /// them as text. Formulas are translated to Excel syntax.
+    fn push_to_engine(&mut self, contents: &CellContents) {
+        let addr = self.pointer;
+        let result = match contents {
+            CellContents::Empty => self.engine.clear_cell(addr),
+            CellContents::Label { text, .. } => {
+                self.engine.set_user_input(addr, &format!("'{text}"))
+            }
+            CellContents::Constant(Value::Number(n)) => self
+                .engine
+                .set_user_input(addr, &wk3_core::format_number_general(*n)),
+            CellContents::Constant(Value::Text(s)) => {
+                self.engine.set_user_input(addr, &format!("'{s}"))
+            }
+            CellContents::Constant(_) => Ok(()),
+            CellContents::Formula { expr, .. } => {
+                let excel = wk3_parse::to_engine_source(expr);
+                self.engine.set_user_input(addr, &excel)
+            }
+        };
+        // Engine errors are non-fatal for the UI — an ERR value will
+        // surface on the next cache refresh. Swallow for M2; surfacing
+        // in an error panel is its own milestone.
+        let _ = result;
+    }
+
+    /// Walk every `Formula` cell and re-read its computed value from the
+    /// engine.  Called after every recalc.
+    fn refresh_formula_caches(&mut self) {
+        let formula_addrs: Vec<Address> = self
+            .cells
+            .iter()
+            .filter_map(|(addr, c)| matches!(c, CellContents::Formula { .. }).then_some(*addr))
+            .collect();
+        for addr in formula_addrs {
+            let Ok(view) = self.engine.get_cell(addr) else { continue };
+            if let Some(CellContents::Formula { cached_value, .. }) = self.cells.get_mut(&addr) {
+                *cached_value = Some(view.value);
+            }
+        }
     }
 
     fn move_pointer(&mut self, d_col: i32, d_row: i32) {
@@ -337,7 +908,14 @@ impl App {
 
         // Line 1: "<addr>: [(fmt)] <readout>" left; mode indicator right.
         let readout = self.cell_readout_for_line1();
-        let left = format!(" {}: {}", self.pointer.display_full(), readout);
+        let tag = self.format_tag_for_line1();
+        let left = if readout.is_empty() {
+            format!(" {}: ", self.pointer.display_full())
+        } else if tag.is_empty() {
+            format!(" {}: {}", self.pointer.display_full(), readout)
+        } else {
+            format!(" {}: {} {}", self.pointer.display_full(), tag, readout)
+        };
         let mode_str = self.mode.indicator();
         let pad = (area.width as usize)
             .saturating_sub(left.chars().count() + mode_str.len() + 1);
@@ -348,16 +926,81 @@ impl App {
             Span::raw(" "),
         ]);
 
-        // Line 2: entry buffer during LABEL/VALUE/EDIT.
-        let line2 = match self.entry.as_ref() {
-            Some(e) => Line::from(format!(" {}", e.buffer)),
-            None => Line::from(""),
+        // Line 2 & 3 depend on mode.
+        let (line2, line3) = match self.mode {
+            Mode::Menu => self.render_menu_lines(),
+            Mode::Point => self.render_point_lines(),
+            _ => {
+                let l2 = match self.entry.as_ref() {
+                    Some(e) => Line::from(format!(" {}", e.buffer)),
+                    None => Line::from(""),
+                };
+                (l2, Line::from(""))
+            }
         };
 
-        // Line 3: reserved for menu preview / prompt (M3+).
-        let line3 = Line::from("");
-
         Paragraph::new(vec![line1, line2, line3]).render(inner, buf);
+    }
+
+    fn render_point_lines(&self) -> (Line<'_>, Line<'_>) {
+        let Some(ps) = self.point.as_ref() else {
+            return (Line::from(""), Line::from(""));
+        };
+        let range = self.highlight_range();
+        let range_str = format!(
+            "{}..{}",
+            range.start.display_full(),
+            range.end.display_full()
+        );
+        let line3_text = format!(" {} {}", ps.pending.prompt(), range_str);
+        (Line::from(""), Line::from(line3_text))
+    }
+
+    fn render_menu_lines(&self) -> (Line<'_>, Line<'_>) {
+        let Some(state) = self.menu.as_ref() else {
+            return (Line::from(""), Line::from(""));
+        };
+        let level = state.level();
+
+        // Line 2: items joined by two spaces, with the highlighted item
+        // in reverse video.
+        let mut spans: Vec<Span<'_>> = Vec::with_capacity(level.len() * 2 + 1);
+        spans.push(Span::raw(" "));
+        for (i, item) in level.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  "));
+            }
+            if i == state.highlight {
+                spans.push(Span::styled(
+                    item.name,
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ));
+            } else {
+                spans.push(Span::raw(item.name));
+            }
+        }
+        let line2 = Line::from(spans);
+
+        // Line 3: if the highlighted item is a parent, preview its
+        // children's names; else show the item's help text (and any
+        // NotImplemented message).
+        let line3_text = if let Some(item) = state.highlighted() {
+            if let Some(msg) = state.message {
+                format!(" Not yet implemented: {msg}")
+            } else {
+                match item.body {
+                    MenuBody::Submenu(children) => {
+                        let names: Vec<&str> = children.iter().map(|m| m.name).collect();
+                        format!(" {}", names.join(" "))
+                    }
+                    _ => format!(" {}", item.help),
+                }
+            }
+        } else {
+            String::new()
+        };
+        let line3 = Line::from(line3_text);
+        (line2, line3)
     }
 
     fn cell_readout_for_line1(&self) -> String {
@@ -365,6 +1008,17 @@ impl App {
             .get(&self.pointer)
             .map(|c| c.control_panel_readout())
             .unwrap_or_default()
+    }
+
+    /// Parenthesized format tag (e.g. `(G)`) for the current cell. Empty
+    /// for cells without a numeric value. M2 hard-codes General for all
+    /// numeric cells; per-cell formats land with /Range Format in M3.
+    fn format_tag_for_line1(&self) -> String {
+        match self.cells.get(&self.pointer) {
+            Some(CellContents::Constant(Value::Number(_)))
+            | Some(CellContents::Formula { .. }) => "(G)".into(),
+            _ => String::new(),
+        }
     }
 
     fn render_grid(&self, area: Rect, buf: &mut Buffer) {
@@ -405,13 +1059,18 @@ impl App {
                 .set_char(' ')
                 .set_style(style);
 
-            // Cells
+            // During POINT, highlight the whole range; otherwise just the pointer.
+            let highlight = if self.mode == Mode::Point {
+                self.highlight_range()
+            } else {
+                Range::single(self.pointer)
+            };
             for c in 0..visible_cols {
                 let col_idx = self.viewport_col_offset + c;
                 let x = area.x + ROW_GUTTER + c * COL_WIDTH;
                 let addr = Address::new(SheetId::A, col_idx, row_idx);
-                let is_pointer = addr == self.pointer;
-                let cell_style = if is_pointer {
+                let highlighted = highlight.contains(addr);
+                let cell_style = if highlighted {
                     Style::default().add_modifier(Modifier::REVERSED)
                 } else {
                     Style::default()
@@ -431,8 +1090,21 @@ impl App {
     fn render_status(&self, area: Rect, buf: &mut Buffer) {
         let left = " *untitled*";
         let hint = "Ctrl-C to quit";
-        let pad = (area.width as usize).saturating_sub(left.len() + hint.len() + 1);
-        let line = format!("{left}{}{hint} ", " ".repeat(pad));
+        // Active status indicators, in the order 1-2-3 displays them.
+        // For M2 we emit CALC only; the others arrive with their features.
+        let mut indicators = Vec::new();
+        if self.recalc_pending {
+            indicators.push("CALC");
+        }
+        let indicator_str = indicators.join(" ");
+        let right_chunk = if indicator_str.is_empty() {
+            hint.to_string()
+        } else {
+            format!("{indicator_str}  {hint}")
+        };
+        let pad = (area.width as usize)
+            .saturating_sub(left.len() + right_chunk.len() + 1);
+        let line = format!("{left}{}{right_chunk} ", " ".repeat(pad));
         for (i, ch) in line.chars().enumerate().take(area.width as usize) {
             buf[(area.x + i as u16, area.y)]
                 .set_char(ch)
@@ -444,6 +1116,61 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Shift cells within `sheet` whose row is `>= at` by `delta` rows.
+/// Positive delta shifts down (for insert); negative shifts up (for delete,
+/// after the deleted rows have already been removed).
+fn shift_cells_rows(
+    cells: &mut HashMap<Address, CellContents>,
+    sheet: SheetId,
+    at: u32,
+    delta: i64,
+) {
+    let affected: Vec<Address> = cells
+        .keys()
+        .filter(|a| a.sheet == sheet && a.row >= at)
+        .copied()
+        .collect();
+    // Shift in an order that avoids collisions: highest first for +delta,
+    // lowest first for -delta.
+    let mut sorted = affected;
+    if delta >= 0 {
+        sorted.sort_by_key(|a| std::cmp::Reverse(a.row));
+    } else {
+        sorted.sort_by_key(|a| a.row);
+    }
+    for addr in sorted {
+        let contents = cells.remove(&addr).expect("present");
+        let new_row = (addr.row as i64 + delta).max(0) as u32;
+        let new_addr = Address::new(addr.sheet, addr.col, new_row);
+        cells.insert(new_addr, contents);
+    }
+}
+
+fn shift_cells_cols(
+    cells: &mut HashMap<Address, CellContents>,
+    sheet: SheetId,
+    at: u16,
+    delta: i32,
+) {
+    let affected: Vec<Address> = cells
+        .keys()
+        .filter(|a| a.sheet == sheet && a.col >= at)
+        .copied()
+        .collect();
+    let mut sorted = affected;
+    if delta >= 0 {
+        sorted.sort_by_key(|a| std::cmp::Reverse(a.col));
+    } else {
+        sorted.sort_by_key(|a| a.col);
+    }
+    for addr in sorted {
+        let contents = cells.remove(&addr).expect("present");
+        let new_col = (addr.col as i32 + delta).max(0) as u16;
+        let new_addr = Address::new(addr.sheet, new_col, addr.row);
+        cells.insert(new_addr, contents);
     }
 }
 
@@ -478,14 +1205,29 @@ fn draw_cell_contents(
     let rendered = match contents {
         CellContents::Empty => return,
         CellContents::Label { prefix, text } => render_label(*prefix, text, w),
-        CellContents::Constant(Value::Number(n)) => {
-            right_pad(&wk3_core::format_number_general(*n), w, /*right_align=*/ true)
-        }
-        CellContents::Constant(Value::Text(s)) => right_pad(s, w, /*right_align=*/ false),
-        CellContents::Constant(_) => return,
+        CellContents::Constant(v) => match render_value_in_cell(v, w) {
+            Some(s) => s,
+            None => return,
+        },
+        CellContents::Formula { cached_value: Some(v), .. } => match render_value_in_cell(v, w) {
+            Some(s) => s,
+            None => return,
+        },
+        // Unevaluated formula: leave blank.
+        CellContents::Formula { cached_value: None, .. } => return,
     };
     for (i, ch) in rendered.chars().enumerate().take(w) {
         buf[(x + i as u16, y)].set_char(ch).set_style(style);
+    }
+}
+
+fn render_value_in_cell(v: &Value, width: usize) -> Option<String> {
+    match v {
+        Value::Number(n) => Some(right_pad(&wk3_core::format_number_general(*n), width, true)),
+        Value::Text(s) => Some(right_pad(s, width, false)),
+        Value::Bool(b) => Some(right_pad(if *b { "TRUE" } else { "FALSE" }, width, true)),
+        Value::Error(e) => Some(right_pad(e.lotus_tag(), width, true)),
+        Value::Empty => None,
     }
 }
 
@@ -617,6 +1359,299 @@ mod tests {
         let e = app.entry.as_ref().unwrap();
         assert_eq!(e.buffer, "1");
         assert!(matches!(e.kind, EntryKind::Value));
+    }
+
+    fn make_label(text: &str) -> CellContents {
+        CellContents::Label { prefix: LabelPrefix::Apostrophe, text: text.into() }
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn press_ch(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn begin_point_auto_anchors_at_pointer() {
+        let mut app = App::new();
+        app.pointer = Address::new(SheetId::A, 1, 1); // B2
+        app.begin_point(PendingCommand::RangeErase);
+        assert_eq!(app.mode, Mode::Point);
+        let anchor = app.point.as_ref().unwrap().anchor.unwrap();
+        assert_eq!(anchor, Address::new(SheetId::A, 1, 1));
+        assert_eq!(app.highlight_range(), Range::single(Address::new(SheetId::A, 1, 1)));
+    }
+
+    #[test]
+    fn point_arrow_expands_range() {
+        let mut app = App::new();
+        app.begin_point(PendingCommand::RangeErase);
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Down);
+        let r = app.highlight_range();
+        assert_eq!(r.start, Address::A1);
+        assert_eq!(r.end, Address::new(SheetId::A, 1, 1));
+    }
+
+    #[test]
+    fn point_esc_twice_cancels() {
+        let mut app = App::new();
+        app.begin_point(PendingCommand::RangeErase);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Esc);
+        // Anchor cleared but still in POINT.
+        assert_eq!(app.mode, Mode::Point);
+        assert!(app.point.as_ref().unwrap().anchor.is_none());
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(app.point.is_none());
+    }
+
+    #[test]
+    fn point_period_anchors_when_unanchored() {
+        let mut app = App::new();
+        app.begin_point(PendingCommand::RangeErase);
+        // Anchor manually cleared
+        app.point.as_mut().unwrap().anchor = None;
+        press(&mut app, KeyCode::Right);
+        press_ch(&mut app, '.');
+        let anchor = app.point.as_ref().unwrap().anchor.unwrap();
+        assert_eq!(anchor, Address::new(SheetId::A, 1, 0));
+    }
+
+    #[test]
+    fn point_period_cycles_corner() {
+        let mut app = App::new();
+        // Anchor at A1; extend to B2 → pointer at BR.
+        app.begin_point(PendingCommand::RangeErase);
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Down);
+        let before = app.highlight_range();
+        assert_eq!(before.start, Address::A1);
+        assert_eq!(before.end, Address::new(SheetId::A, 1, 1));
+        // Initially pointer is at BR corner of range. `.` rotates TL→TR→BR→BL.
+        // Pointer was at BR(B2), so we're detecting at_min_col=false, at_min_row=false,
+        // which the code treats as "BR → BL", moving pointer to BL (A2).
+        press_ch(&mut app, '.');
+        assert_eq!(app.pointer, Address::new(SheetId::A, 0, 1)); // BL
+        // Range unchanged.
+        assert_eq!(app.highlight_range(), before);
+        // Next `.` from BL → TL.
+        press_ch(&mut app, '.');
+        assert_eq!(app.pointer, Address::A1); // TL
+        assert_eq!(app.highlight_range(), before);
+        // Next `.` from TL → TR.
+        press_ch(&mut app, '.');
+        assert_eq!(app.pointer, Address::new(SheetId::A, 1, 0)); // TR
+        assert_eq!(app.highlight_range(), before);
+        // Next `.` from TR → BR. Full loop.
+        press_ch(&mut app, '.');
+        assert_eq!(app.pointer, Address::new(SheetId::A, 1, 1)); // BR
+        assert_eq!(app.highlight_range(), before);
+    }
+
+    #[test]
+    fn range_erase_clears_all_cells_in_range() {
+        let mut app = App::new();
+        for (row, v) in [(0, "10"), (1, "20"), (2, "30")] {
+            for c in v.chars() {
+                press_ch(&mut app, c);
+            }
+            press(&mut app, KeyCode::Down);
+            // After each commit, pointer moves; at end we're at row+1
+            let _ = row;
+        }
+        // Go back to A1 and erase A1..A3
+        app.pointer = Address::A1;
+        app.begin_point(PendingCommand::RangeErase);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.mode, Mode::Ready);
+        for row in 0..3 {
+            assert!(
+                !app.cells.contains_key(&Address::new(SheetId::A, 0, row)),
+                "A{} should be empty",
+                row + 1
+            );
+        }
+    }
+
+    #[test]
+    fn shift_cells_rows_insert_pushes_down() {
+        let mut cells = HashMap::new();
+        cells.insert(Address::new(SheetId::A, 0, 0), make_label("r0"));
+        cells.insert(Address::new(SheetId::A, 0, 1), make_label("r1"));
+        cells.insert(Address::new(SheetId::A, 0, 2), make_label("r2"));
+        // Insert 1 row at row 1 — r1 and r2 move down by 1.
+        shift_cells_rows(&mut cells, SheetId::A, 1, 1);
+        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 0)), Some(&make_label("r0")));
+        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 2)), Some(&make_label("r1")));
+        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 3)), Some(&make_label("r2")));
+        assert!(!cells.contains_key(&Address::new(SheetId::A, 0, 1)));
+    }
+
+    #[test]
+    fn shift_cells_rows_delete_pulls_up() {
+        let mut cells = HashMap::new();
+        cells.insert(Address::new(SheetId::A, 0, 0), make_label("r0"));
+        cells.insert(Address::new(SheetId::A, 0, 2), make_label("r2"));
+        // Simulate delete of row 1: remove it (already absent here) then pull.
+        shift_cells_rows(&mut cells, SheetId::A, 2, -1);
+        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 0)), Some(&make_label("r0")));
+        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 1)), Some(&make_label("r2")));
+    }
+
+    #[test]
+    fn shift_cells_cols_insert_pushes_right() {
+        let mut cells = HashMap::new();
+        cells.insert(Address::new(SheetId::A, 0, 0), make_label("A1"));
+        cells.insert(Address::new(SheetId::A, 1, 0), make_label("B1"));
+        shift_cells_cols(&mut cells, SheetId::A, 1, 1);
+        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 0)), Some(&make_label("A1")));
+        assert_eq!(cells.get(&Address::new(SheetId::A, 2, 0)), Some(&make_label("B1")));
+        assert!(!cells.contains_key(&Address::new(SheetId::A, 1, 0)));
+    }
+
+    #[test]
+    fn shift_cells_rows_leaves_other_sheets_alone() {
+        let mut cells = HashMap::new();
+        cells.insert(Address::new(SheetId::A, 0, 1), make_label("a"));
+        cells.insert(Address::new(SheetId(1), 0, 1), make_label("b"));
+        shift_cells_rows(&mut cells, SheetId::A, 0, 1);
+        assert!(cells.contains_key(&Address::new(SheetId::A, 0, 2)));
+        // Sheet B unchanged.
+        assert_eq!(
+            cells.get(&Address::new(SheetId(1), 0, 1)),
+            Some(&make_label("b"))
+        );
+    }
+
+    #[test]
+    fn manual_recalc_defers_computation_until_f9() {
+        let mut app = App::new();
+        app.set_recalc_mode(RecalcMode::Manual);
+
+        // A1 = 10
+        for c in "10".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        // B1 = +A1*2
+        app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
+        for c in "A1*2".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // In Manual mode, the just-committed formula has no cached value yet.
+        let formula = app.cells.get(&Address::new(SheetId::A, 0, 1)).unwrap();
+        if let CellContents::Formula { cached_value, .. } = formula {
+            assert!(cached_value.is_none(), "manual mode should not auto-eval");
+        } else {
+            panic!("expected Formula");
+        }
+        assert!(app.recalc_pending());
+
+        // F9 computes and clears the pending flag.
+        app.handle_key(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE));
+        assert!(!app.recalc_pending());
+        let formula = app.cells.get(&Address::new(SheetId::A, 0, 1)).unwrap();
+        match formula {
+            CellContents::Formula { cached_value, .. } => {
+                assert_eq!(*cached_value, Some(Value::Number(20.0)));
+            }
+            other => panic!("expected Formula, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn calc_indicator_visible_only_when_pending() {
+        let mut app = App::new();
+        let buf = app.render_to_buffer(80, 25);
+        let status_line = App::line_text(&buf, 24);
+        assert!(!status_line.contains("CALC"), "should be absent: {status_line:?}");
+
+        app.set_recalc_mode(RecalcMode::Manual);
+        // Type a formula to get CALC to light up.
+        app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let buf = app.render_to_buffer(80, 25);
+        let status_line = App::line_text(&buf, 24);
+        assert!(status_line.contains("CALC"), "should contain CALC: {status_line:?}");
+
+        app.handle_key(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE));
+        let buf = app.render_to_buffer(80, 25);
+        let status_line = App::line_text(&buf, 24);
+        assert!(!status_line.contains("CALC"), "should be cleared: {status_line:?}");
+    }
+
+    #[test]
+    fn formula_commit_populates_cached_value() {
+        let mut app = App::new();
+        // A1 = 10, A2 = 20
+        for c in "10".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        for c in "20".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        // A3 = @SUM(A1..A2)
+        for c in "@SUM(A1..A2)".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let a3 = app.cells.get(&Address::new(SheetId::A, 0, 2)).unwrap();
+        match a3 {
+            CellContents::Formula { expr, cached_value } => {
+                assert_eq!(expr, "@SUM(A1..A2)");
+                assert_eq!(*cached_value, Some(Value::Number(30.0)));
+            }
+            other => panic!("expected Formula, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn upstream_edit_recomputes_dependent_formula() {
+        let mut app = App::new();
+        for c in "10".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        // B1 = +A1*3
+        app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
+        for c in "A1*3".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.cells
+                .get(&Address::new(SheetId::A, 0, 1))
+                .and_then(|c| match c {
+                    CellContents::Formula { cached_value, .. } => cached_value.clone(),
+                    _ => None,
+                }),
+            Some(Value::Number(30.0))
+        );
+        // Change A1 to 5; B1 should recompute to 15.
+        app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.cells
+                .get(&Address::new(SheetId::A, 0, 1))
+                .and_then(|c| match c {
+                    CellContents::Formula { cached_value, .. } => cached_value.clone(),
+                    _ => None,
+                }),
+            Some(Value::Number(15.0))
+        );
     }
 
     #[test]

@@ -6,7 +6,9 @@ license.workspace = true
 
 [dependencies]
 wk3-core = { workspace = true }
+wk3-engine = { workspace = true }
 wk3-menu = { workspace = true }
+wk3-parse = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 anyhow = { workspace = true }

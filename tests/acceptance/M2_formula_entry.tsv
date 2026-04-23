@@ -1,0 +1,46 @@
+# Authenticity Contract #6 — `@` formula sigil, `..` range separator,
+# and end-to-end evaluation through the engine.
+#
+# Enter three numbers in A1..A3, then an @SUM formula in A4; verify the
+# computed value shows in the cell and the formula source shows in the
+# control panel. Then change A1 and verify A4 recomputes.
+
+KEYS 10
+DOWN
+ASSERT_CELL       A:A1  10
+ASSERT_POINTER    A:A2
+
+KEYS 20
+DOWN
+ASSERT_CELL       A:A2  20
+
+KEYS 30
+DOWN
+ASSERT_CELL       A:A3  30
+ASSERT_POINTER    A:A4
+
+KEY @
+KEYS SUM(A1..A3)
+ENTER
+ASSERT_POINTER    A:A4
+ASSERT_CELL       A:A4  60
+ASSERT_PANEL_L1   A:A4: (G) @SUM(A1..A3)
+
+# Update A1 — A4 recomputes automatically.
+HOME
+ASSERT_POINTER    A:A1
+KEYS 100
+ENTER
+ASSERT_CELL       A:A4  150
+
+# Also works with `+` formulas.
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER    A:A5
+KEY +
+KEYS A1+A2
+ENTER
+ASSERT_CELL       A:A5  120
+ASSERT_PANEL_L1   A:A5: (G) +A1+A2

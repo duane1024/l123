@@ -9,8 +9,18 @@ use crate::{label::is_value_starter, LabelPrefix, Value};
 pub enum CellContents {
     #[default]
     Empty,
-    Label { prefix: LabelPrefix, text: String },
+    Label {
+        prefix: LabelPrefix,
+        text: String,
+    },
     Constant(Value),
+    /// A formula. `expr` is the Lotus-shape source as typed by the user
+    /// (e.g. `@SUM(A1..A5)`); `cached_value` is the engine's most recent
+    /// evaluation, or `None` until the next recalc.
+    Formula {
+        expr: String,
+        cached_value: Option<Value>,
+    },
 }
 
 impl CellContents {
@@ -26,13 +36,35 @@ impl CellContents {
         match self {
             CellContents::Empty => String::new(),
             CellContents::Label { prefix, text } => format!("{}{}", prefix.char(), text),
-            CellContents::Constant(v) => match v {
-                Value::Number(n) => format_number_general(*n),
-                Value::Text(s) => s.clone(),
-                Value::Bool(b) => if *b { "TRUE".into() } else { "FALSE".into() },
-                Value::Error(e) => e.lotus_tag().into(),
-                Value::Empty => String::new(),
+            CellContents::Constant(v) => render_value_source(v),
+            CellContents::Formula { expr, .. } => expr.clone(),
+        }
+    }
+
+    /// Display text for the grid cell (NOT the control-panel readout).
+    /// For a formula this is the cached value (or empty before first recalc).
+    pub fn display_text(&self) -> String {
+        match self {
+            CellContents::Empty => String::new(),
+            CellContents::Label { text, .. } => text.clone(),
+            CellContents::Constant(v) => render_value_source(v),
+            CellContents::Formula { cached_value, .. } => match cached_value {
+                Some(v) => render_value_source(v),
+                None => String::new(),
             },
+        }
+    }
+
+    /// Extract the cached value of a formula, or the literal value of a
+    /// constant. Returns `Value::Empty` for Empty / Label / unevaluated
+    /// Formula.
+    pub fn value(&self) -> Value {
+        match self {
+            CellContents::Empty | CellContents::Label { .. } => Value::Empty,
+            CellContents::Constant(v) => v.clone(),
+            CellContents::Formula { cached_value, .. } => {
+                cached_value.clone().unwrap_or(Value::Empty)
+            }
         }
     }
 
@@ -61,9 +93,11 @@ impl CellContents {
             }
             Some(c) if is_value_starter(c) => match s.parse::<f64>() {
                 Ok(n) => CellContents::Constant(Value::Number(n)),
-                Err(_) => CellContents::Label {
-                    prefix: default_prefix,
-                    text: s.to_string(),
+                // Anything else starting with a value-starter is a formula.
+                // The engine integration layer computes `cached_value`.
+                Err(_) => CellContents::Formula {
+                    expr: s.to_string(),
+                    cached_value: None,
                 },
             },
             Some(_) => CellContents::Label {
@@ -71,6 +105,16 @@ impl CellContents {
                 text: s.to_string(),
             },
         }
+    }
+}
+
+fn render_value_source(v: &Value) -> String {
+    match v {
+        Value::Number(n) => format_number_general(*n),
+        Value::Text(s) => s.clone(),
+        Value::Bool(b) => if *b { "TRUE".into() } else { "FALSE".into() },
+        Value::Error(e) => e.lotus_tag().into(),
+        Value::Empty => String::new(),
     }
 }
 
@@ -211,11 +255,39 @@ mod tests {
     }
 
     #[test]
-    fn from_source_unparseable_value_becomes_label() {
-        // `+A1` starts with a value-starter but isn't a number; until M2
-        // wires formulas it falls through to a default-prefix label.
+    fn from_source_non_number_value_starter_is_formula() {
         let got = CellContents::from_source("+A1", LabelPrefix::Apostrophe);
-        assert!(matches!(got, CellContents::Label { .. }));
+        assert!(matches!(
+            got,
+            CellContents::Formula { expr, cached_value: None } if expr == "+A1"
+        ));
+        let got = CellContents::from_source("@SUM(A1..A5)", LabelPrefix::Apostrophe);
+        assert!(matches!(
+            got,
+            CellContents::Formula { expr, cached_value: None }
+                if expr == "@SUM(A1..A5)"
+        ));
+    }
+
+    #[test]
+    fn formula_source_form_roundtrip() {
+        let f = CellContents::Formula {
+            expr: "@SUM(A1..A5)".into(),
+            cached_value: Some(Value::Number(150.0)),
+        };
+        assert_eq!(f.source_form(), "@SUM(A1..A5)");
+        assert_eq!(f.display_text(), "150");
+        assert_eq!(f.value(), Value::Number(150.0));
+    }
+
+    #[test]
+    fn formula_without_cache_shows_empty_grid_text() {
+        let f = CellContents::Formula {
+            expr: "+A1+B1".into(),
+            cached_value: None,
+        };
+        assert_eq!(f.display_text(), "");
+        assert_eq!(f.value(), Value::Empty);
     }
 
     #[test]

@@ -79,6 +79,53 @@ impl Engine for IronCalcEngine {
         Ok(CellView { value, formula, formatted: None })
     }
 
+    fn clear_cell(&mut self, addr: Address) -> Result<()> {
+        let sheet = self.sheet_index(addr.sheet);
+        self.model
+            .cell_clear_contents(sheet, Self::row_1based(addr), Self::col_1based(addr))
+            .map_err(EngineError::Backend)
+    }
+
+    fn insert_rows(&mut self, sheet: SheetId, at: u32, n: u32) -> Result<()> {
+        if n == 0 {
+            return Ok(());
+        }
+        self.extend_sheets_to(sheet)?;
+        self.model
+            .insert_rows(self.sheet_index(sheet), (at as i32) + 1, n as i32)
+            .map_err(EngineError::Backend)
+    }
+
+    fn delete_rows(&mut self, sheet: SheetId, at: u32, n: u32) -> Result<()> {
+        if n == 0 {
+            return Ok(());
+        }
+        self.extend_sheets_to(sheet)?;
+        self.model
+            .delete_rows(self.sheet_index(sheet), (at as i32) + 1, n as i32)
+            .map_err(EngineError::Backend)
+    }
+
+    fn insert_cols(&mut self, sheet: SheetId, at: u16, n: u16) -> Result<()> {
+        if n == 0 {
+            return Ok(());
+        }
+        self.extend_sheets_to(sheet)?;
+        self.model
+            .insert_columns(self.sheet_index(sheet), (at as i32) + 1, n as i32)
+            .map_err(EngineError::Backend)
+    }
+
+    fn delete_cols(&mut self, sheet: SheetId, at: u16, n: u16) -> Result<()> {
+        if n == 0 {
+            return Ok(());
+        }
+        self.extend_sheets_to(sheet)?;
+        self.model
+            .delete_columns(self.sheet_index(sheet), (at as i32) + 1, n as i32)
+            .map_err(EngineError::Backend)
+    }
+
     fn recalc(&mut self) {
         self.model.evaluate();
     }
@@ -134,6 +181,63 @@ mod tests {
         e.recalc();
         let cv = e.get_cell(Address::new(SheetId::A, 0, 0)).unwrap();
         assert_eq!(cv.value, Value::Text("hello".into()));
+    }
+
+    #[test]
+    fn insert_rows_shifts_data_down() {
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "42").unwrap();
+        e.insert_rows(SheetId::A, 0, 1).unwrap();
+        e.recalc();
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 0, 0)).unwrap().value,
+            Value::Empty
+        );
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 0, 1)).unwrap().value,
+            Value::Number(42.0)
+        );
+    }
+
+    #[test]
+    fn delete_rows_shifts_data_up() {
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "A").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "B").unwrap();
+        e.delete_rows(SheetId::A, 0, 1).unwrap();
+        e.recalc();
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 0, 0)).unwrap().value,
+            Value::Text("B".into())
+        );
+    }
+
+    #[test]
+    fn insert_cols_shifts_data_right() {
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "7").unwrap();
+        e.insert_cols(SheetId::A, 0, 1).unwrap();
+        e.recalc();
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 1, 0)).unwrap().value,
+            Value::Number(7.0)
+        );
+    }
+
+    #[test]
+    fn clear_cell_removes_value_and_unreferences_formula() {
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "10").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "=A1*2").unwrap();
+        e.recalc();
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 0, 1)).unwrap().value,
+            Value::Number(20.0)
+        );
+        e.clear_cell(Address::new(SheetId::A, 0, 0)).unwrap();
+        e.recalc();
+        let cv = e.get_cell(Address::new(SheetId::A, 0, 0)).unwrap();
+        assert_eq!(cv.value, Value::Empty);
     }
 
     #[test]

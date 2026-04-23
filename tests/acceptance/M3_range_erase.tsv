@@ -1,0 +1,53 @@
+# Authenticity Contract #4 — POINT mode with anchor semantics.
+# /Range Erase initiates POINT auto-anchored at the current pointer;
+# arrow keys extend the range; Enter executes the erase on the range.
+
+# Seed: A1..A3 = 10, 20, 30
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+DOWN
+KEYS 30
+ENTER
+
+HOME
+ASSERT_POINTER    A:A1
+
+# /RE → POINT mode, auto-anchored at A1, range is just A1..A1.
+KEY /
+KEY R
+KEY E
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   Enter range to erase
+ASSERT_PANEL_L3   A:A1..A:A1
+
+# Extend to A3.
+DOWN
+DOWN
+ASSERT_PANEL_L3   A:A1..A:A3
+
+# Enter commits — all three cells cleared.
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1
+ASSERT_CELL       A:A2
+ASSERT_CELL       A:A3
+
+# Second /RE then Esc twice cancels without side-effect.
+HOME
+KEYS 42
+ENTER
+KEY /
+KEY R
+KEY E
+ASSERT_MODE       POINT
+DOWN
+ESC
+# First Esc: unanchor (pointer still in POINT but range is just current cell)
+ASSERT_MODE       POINT
+ESC
+# Second Esc: cancel back to READY; no cells changed.
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  42

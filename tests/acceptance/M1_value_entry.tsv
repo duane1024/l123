@@ -13,7 +13,7 @@ ASSERT_PANEL_L2   123
 
 ENTER
 ASSERT_MODE       READY
-ASSERT_PANEL_L1   A:A1: 123
+ASSERT_PANEL_L1   A:A1: (G) 123
 ASSERT_CELL       A:A1  123
 
 # Move to A2 and enter a negative number
@@ -23,7 +23,7 @@ KEY -
 ASSERT_MODE       VALUE
 KEYS 45
 ENTER
-ASSERT_PANEL_L1   A:A2: -45
+ASSERT_PANEL_L1   A:A2: (G) -45
 ASSERT_CELL       A:A2  -45
 
 # Move to A3 and enter a decimal
@@ -32,5 +32,5 @@ KEY 3
 KEY .
 KEYS 14
 ENTER
-ASSERT_PANEL_L1   A:A3: 3.14
+ASSERT_PANEL_L1   A:A3: (G) 3.14
 ASSERT_CELL       A:A3  3.14

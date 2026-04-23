@@ -1,0 +1,48 @@
+# Authenticity Contract #1, #3 — the `/` slash menu.
+#
+# `/` opens MENU mode. Line 2 shows the current level's items, highlight
+# on the first item by default. Line 3 previews the highlighted parent's
+# children (or shows help text for leaves). Single-letter accelerators
+# descend; arrow keys move the highlight; Esc backs up one level.
+
+ASSERT_MODE       READY
+
+KEY /
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Worksheet
+ASSERT_PANEL_L2   Range
+ASSERT_PANEL_L2   Quit
+# First-item-highlighted: Worksheet — line 3 previews its children.
+ASSERT_PANEL_L3   Global
+
+# Arrow right highlights Range — line 3 updates to Range's children.
+RIGHT
+ASSERT_PANEL_L3   Format
+
+# Jump directly to Quit via single-letter accelerator.
+# At Quit (a submenu), descent happens: line 2 now shows No/Yes.
+KEY Q
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   No
+ASSERT_PANEL_L2   Yes
+
+# Esc pops one level — back to top-level menu.
+ESC
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Worksheet
+
+# Esc from top-level returns to READY with line 2 empty.
+ESC
+ASSERT_MODE       READY
+ASSERT_PANEL_L2
+
+# Arrow navigation: `/` and Left wraps to last item (Quit).
+KEY /
+ASSERT_MODE       MENU
+LEFT
+# Last item is Quit — line 3 previews its children.
+ASSERT_PANEL_L3   No
+ASSERT_PANEL_L3   Yes
+
+ESC
+ASSERT_MODE       READY

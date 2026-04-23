@@ -1,0 +1,68 @@
+# /Copy — two-POINT flow: source range, then destination anchor.
+# For chunk-2 we cover numbers and labels; formula reference adjustment
+# on copy is deferred to the wk3-parse reverse-translation cycle.
+
+# Seed A1=10, A2=20, A3=30
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+DOWN
+KEYS 30
+ENTER
+HOME
+ASSERT_POINTER   A:A1
+
+# /C opens the FROM point.
+KEY /
+KEY C
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  FROM
+ASSERT_PANEL_L3  A:A1..A:A1
+
+# Extend source to A3.
+DOWN
+DOWN
+ASSERT_PANEL_L3  A:A1..A:A3
+
+# Commit source → transition to the TO point; pointer returns to source TL.
+ENTER
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  TO
+ASSERT_POINTER   A:A1
+
+# Move to C1 and commit destination.
+RIGHT
+RIGHT
+ASSERT_POINTER   A:C1
+ENTER
+
+ASSERT_MODE      READY
+# Originals preserved.
+ASSERT_CELL      A:A1  10
+ASSERT_CELL      A:A2  20
+ASSERT_CELL      A:A3  30
+# Copies at C1..C3.
+ASSERT_CELL      A:C1  10
+ASSERT_CELL      A:C2  20
+ASSERT_CELL      A:C3  30
+
+# A label also copies, preserving its prefix.
+HOME
+DOWN
+DOWN
+DOWN
+KEY "
+KEYS right
+ENTER
+ASSERT_CELL      A:A4  right
+KEY /
+KEY C
+ASSERT_MODE      POINT
+ENTER
+ASSERT_POINTER   A:A4
+RIGHT
+RIGHT
+ENTER
+ASSERT_CELL      A:C4  right

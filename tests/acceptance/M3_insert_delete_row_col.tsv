@@ -1,0 +1,57 @@
+# /Worksheet Insert Row|Column and /Worksheet Delete Row|Column.
+# For M3-chunk-1 these operate on a single row/column at the pointer,
+# without the range prompt (that arrives with POINT in a later cycle).
+
+# Seed:   A1=1, A2=2, B1=3
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+UP
+RIGHT
+KEYS 3
+ENTER
+ASSERT_POINTER    A:B1
+ASSERT_CELL       A:A1  1
+ASSERT_CELL       A:A2  2
+ASSERT_CELL       A:B1  3
+
+# /WIR inserts a row above the pointer (row 1 → row 2).
+# After: row 1 is empty; prior row 1 values sit in row 2; row 2 values in row 3.
+KEY /
+KEY W
+KEY I
+KEY R
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1
+ASSERT_CELL       A:B1
+ASSERT_CELL       A:A2  1
+ASSERT_CELL       A:B2  3
+ASSERT_CELL       A:A3  2
+
+# /WDR deletes the current row (row 1, empty) — shifts everything back up.
+KEY /
+KEY W
+KEY D
+KEY R
+ASSERT_CELL       A:A1  1
+ASSERT_CELL       A:A2  2
+ASSERT_CELL       A:B1  3
+
+# /WIC inserts a column at pointer (col B). B-column values shift to C.
+KEY /
+KEY W
+KEY I
+KEY C
+ASSERT_MODE       READY
+ASSERT_CELL       A:B1
+ASSERT_CELL       A:C1  3
+
+# /WDC deletes the column at pointer (col B, empty). C shifts back to B.
+KEY /
+KEY W
+KEY D
+KEY C
+ASSERT_CELL       A:B1  3
+ASSERT_CELL       A:C1

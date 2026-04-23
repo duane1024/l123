@@ -1,0 +1,47 @@
+# /Range Label L|R|C changes the LabelPrefix on existing labels in a range.
+# Non-label cells are left untouched.
+
+# Seed three labels with the default `'` prefix, plus a number in A4.
+KEYS hello
+DOWN
+KEYS world
+DOWN
+KEYS again
+DOWN
+KEYS 42
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: 'hello
+
+# /RLR on A1..A4 — all label cells become right-aligned `"` prefix;
+# the number at A4 is unaffected.
+KEY /
+KEY R
+KEY L
+KEY R
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   label
+DOWN
+DOWN
+DOWN
+ENTER
+ASSERT_MODE       READY
+
+HOME
+ASSERT_PANEL_L1   A:A1: "hello
+DOWN
+ASSERT_PANEL_L1   A:A2: "world
+DOWN
+ASSERT_PANEL_L1   A:A3: "again
+DOWN
+# Number unchanged — still `(G) 42`.
+ASSERT_PANEL_L1   A:A4: (G) 42
+
+# /RLC on A1..A1 → center prefix `^`.
+HOME
+KEY /
+KEY R
+KEY L
+KEY C
+ENTER
+ASSERT_PANEL_L1   A:A1: ^hello

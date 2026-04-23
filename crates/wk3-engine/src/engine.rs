@@ -52,6 +52,10 @@ pub trait Engine {
     /// Read a cell.  Returns Value::Empty for unset cells.
     fn get_cell(&self, addr: Address) -> Result<CellView>;
 
+    /// Clear the cell's contents (both value and formula). Style/format
+    /// are not guaranteed to survive.
+    fn clear_cell(&mut self, addr: Address) -> Result<()>;
+
     /// Trigger a full recalc.
     fn recalc(&mut self);
 

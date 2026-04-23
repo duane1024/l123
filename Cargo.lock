@@ -1551,7 +1551,9 @@ dependencies = [
  "crossterm",
  "ratatui",
  "wk3-core",
+ "wk3-engine",
  "wk3-menu",
+ "wk3-parse",
 ]
 
 [[package]]

@@ -37,7 +37,7 @@ ASSERT_PANEL_L2   42
 BACKSPACE
 KEYS 5
 ENTER
-ASSERT_PANEL_L1   A:A2: 45
+ASSERT_PANEL_L1   A:A2: (G) 45
 ASSERT_CELL       A:A2  45
 
 # Re-typing a `"` prefix via EDIT converts a default-prefix label to Quote.
