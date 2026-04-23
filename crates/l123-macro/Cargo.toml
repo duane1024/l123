@@ -1,8 +1,9 @@
 [package]
-name = "wk3-core"
+name = "l123-macro"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-thiserror = { workspace = true }
+l123-core = { workspace = true }
+l123-cmd = { workspace = true }

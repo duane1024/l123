@@ -1,4 +1,4 @@
-# WK3 Implementation Plan
+# L123 Implementation Plan
 
 Companion to `SPEC.md v0.2`. This document is the execution path.
 
@@ -26,18 +26,18 @@ Companion to `SPEC.md v0.2`. This document is the execution path.
 ## 2. Repository layout
 
 ```
-wk3/
+l123/
 ├── Cargo.toml                # workspace
 ├── crates/
-│   ├── wk3-core/             # Value, Address, Range, Format, Mode
-│   ├── wk3-engine/           # Engine trait + IronCalc adapter
-│   ├── wk3-cmd/              # Command enum, interpreter, journal, undo
-│   ├── wk3-menu/             # Menu tree (compile-time), accelerator dispatch
-│   ├── wk3-parse/            # 1-2-3 formula parser/printer (@ ↔ excel)
-│   ├── wk3-ui/               # ratatui widgets: ControlPanel, Grid, StatusLine
-│   ├── wk3-io/               # xlsx/csv/wk3 adapters
-│   ├── wk3-macro/            # /X + {} macro system (post-MVP)
-│   └── wk3/                  # binary; main.rs + app loop
+│   ├── l123-core/            # Value, Address, Range, Format, Mode
+│   ├── l123-engine/          # Engine trait + IronCalc adapter
+│   ├── l123-cmd/             # Command enum, interpreter, journal, undo
+│   ├── l123-menu/            # Menu tree (compile-time), accelerator dispatch
+│   ├── l123-parse/           # 1-2-3 formula parser/printer (@ ↔ excel)
+│   ├── l123-ui/              # ratatui widgets: ControlPanel, Grid, StatusLine
+│   ├── l123-io/              # xlsx/csv/wk3 adapters
+│   ├── l123-macro/           # /X + {} macro system (post-MVP)
+│   └── l123/                 # binary; main.rs + app loop
 ├── docs/
 │   ├── SPEC.md
 │   ├── PLAN.md               # this file
@@ -96,11 +96,11 @@ backend. This milestone is purely UX.
 
 ### M2 — Engine wire-up, values, formulas, recalc (week 4-5)
 
-- `wk3-engine` crate: `Engine` trait + IronCalc adapter.
+- `l123-engine` crate: `Engine` trait + IronCalc adapter.
 - `set_user_input` router: respects first-char rule, LABEL → stores as
   label, VALUE → forwards to IronCalc.
 - F9 triggers recalc; CALC indicator lights when pending.
-- `wk3-parse` translates `@SUM(A1..A5)` ↔ IronCalc's `SUM(A1:A5)`. `..` ↔
+- `l123-parse` translates `@SUM(A1..A5)` ↔ IronCalc's `SUM(A1:A5)`. `..` ↔
   `:`; `@` sigil handling; `#AND#`/`#OR#`/`#NOT#` ↔ `AND()`/`OR()`/`NOT()`;
   `&` string concat preserved.
 - MVP @function set (SPEC §15) works end-to-end.
@@ -120,12 +120,12 @@ Edit A1 to 100: C1 recomputes to 240
 
 ### M3 — Menu system and slash commands (week 5-7)
 
-- `wk3-menu` crate: static compile-time menu tree. Each node carries:
+- `l123-menu` crate: static compile-time menu tree. Each node carries:
   letter, name, help text, children or action.
 - Menu rendering on line 2 (items horizontally) + line 3 (preview/help).
 - `/` → MENU mode; single-letter accelerator descends; arrow keys highlight;
   Esc backs out; Ctrl-Break aborts.
-- Command interpreter (`wk3-cmd`): each leaf builds a `Command` variant,
+- Command interpreter (`l123-cmd`): each leaf builds a `Command` variant,
   then the engine executes it.
 - MVP leaves implemented: `/Worksheet Insert/Delete Row|Column`,
   `/Worksheet Column Set-Width`, `/Worksheet Erase`, `/Range Format`,
@@ -317,11 +317,11 @@ multi-keystroke sequences to Unicode.
 
 ### 6.1 Unit tests
 
-- `wk3-core`: Address arithmetic, range intersection, reference parsing.
-- `wk3-parse`: 1-2-3 → Excel round-trip for the full MVP @function set;
+- `l123-core`: Address arithmetic, range intersection, reference parsing.
+- `l123-parse`: 1-2-3 → Excel round-trip for the full MVP @function set;
   operator precedence fixtures; label-prefix parsing; 3D range handling.
-- `wk3-cmd`: Command → reverse-Command generation for every mutating op.
-- `wk3-menu`: every leaf dispatches to an Action; menu paths resolve.
+- `l123-cmd`: Command → reverse-Command generation for every mutating op.
+- `l123-menu`: every leaf dispatches to an Action; menu paths resolve.
 
 ### 6.2 Engine integration tests
 

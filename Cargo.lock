@@ -629,6 +629,92 @@ dependencies = [
 ]
 
 [[package]]
+name = "l123"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "l123-cmd",
+ "l123-core",
+ "l123-engine",
+ "l123-io",
+ "l123-menu",
+ "l123-ui",
+ "ratatui",
+]
+
+[[package]]
+name = "l123-cmd"
+version = "0.0.1"
+dependencies = [
+ "l123-core",
+ "l123-engine",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "l123-core"
+version = "0.0.1"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "l123-engine"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "ironcalc",
+ "l123-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "l123-io"
+version = "0.0.1"
+dependencies = [
+ "l123-core",
+ "l123-engine",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "l123-macro"
+version = "0.0.1"
+dependencies = [
+ "l123-cmd",
+ "l123-core",
+]
+
+[[package]]
+name = "l123-menu"
+version = "0.0.1"
+dependencies = [
+ "l123-core",
+]
+
+[[package]]
+name = "l123-parse"
+version = "0.0.1"
+dependencies = [
+ "l123-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "l123-ui"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "l123-core",
+ "l123-engine",
+ "l123-menu",
+ "l123-parse",
+ "ratatui",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.185"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1469,92 +1555,6 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
-
-[[package]]
-name = "wk3"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "crossterm",
- "ratatui",
- "wk3-cmd",
- "wk3-core",
- "wk3-engine",
- "wk3-io",
- "wk3-menu",
- "wk3-ui",
-]
-
-[[package]]
-name = "wk3-cmd"
-version = "0.0.1"
-dependencies = [
- "thiserror 2.0.18",
- "wk3-core",
- "wk3-engine",
-]
-
-[[package]]
-name = "wk3-core"
-version = "0.0.1"
-dependencies = [
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "wk3-engine"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "ironcalc",
- "thiserror 2.0.18",
- "wk3-core",
-]
-
-[[package]]
-name = "wk3-io"
-version = "0.0.1"
-dependencies = [
- "thiserror 2.0.18",
- "wk3-core",
- "wk3-engine",
-]
-
-[[package]]
-name = "wk3-macro"
-version = "0.0.1"
-dependencies = [
- "wk3-cmd",
- "wk3-core",
-]
-
-[[package]]
-name = "wk3-menu"
-version = "0.0.1"
-dependencies = [
- "wk3-core",
-]
-
-[[package]]
-name = "wk3-parse"
-version = "0.0.1"
-dependencies = [
- "thiserror 2.0.18",
- "wk3-core",
-]
-
-[[package]]
-name = "wk3-ui"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "crossterm",
- "ratatui",
- "wk3-core",
- "wk3-engine",
- "wk3-menu",
- "wk3-parse",
-]
 
 [[package]]
 name = "zerocopy"

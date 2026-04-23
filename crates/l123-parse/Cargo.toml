@@ -1,8 +1,9 @@
 [package]
-name = "wk3-menu"
+name = "l123-parse"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-wk3-core = { workspace = true }
+l123-core = { workspace = true }
+thiserror = { workspace = true }

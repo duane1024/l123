@@ -1,10 +1,10 @@
 [package]
-name = "wk3-cmd"
+name = "l123-cmd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-wk3-core = { workspace = true }
-wk3-engine = { workspace = true }
+l123-core = { workspace = true }
+l123-engine = { workspace = true }
 thiserror = { workspace = true }

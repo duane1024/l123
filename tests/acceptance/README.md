@@ -1,8 +1,8 @@
-# WK3 Acceptance Transcripts
+# L123 Acceptance Transcripts
 
 Each `.tsv` file is a keystroke transcript + assertions that exercise a
 slice of the Authenticity Contract (SPEC §20). The harness lives in
-`crates/wk3-ui/tests/acceptance.rs`.
+`crates/l123-ui/tests/acceptance.rs`.
 
 ## Directive format
 

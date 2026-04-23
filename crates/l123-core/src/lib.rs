@@ -1,4 +1,4 @@
-//! Core types for WK3: addresses, ranges, values, modes, formats.
+//! Core types for L123: addresses, ranges, values, modes, formats.
 //!
 //! This crate has no I/O dependencies and no engine dependencies.
 //! Everything here is pure data types + pure functions.

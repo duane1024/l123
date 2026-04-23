@@ -1,17 +1,17 @@
 //! IronCalc implementation of the `Engine` trait.
 //!
 //! IronCalc uses 1-based (row, column) coordinates and Excel syntax
-//! (`=SUM(A1:B2)`). This adapter bridges to WK3's 0-based addressing.
-//! WK3's upper layers are responsible for translating 1-2-3 formula
+//! (`=SUM(A1:B2)`). This adapter bridges to L123's 0-based addressing.
+//! L123's upper layers are responsible for translating 1-2-3 formula
 //! syntax (`@SUM(A1..B2)`) to Excel shape *before* calling
-//! `set_user_input` — that's the wk3-parse crate's job.
+//! `set_user_input` — that's the l123-parse crate's job.
 
 use std::path::Path;
 
 use ironcalc::base::{expressions::utils::number_to_column, Model};
 use ironcalc::export::save_to_xlsx;
 
-use wk3_core::{address::col_to_letters, Address, Range, SheetId, Value};
+use l123_core::{address::col_to_letters, Address, Range, SheetId, Value};
 
 use crate::engine::{CellView, Engine, EngineError, Result};
 

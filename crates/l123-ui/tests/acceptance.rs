@@ -8,10 +8,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use wk3_ui::App;
+use l123_ui::App;
 
 fn workspace_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR is crates/wk3-ui; workspace root is two up.
+    // CARGO_MANIFEST_DIR is crates/l123-ui; workspace root is two up.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()

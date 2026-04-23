@@ -1,4 +1,4 @@
-# WK3 — Lotus 1-2-3 TUI Spreadsheet (Spec v0.2)
+# L123 — Lotus 1-2-3 TUI Spreadsheet (Spec v0.2)
 
 > v0.2 is rewritten from v0.1 after deep review of the *Lotus 1-2-3 Release 3.1
 > Reference*, *Tutorial*, and *Quick Reference* manuals (1990). Corrections vs.
@@ -6,7 +6,7 @@
 
 ---
 
-## 1. What WK3 is
+## 1. What L123 is
 
 A terminal spreadsheet whose **interaction model is indistinguishable from
 Lotus 1-2-3 Release 3.1** on DOS, but whose compute and I/O layers are modern:
@@ -14,12 +14,12 @@ xlsx-compatible, Unicode-correct, cross-platform.
 
 **Two promises — the project fails if either breaks:**
 
-1. An experienced 1-2-3 R3.1 user sitting down cold can drive WK3 without
+1. An experienced 1-2-3 R3.1 user sitting down cold can drive L123 without
    reading anything.
-2. WK3 files round-trip cleanly to and from `.xlsx` via a modern formula
+2. L123 files round-trip cleanly to and from `.xlsx` via a modern formula
    engine.
 
-## 2. What WK3 is NOT
+## 2. What L123 is NOT
 
 - A visual homage. The goal is *functional* fidelity, not CRT nostalgia (that
   is a stretch goal, §18).
@@ -438,7 +438,7 @@ Column-width tag `[Wn]` appears after the format tag when width is non-default.
 
 ## 13. 3D worksheet model
 
-**Δ:** v0.1 didn't mention 3D at all. 1-2-3 R3.x is natively 3D and WK3
+**Δ:** v0.1 didn't mention 3D at all. 1-2-3 R3.x is natively 3D and L123
 cannot skip it.
 
 - A "workbook" (what 1-2-3 calls an *active file*) contains 1..256 worksheets
@@ -475,7 +475,7 @@ active files = multiple in-memory IronCalc workbooks. Cross-file refs
 
 **Δ:** v0.1 said `Save As`. 1-2-3 does not have "Save As". To save under a
 different name: `/File Save`, then edit the prompted filename before Enter.
-To save a *subset*: `/File Xtract`. WK3 must match this model.
+To save a *subset*: `/File Xtract`. L123 must match this model.
 
 ### Extensions (native)
 
@@ -486,7 +486,7 @@ To save a *subset*: `/File Xtract`. WK3 must match this model.
 - `.ENC` — encoded print output
 - `.CGM` / `.PIC` — graph
 
-### Extensions (WK3's modern path)
+### Extensions (L123's modern path)
 
 - `.xlsx` — primary format. Offer `/File Save` default extension switch
   (`/Worksheet Global Default Ext Save .xlsx`); save to `.xlsx` by default for
@@ -691,7 +691,7 @@ label prefixes verbatim (since IronCalc would re-parse).
 
 ## 20. Authenticity contract
 
-These behaviors are **not optional**. If any are missing, WK3 fails promise 1
+These behaviors are **not optional**. If any are missing, L123 fails promise 1
 (§1) regardless of how much else is correct.
 
 1. **Three-line control panel** with line 3's dynamic submenu preview / help

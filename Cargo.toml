@@ -1,34 +1,34 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/wk3-core",
-    "crates/wk3-engine",
-    "crates/wk3-parse",
-    "crates/wk3-cmd",
-    "crates/wk3-menu",
-    "crates/wk3-ui",
-    "crates/wk3-io",
-    "crates/wk3-macro",
-    "crates/wk3",
+    "crates/l123-core",
+    "crates/l123-engine",
+    "crates/l123-parse",
+    "crates/l123-cmd",
+    "crates/l123-menu",
+    "crates/l123-ui",
+    "crates/l123-io",
+    "crates/l123-macro",
+    "crates/l123",
 ]
 
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/ddmoore/wk3"
+repository = "https://github.com/ddmoore/l123"
 rust-version = "1.80"
 
 [workspace.dependencies]
 # internal
-wk3-core   = { path = "crates/wk3-core" }
-wk3-engine = { path = "crates/wk3-engine" }
-wk3-parse  = { path = "crates/wk3-parse" }
-wk3-cmd    = { path = "crates/wk3-cmd" }
-wk3-menu   = { path = "crates/wk3-menu" }
-wk3-ui     = { path = "crates/wk3-ui" }
-wk3-io     = { path = "crates/wk3-io" }
-wk3-macro  = { path = "crates/wk3-macro" }
+l123-core   = { path = "crates/l123-core" }
+l123-engine = { path = "crates/l123-engine" }
+l123-parse  = { path = "crates/l123-parse" }
+l123-cmd    = { path = "crates/l123-cmd" }
+l123-menu   = { path = "crates/l123-menu" }
+l123-ui     = { path = "crates/l123-ui" }
+l123-io     = { path = "crates/l123-io" }
+l123-macro  = { path = "crates/l123-macro" }
 
 # external
 ironcalc       = "0.7"

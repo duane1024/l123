@@ -24,12 +24,12 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
     Terminal,
 };
-use wk3_core::{
+use l123_core::{
     address::col_to_letters, label::is_value_starter, Address, CellContents, Format, FormatKind,
     LabelPrefix, Mode, Range, SheetId, Value,
 };
-use wk3_engine::{Engine, IronCalcEngine, RecalcMode};
-use wk3_menu::{self as menu, Action, MenuBody, MenuItem};
+use l123_engine::{Engine, IronCalcEngine, RecalcMode};
+use l123_menu::{self as menu, Action, MenuBody, MenuItem};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
@@ -1011,13 +1011,13 @@ impl App {
             }
             CellContents::Constant(Value::Number(n)) => self
                 .engine
-                .set_user_input(addr, &wk3_core::format_number_general(*n)),
+                .set_user_input(addr, &l123_core::format_number_general(*n)),
             CellContents::Constant(Value::Text(s)) => {
                 self.engine.set_user_input(addr, &format!("'{s}"))
             }
             CellContents::Constant(_) => Ok(()),
             CellContents::Formula { expr, .. } => {
-                let excel = wk3_parse::to_engine_source(expr);
+                let excel = l123_parse::to_engine_source(expr);
                 self.engine.set_user_input(addr, &excel)
             }
         };
@@ -1082,13 +1082,13 @@ impl App {
             }
             CellContents::Constant(Value::Number(n)) => self
                 .engine
-                .set_user_input(addr, &wk3_core::format_number_general(*n)),
+                .set_user_input(addr, &l123_core::format_number_general(*n)),
             CellContents::Constant(Value::Text(s)) => {
                 self.engine.set_user_input(addr, &format!("'{s}"))
             }
             CellContents::Constant(_) => Ok(()),
             CellContents::Formula { expr, .. } => {
-                let excel = wk3_parse::to_engine_source(expr);
+                let excel = l123_parse::to_engine_source(expr);
                 self.engine.set_user_input(addr, &excel)
             }
         };
@@ -1516,7 +1516,7 @@ fn draw_cell_contents(
 fn render_value_in_cell(v: &Value, width: usize, format: Format) -> Option<String> {
     match v {
         Value::Number(n) => {
-            let s = wk3_core::format_number(*n, format);
+            let s = l123_core::format_number(*n, format);
             // Overflow: if the number doesn't fit the column, fill with
             // asterisks (Authenticity Contract §20.9). General format
             // would normally switch to scientific first; for M3 we

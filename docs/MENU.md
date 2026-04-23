@@ -1,6 +1,6 @@
-# WK3 — Complete Menu Tree
+# L123 — Complete Menu Tree
 
-Source of truth for `wk3-menu`. Derived from *Lotus 1-2-3 Release 3.1
+Source of truth for `l123-menu`. Derived from *Lotus 1-2-3 Release 3.1
 Reference* (1990).
 
 Legend: **[MVP]** = in MVP slice; **[CPL]** = Complete-tier; **[STR]** =
@@ -52,7 +52,7 @@ Printer  Dir  Status  Update  Other  Autoexec  Ext  Graph  Temp  Quit
 - **Printer** → Interface 1-9 | AutoLf | Left | Right | Top | Bottom | Pg-Length | Wait | Setup | Name | Quit
 - **Dir** (default directory)
 - **Status** (display STAT screen)
-- **Update** (write `123R31.CNF`; WK3 writes `~/.config/wk3/wk3.toml`)
+- **Update** (write `123R31.CNF`; L123 writes `~/.config/l123/l123.toml`)
 - **Other** → International (Punctuation A-H, Currency Prefix/Suffix, Date A-D, Time A-D, Negative, Release-2 LICS/LMBCS, File-Translation, Quit) | Help Instant/Removable | Clock Standard/International/None/Filename | **Undo Enable/Disable** **[MVP-critical]** | Beep | Add-In | Expanded-Memory
 - **Autoexec** → Yes | No    (run `\0` macro on retrieve)
 - **Ext** → Save (default ext) | List (filter for /File List/Retrieve)
@@ -276,7 +276,7 @@ Load  Remove  Invoke  Clear  Table  Settings  Quit
 - **Table** → @Functions | Macros | Applications
 - **Settings** → File (Set/Cancel/Quit) | System (Set/Cancel/Directory/Update/Quit)
 
-Open question: WK3 can repurpose /Add-In for native Rust plug-ins loaded
+Open question: L123 can repurpose /Add-In for native Rust plug-ins loaded
 as dylibs, or Wasm components. Stretch-goal decision.
 
 ---
@@ -293,7 +293,7 @@ Exit with confirmation.
 
 ## Implementation notes
 
-- The tree is encoded as a static `&'static MenuNode` in `wk3-menu`.
+- The tree is encoded as a static `&'static MenuNode` in `l123-menu`.
 - Each node: `letter: char`, `name: &'static str`, `help: &'static str`,
   body: either `Submenu(&'static [MenuNode])` or `Leaf(Action)`.
 - Unimplemented leaves carry `Leaf(Action::NotYet(&'static str))`; the
@@ -311,7 +311,7 @@ collide under casual reading:
 - `/Worksheet Global`: Format | Label | Col-Width | **P**rot | **Z**ero | **R**ecalc | **D**efault | **G**roup | Quit — all unique
 - `/Worksheet Global Default Other`: International | Help | Clock | **U**ndo | **B**eep | **A**dd-In | **E**xpanded-Memory — all unique
 
-Verify the full tree at test time with a walk-and-assert in `wk3-menu::tests`.
+Verify the full tree at test time with a walk-and-assert in `l123-menu::tests`.
 
 ### Numbered leaves
 

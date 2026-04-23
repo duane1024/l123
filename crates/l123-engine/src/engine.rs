@@ -1,10 +1,10 @@
-//! The `Engine` trait — the contract between WK3's upper layers and whatever
+//! The `Engine` trait — the contract between L123's upper layers and whatever
 //! compute engine is backing us.  SPEC §17.
 
 use std::path::Path;
 
 use thiserror::Error;
-use wk3_core::{Address, Range, SheetId, Value};
+use l123_core::{Address, Range, SheetId, Value};
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -31,7 +31,7 @@ pub struct CellView {
     pub value: Value,
     pub formula: Option<String>,
     /// Formatted string as the engine would display (used as a cross-check;
-    /// WK3 re-formats via its own Format type for on-screen rendering).
+    /// L123 re-formats via its own Format type for on-screen rendering).
     pub formatted: Option<String>,
 }
 
@@ -45,7 +45,7 @@ impl CellView {
 /// but we declare the whole contract here so the adapter has to keep up.
 pub trait Engine {
     /// Set a cell from a user-entered string. The input is Excel-shaped
-    /// (`=SUM(A1:B2)`, `123`, `'text`); WK3's parse layer translates 1-2-3
+    /// (`=SUM(A1:B2)`, `123`, `'text`); L123's parse layer translates 1-2-3
     /// syntax (`@SUM(A1..B2)`) to this form before calling.
     fn set_user_input(&mut self, addr: Address, input: &str) -> Result<()>;
 

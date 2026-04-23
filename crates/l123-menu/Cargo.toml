@@ -1,9 +1,8 @@
 [package]
-name = "wk3-macro"
+name = "l123-menu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-wk3-core = { workspace = true }
-wk3-cmd = { workspace = true }
+l123-core = { workspace = true }

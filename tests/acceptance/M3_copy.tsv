@@ -1,6 +1,6 @@
 # /Copy — two-POINT flow: source range, then destination anchor.
 # For chunk-2 we cover numbers and labels; formula reference adjustment
-# on copy is deferred to the wk3-parse reverse-translation cycle.
+# on copy is deferred to the l123-parse reverse-translation cycle.
 
 # Seed A1=10, A2=20, A3=30
 KEYS 10
