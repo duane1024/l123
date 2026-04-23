@@ -1,0 +1,36 @@
+# Authenticity Contract #5 — numeric entry.
+# First char `0-9 + - . ( @ # $` switches mode READY→VALUE.
+# On commit, control panel line 1 shows the number WITHOUT any label
+# prefix; the grid cell renders right-aligned.
+
+ASSERT_MODE       READY
+
+KEY 1
+ASSERT_MODE       VALUE
+ASSERT_PANEL_L2   1
+KEYS 23
+ASSERT_PANEL_L2   123
+
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: 123
+ASSERT_CELL       A:A1  123
+
+# Move to A2 and enter a negative number
+DOWN
+ASSERT_POINTER    A:A2
+KEY -
+ASSERT_MODE       VALUE
+KEYS 45
+ENTER
+ASSERT_PANEL_L1   A:A2: -45
+ASSERT_CELL       A:A2  -45
+
+# Move to A3 and enter a decimal
+DOWN
+KEY 3
+KEY .
+KEYS 14
+ENTER
+ASSERT_PANEL_L1   A:A3: 3.14
+ASSERT_CELL       A:A3  3.14

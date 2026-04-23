@@ -1,0 +1,5 @@
+# Authenticity Contract — Ctrl-C (Ctrl-Break alias) quits from READY.
+
+ASSERT_RUNNING   true
+CTRL c
+ASSERT_RUNNING   false

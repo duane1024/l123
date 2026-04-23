@@ -1,0 +1,20 @@
+[package]
+name = "wk3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wk3"
+path = "src/main.rs"
+
+[dependencies]
+wk3-core = { workspace = true }
+wk3-engine = { workspace = true }
+wk3-cmd = { workspace = true }
+wk3-menu = { workspace = true }
+wk3-ui = { workspace = true }
+wk3-io = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+anyhow = { workspace = true }

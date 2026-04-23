@@ -1,0 +1,30 @@
+# Authenticity Contract #8 — arrow and Tab commit the entry and move
+# the pointer one cell in that direction.
+
+ASSERT_POINTER    A:A1
+
+# Down arrow commits + moves down.
+KEYS first
+DOWN
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A2
+ASSERT_CELL       A:A1  first
+
+# Right arrow commits + moves right.
+KEYS second
+RIGHT
+ASSERT_POINTER    A:B2
+ASSERT_CELL       A:A2  second
+
+# Tab commits + moves right (same as Right in entry context).
+KEYS third
+TAB
+ASSERT_POINTER    A:C2
+ASSERT_CELL       A:B2  third
+
+# Value commit-on-arrow with a number.
+KEY 4
+KEY 2
+LEFT
+ASSERT_POINTER    A:B2
+ASSERT_CELL       A:C2  42

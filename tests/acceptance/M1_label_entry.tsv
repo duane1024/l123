@@ -1,0 +1,22 @@
+# Authenticity Contract #5 — first-character rule & LABEL entry with
+# auto-inserted `'` prefix.
+#
+# Typing a non-value-starter (a letter) switches mode READY→LABEL.
+# The entry buffer appears on control panel line 2 as the user types.
+# ENTER commits; line 1 shows the stored cell as `A:A1: 'hello`.
+# The grid cell displays `hello` left-aligned.
+
+ASSERT_MODE      READY
+ASSERT_PANEL_L2
+
+KEY h
+ASSERT_MODE      LABEL
+ASSERT_PANEL_L2  h
+
+KEYS ello
+ASSERT_PANEL_L2  hello
+
+ENTER
+ASSERT_MODE      READY
+ASSERT_PANEL_L1  A:A1: 'hello
+ASSERT_CELL      A:A1  hello

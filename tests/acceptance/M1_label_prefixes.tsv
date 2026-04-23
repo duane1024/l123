@@ -1,0 +1,45 @@
+# Authenticity Contract #5 & #9 — explicit label-prefix first-chars:
+# `"`  right-align
+# `^`  center
+# `\`  repeat the entered text across the cell width  (`\-` → dashes)
+#
+# The prefix character becomes the stored LabelPrefix; it is NOT part of
+# the text. Control panel line 1 shows `<prefix><text>`; the grid cell
+# renders per the prefix's alignment.
+
+ASSERT_POINTER    A:A1
+
+# `"` right-align
+KEY "
+ASSERT_MODE       LABEL
+ASSERT_PANEL_L2
+KEYS right
+ENTER
+ASSERT_PANEL_L1   A:A1: "right
+ASSERT_CELL       A:A1  right
+
+DOWN
+# `^` center
+KEY ^
+ASSERT_MODE       LABEL
+KEYS mid
+ENTER
+ASSERT_PANEL_L1   A:A2: ^mid
+ASSERT_CELL       A:A2  mid
+
+DOWN
+# `\-` fills the cell with dashes (column width = 9)
+KEY \
+ASSERT_MODE       LABEL
+KEY -
+ENTER
+ASSERT_PANEL_L1   A:A3: \-
+ASSERT_CELL       A:A3  ---------
+
+DOWN
+# `\ab` → "ababababa" in a 9-wide cell
+KEY \
+KEYS ab
+ENTER
+ASSERT_PANEL_L1   A:A4: \ab
+ASSERT_CELL       A:A4  ababababa

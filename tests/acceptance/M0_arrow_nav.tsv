@@ -1,0 +1,23 @@
+# Authenticity Contract — arrow navigation in READY mode, mode indicator,
+# control panel line 1 showing the current cell address in sheet:addr form.
+
+ASSERT_POINTER   A:A1
+ASSERT_MODE      READY
+ASSERT_PANEL_L1  A:A1:
+
+RIGHT
+ASSERT_POINTER   A:B1
+ASSERT_PANEL_L1  A:B1:
+
+DOWN
+DOWN
+ASSERT_POINTER   A:B3
+
+LEFT
+ASSERT_POINTER   A:A3
+
+HOME
+ASSERT_POINTER   A:A1
+
+PGDN
+ASSERT_POINTER   A:A21

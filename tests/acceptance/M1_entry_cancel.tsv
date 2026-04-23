@@ -1,0 +1,19 @@
+# Authenticity Contract — Esc during LABEL/VALUE abandons the entry.
+# Mode returns to READY; the cell is unchanged; the entry buffer is gone.
+
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1
+
+KEYS hello
+ASSERT_MODE      LABEL
+ASSERT_PANEL_L2  hello
+
+ESC
+ASSERT_MODE      READY
+ASSERT_PANEL_L2
+ASSERT_CELL      A:A1
+
+# Cell is still empty; typing a new label should commit.
+KEYS world
+ENTER
+ASSERT_CELL      A:A1  world

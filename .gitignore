@@ -1,0 +1,29 @@
+# Build artifacts
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# OS metadata
+.DS_Store
+
+# IDE / editor project files
+.idea/
+.vscode/
+*.iml
+
+# Editor swap / backup files
+*.swp
+*.swo
+*~
+
+# Claude Code per-user overrides (shared settings.json stays committed)
+.claude/settings.local.json
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Merge conflict leftovers
+*.orig
+*.rej

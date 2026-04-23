@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/wk3-core",
+    "crates/wk3-engine",
+    "crates/wk3-parse",
+    "crates/wk3-cmd",
+    "crates/wk3-menu",
+    "crates/wk3-ui",
+    "crates/wk3-io",
+    "crates/wk3-macro",
+    "crates/wk3",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ddmoore/wk3"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# internal
+wk3-core   = { path = "crates/wk3-core" }
+wk3-engine = { path = "crates/wk3-engine" }
+wk3-parse  = { path = "crates/wk3-parse" }
+wk3-cmd    = { path = "crates/wk3-cmd" }
+wk3-menu   = { path = "crates/wk3-menu" }
+wk3-ui     = { path = "crates/wk3-ui" }
+wk3-io     = { path = "crates/wk3-io" }
+wk3-macro  = { path = "crates/wk3-macro" }
+
+# external
+ironcalc       = "0.7"
+ironcalc_base  = "0.7"
+ratatui        = "0.29"
+crossterm      = "0.28"
+thiserror      = "2"
+anyhow         = "1"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,8 @@
+[package]
+name = "wk3-menu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wk3-core = { workspace = true }

@@ -1,0 +1,62 @@
+# F2 switches the current cell into EDIT mode with the entry buffer
+# pre-populated from the cell's source form (prefix + text for labels,
+# general-format string for numbers).  Commit re-applies the first-char
+# rule to the buffer.
+
+ASSERT_MODE       READY
+
+# F2 on an empty cell: mode → EDIT, buffer empty, ESC returns to READY.
+F 2
+ASSERT_MODE       EDIT
+ASSERT_PANEL_L2
+ESC
+ASSERT_MODE       READY
+
+# Enter a label, then F2 to edit.
+KEYS hello
+ENTER
+F 2
+ASSERT_MODE       EDIT
+ASSERT_PANEL_L2   'hello
+
+# Append to the label and commit.
+KEYS !
+ENTER
+ASSERT_PANEL_L1   A:A1: 'hello!
+ASSERT_CELL       A:A1  hello!
+
+# Edit a VALUE: F2 loads the general-format number as the buffer.
+DOWN
+KEYS 42
+ENTER
+F 2
+ASSERT_MODE       EDIT
+ASSERT_PANEL_L2   42
+
+# Backspace and replace.
+BACKSPACE
+KEYS 5
+ENTER
+ASSERT_PANEL_L1   A:A2: 45
+ASSERT_CELL       A:A2  45
+
+# Re-typing a `"` prefix via EDIT converts a default-prefix label to Quote.
+DOWN
+KEYS label
+ENTER
+F 2
+ASSERT_MODE       EDIT
+ASSERT_PANEL_L2   'label
+# Remove the ' and type " instead.
+BACKSPACE
+BACKSPACE
+BACKSPACE
+BACKSPACE
+BACKSPACE
+BACKSPACE
+ASSERT_PANEL_L2
+KEY "
+KEYS right
+ENTER
+ASSERT_PANEL_L1   A:A3: "right
+ASSERT_CELL       A:A3  right
