@@ -56,18 +56,46 @@ struct Entry {
     buffer: String,
 }
 
-pub struct App {
-    pointer: Address,
-    mode: Mode,
-    running: bool,
-    viewport_col_offset: u16,
-    viewport_row_offset: u32,
+/// All per-file state — one instance per active file. Session-level
+/// fields (mode, menu, entry buffer, …) live on [`App`].
+struct Workbook {
+    engine: IronCalcEngine,
     cells: HashMap<Address, CellContents>,
     cell_formats: HashMap<Address, Format>,
     col_widths: HashMap<(SheetId, u16), u8>,
+    /// Last-saved-to path. Prefilled into `/FS` prompts so re-save is
+    /// a single Enter. `None` until the file has been saved at least
+    /// once.
+    active_path: Option<PathBuf>,
+    pointer: Address,
+    viewport_col_offset: u16,
+    viewport_row_offset: u32,
+    /// Command journal for Undo (Alt-F4). Each mutating command
+    /// pushes an inverse entry. Pop-and-apply reverts.
+    journal: Vec<JournalEntry>,
+}
+
+impl Workbook {
+    fn new() -> Self {
+        Self {
+            engine: IronCalcEngine::new().expect("IronCalc engine init"),
+            cells: HashMap::new(),
+            cell_formats: HashMap::new(),
+            col_widths: HashMap::new(),
+            active_path: None,
+            pointer: Address::A1,
+            viewport_col_offset: 0,
+            viewport_row_offset: 0,
+            journal: Vec::new(),
+        }
+    }
+}
+
+pub struct App {
+    mode: Mode,
+    running: bool,
     entry: Option<Entry>,
     default_label_prefix: LabelPrefix,
-    engine: IronCalcEngine,
     recalc_mode: RecalcMode,
     recalc_pending: bool,
     /// 1-2-3 GROUP mode: when true, format and row/col operations
@@ -75,6 +103,10 @@ pub struct App {
     /// `/Worksheet Global Group Enable|Disable`. Lights the GROUP
     /// indicator on the status line.
     group_mode: bool,
+    /// True when `/Worksheet Global Default Other Undo` is enabled.
+    /// While true, mutating commands push reverse entries onto the
+    /// journal; Alt-F4 pops and applies. L123 defaults this to ON.
+    undo_enabled: bool,
     menu: Option<MenuState>,
     point: Option<PointState>,
     prompt: Option<PromptState>,
@@ -82,10 +114,6 @@ pub struct App {
     /// typed name is stashed here after the prompt step and consumed by
     /// commit_point.
     pending_name: Option<String>,
-    /// Last-saved-to path for the current workbook. Prefilled into
-    /// subsequent /File Save prompts so re-save is a single Enter. `None`
-    /// until the user has saved at least once.
-    active_path: Option<PathBuf>,
     /// After committing a filename that already exists on disk, this
     /// carries the chosen path through the Cancel/Replace/Backup
     /// submenu. Mode stays MENU while present.
@@ -97,18 +125,16 @@ pub struct App {
     /// Overlay state for /File List. When present, the mode is Files
     /// and the grid is obscured by a horizontal picker on lines 2/3.
     file_list: Option<FileListState>,
-    /// Other "active files" currently swapped out of the foreground.
-    /// Empty in a single-file session. Each Ctrl-End + Ctrl-PgDn
-    /// rotates the front element into the primary slot and the old
-    /// primary to the back.
-    stashed_files: Vec<StashedFile>,
+    /// Active files in session order. A single-file session is a Vec
+    /// of length 1; `/File Open` appends or inserts. Ctrl-End +
+    /// Ctrl-PgUp/PgDn rotates `current` through the Vec.
+    active_files: Vec<Workbook>,
+    /// Index of the foreground file within `active_files`.
+    current: usize,
     /// True after Ctrl-End until the next key. While true, the FILE
     /// indicator lights and Ctrl-PgUp/PgDn cycle between active files
     /// instead of between sheets.
     file_nav_pending: bool,
-    /// Command journal for Undo (Alt-F4). Each mutating command
-    /// pushes an inverse entry. Pop-and-apply reverts.
-    journal: Vec<JournalEntry>,
 }
 
 /// Inverse commands recorded before each mutating operation. See SPEC
@@ -130,23 +156,39 @@ enum JournalEntry {
         cells: Vec<(Address, CellContents)>,
         formats: Vec<(Address, Format)>,
     },
+    /// Undo of a row insert: delete the row that was inserted.
+    RowInsert { sheet: SheetId, at: u32 },
+    /// Reinstate a deleted column on one sheet.
+    ColDelete {
+        sheet: SheetId,
+        at: u16,
+        cells: Vec<(Address, CellContents)>,
+        formats: Vec<(Address, Format)>,
+    },
+    /// Undo of a column insert: delete the column that was inserted.
+    ColInsert { sheet: SheetId, at: u16 },
+    /// Restore a range's prior per-cell contents + formats. Captures
+    /// the state that `/Range Erase` cleared.
+    RangeRestore {
+        cells: Vec<(Address, CellContents)>,
+        formats: Vec<(Address, Format)>,
+    },
+    /// Restore per-cell format overrides after `/Range Format`. Each
+    /// entry's `Option<Format>` is the pre-command format (None ==
+    /// no override).
+    RangeFormat {
+        entries: Vec<(Address, Option<Format>)>,
+    },
+    /// Restore one column's width. `prev_width = None` means the
+    /// column had no override (default width).
+    ColWidth {
+        sheet: SheetId,
+        col: u16,
+        prev_width: Option<u8>,
+    },
     /// Group of entries popped and applied together — used when
     /// GROUP propagated a single command to multiple sheets.
     Batch(Vec<JournalEntry>),
-}
-
-/// Per-file state swapped out when another file is foregrounded. Kept
-/// parallel to `App`'s primary-file fields so Ctrl-End rotation is a
-/// simple `mem::swap`.
-struct StashedFile {
-    engine: IronCalcEngine,
-    cells: HashMap<Address, CellContents>,
-    cell_formats: HashMap<Address, Format>,
-    col_widths: HashMap<(SheetId, u16), u8>,
-    active_path: Option<PathBuf>,
-    pointer: Address,
-    viewport_col_offset: u16,
-    viewport_row_offset: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -501,32 +543,33 @@ impl MenuState {
 impl App {
     pub fn new() -> Self {
         Self {
-            pointer: Address::A1,
             mode: Mode::Ready,
             running: true,
-            viewport_col_offset: 0,
-            viewport_row_offset: 0,
-            cells: HashMap::new(),
-            cell_formats: HashMap::new(),
-            col_widths: HashMap::new(),
             entry: None,
             default_label_prefix: LabelPrefix::Apostrophe,
-            engine: IronCalcEngine::new().expect("IronCalc engine init"),
             recalc_mode: RecalcMode::Automatic,
             recalc_pending: false,
             group_mode: false,
+            undo_enabled: true,
             menu: None,
             point: None,
             prompt: None,
             pending_name: None,
-            active_path: None,
             save_confirm: None,
             pending_xtract_path: None,
             file_list: None,
-            stashed_files: Vec::new(),
+            active_files: vec![Workbook::new()],
+            current: 0,
             file_nav_pending: false,
-            journal: Vec::new(),
         }
+    }
+
+    fn wb(&self) -> &Workbook {
+        &self.active_files[self.current]
+    }
+
+    fn wb_mut(&mut self) -> &mut Workbook {
+        &mut self.active_files[self.current]
     }
 
     pub fn recalc_mode(&self) -> RecalcMode {
@@ -578,7 +621,7 @@ impl App {
     // ---------------- test-surface accessors ----------------
 
     pub fn pointer(&self) -> Address {
-        self.pointer
+        self.wb().pointer
     }
 
     pub fn mode(&self) -> Mode {
@@ -609,11 +652,11 @@ impl App {
     /// current viewport.
     pub fn cell_rendered_text(&self, buf: &Buffer, addr: &str) -> Option<String> {
         let a = Address::parse(addr).ok()?;
-        if a.col < self.viewport_col_offset || a.row < self.viewport_row_offset {
+        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
             return None;
         }
-        let dc = a.col - self.viewport_col_offset;
-        let dr = (a.row - self.viewport_row_offset) as u16;
+        let dc = a.col - self.wb().viewport_col_offset;
+        let dr = (a.row - self.wb().viewport_row_offset) as u16;
         let x0 = ROW_GUTTER + dc * COL_WIDTH;
         let y = PANEL_HEIGHT + 1 + dr; // +1 skips column header row
         if x0 + COL_WIDTH > buf.area.width || y >= buf.area.height {
@@ -683,9 +726,11 @@ impl App {
             KeyCode::Left => self.move_pointer(-1, 0),
             KeyCode::Right => self.move_pointer(1, 0),
             KeyCode::Home => {
-                self.pointer = Address::new(self.pointer.sheet, 0, 0);
-                self.viewport_col_offset = 0;
-                self.viewport_row_offset = 0;
+                let sheet = self.wb().pointer.sheet;
+                let wb = self.wb_mut();
+                wb.pointer = Address::new(sheet, 0, 0);
+                wb.viewport_col_offset = 0;
+                wb.viewport_row_offset = 0;
             }
             KeyCode::PageDown if ctrl && file_nav => self.rotate_files(1),
             KeyCode::PageUp if ctrl && file_nav => self.rotate_files(-1),
@@ -703,9 +748,11 @@ impl App {
     }
 
     fn begin_edit(&mut self) {
+        let pointer = self.wb().pointer;
         let source = self
+            .wb()
             .cells
-            .get(&self.pointer)
+            .get(&pointer)
             .map(|c| c.source_form())
             .unwrap_or_default();
         self.entry = Some(Entry { kind: EntryKind::Edit, buffer: source });
@@ -781,13 +828,16 @@ impl App {
         };
         // Capture the prior state at the pointer before committing so
         // Alt-F4 can revert.
-        let prev_contents = self.cells.get(&self.pointer).cloned();
-        let prev_format = self.cell_formats.get(&self.pointer).copied();
-        self.journal.push(JournalEntry::CellEdit {
-            addr: self.pointer,
-            prev_contents,
-            prev_format,
-        });
+        if self.undo_enabled {
+            let addr = self.wb().pointer;
+            let prev_contents = self.wb().cells.get(&addr).cloned();
+            let prev_format = self.wb().cell_formats.get(&addr).copied();
+            self.wb_mut().journal.push(JournalEntry::CellEdit {
+                addr,
+                prev_contents,
+                prev_format,
+            });
+        }
         let mut contents = match entry.kind {
             EntryKind::Label(prefix) => CellContents::Label { prefix, text: entry.buffer },
             EntryKind::Value => match entry.buffer.parse::<f64>() {
@@ -803,12 +853,13 @@ impl App {
         self.push_to_engine(&contents);
         match self.recalc_mode {
             RecalcMode::Automatic => {
-                self.engine.recalc();
+                self.wb_mut().engine.recalc();
                 self.refresh_formula_caches();
                 self.recalc_pending = false;
                 // Pick up the just-computed value for the committed cell.
                 if let CellContents::Formula { expr, .. } = &contents {
-                    let view = self.engine.get_cell(self.pointer).ok();
+                    let p = self.wb().pointer;
+                    let view = self.wb_mut().engine.get_cell(p).ok();
                     let cached = view.map(|v| v.value);
                     contents = CellContents::Formula {
                         expr: expr.clone(),
@@ -820,20 +871,36 @@ impl App {
                 self.recalc_pending = true;
             }
         }
+        let p = self.wb().pointer;
         if contents.is_empty() {
-            self.cells.remove(&self.pointer);
+            self.wb_mut().cells.remove(&p);
         } else {
-            self.cells.insert(self.pointer, contents);
+            self.wb_mut().cells.insert(p, contents);
         }
         self.mode = Mode::Ready;
+    }
+
+    /// Record a batch of inverse entries. Empty batch and disabled
+    /// undo are both no-ops. Single-entry batches are unwrapped to
+    /// keep Batch usage to true multi-entry cases.
+    fn push_journal_batch(&mut self, batch: Vec<JournalEntry>) {
+        if !self.undo_enabled || batch.is_empty() {
+            return;
+        }
+        let entry = if batch.len() == 1 {
+            batch.into_iter().next().unwrap()
+        } else {
+            JournalEntry::Batch(batch)
+        };
+        self.wb_mut().journal.push(entry);
     }
 
     /// Pop the most recent journal entry and replay its inverse.
     /// No-op when the journal is empty.
     fn undo(&mut self) {
-        let Some(entry) = self.journal.pop() else { return };
+        let Some(entry) = self.wb_mut().journal.pop() else { return };
         self.apply_undo(entry);
-        self.engine.recalc();
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
     }
 
@@ -843,31 +910,97 @@ impl App {
                 match prev_contents {
                     Some(c) => {
                         self.push_to_engine_at(addr, &c);
-                        self.cells.insert(addr, c);
+                        self.wb_mut().cells.insert(addr, c);
                     }
                     None => {
-                        self.cells.remove(&addr);
-                        let _ = self.engine.clear_cell(addr);
+                        self.wb_mut().cells.remove(&addr);
+                        let _ = self.wb_mut().engine.clear_cell(addr);
                     }
                 }
                 match prev_format {
                     Some(f) => {
-                        self.cell_formats.insert(addr, f);
+                        self.wb_mut().cell_formats.insert(addr, f);
                     }
                     None => {
-                        self.cell_formats.remove(&addr);
+                        self.wb_mut().cell_formats.remove(&addr);
                     }
                 }
             }
             JournalEntry::RowDelete { sheet, at, cells, formats } => {
-                if self.engine.insert_rows(sheet, at, 1).is_ok() {
-                    shift_cells_rows(&mut self.cells, sheet, at, 1);
+                if self.wb_mut().engine.insert_rows(sheet, at, 1).is_ok() {
+                    shift_cells_rows(&mut self.wb_mut().cells, sheet, at, 1);
                     for (addr, contents) in cells {
                         self.push_to_engine_at(addr, &contents);
-                        self.cells.insert(addr, contents);
+                        self.wb_mut().cells.insert(addr, contents);
                     }
                     for (addr, fmt) in formats {
-                        self.cell_formats.insert(addr, fmt);
+                        self.wb_mut().cell_formats.insert(addr, fmt);
+                    }
+                }
+            }
+            JournalEntry::RowInsert { sheet, at } => {
+                if self.wb_mut().engine.delete_rows(sheet, at, 1).is_ok() {
+                    self.wb_mut()
+                        .cells
+                        .retain(|a, _| !(a.sheet == sheet && a.row == at));
+                    self.wb_mut()
+                        .cell_formats
+                        .retain(|a, _| !(a.sheet == sheet && a.row == at));
+                    shift_cells_rows(&mut self.wb_mut().cells, sheet, at + 1, -1);
+                }
+            }
+            JournalEntry::ColDelete { sheet, at, cells, formats } => {
+                if self.wb_mut().engine.insert_cols(sheet, at, 1).is_ok() {
+                    shift_cells_cols(&mut self.wb_mut().cells, sheet, at, 1);
+                    for (addr, contents) in cells {
+                        self.push_to_engine_at(addr, &contents);
+                        self.wb_mut().cells.insert(addr, contents);
+                    }
+                    for (addr, fmt) in formats {
+                        self.wb_mut().cell_formats.insert(addr, fmt);
+                    }
+                }
+            }
+            JournalEntry::ColInsert { sheet, at } => {
+                if self.wb_mut().engine.delete_cols(sheet, at, 1).is_ok() {
+                    self.wb_mut()
+                        .cells
+                        .retain(|a, _| !(a.sheet == sheet && a.col == at));
+                    self.wb_mut()
+                        .cell_formats
+                        .retain(|a, _| !(a.sheet == sheet && a.col == at));
+                    shift_cells_cols(&mut self.wb_mut().cells, sheet, at + 1, -1);
+                }
+            }
+            JournalEntry::RangeRestore { cells, formats } => {
+                for (addr, contents) in cells {
+                    self.push_to_engine_at(addr, &contents);
+                    self.wb_mut().cells.insert(addr, contents);
+                }
+                for (addr, fmt) in formats {
+                    self.wb_mut().cell_formats.insert(addr, fmt);
+                }
+            }
+            JournalEntry::RangeFormat { entries } => {
+                for (addr, prev) in entries {
+                    match prev {
+                        Some(f) => {
+                            self.wb_mut().cell_formats.insert(addr, f);
+                        }
+                        None => {
+                            self.wb_mut().cell_formats.remove(&addr);
+                        }
+                    }
+                }
+            }
+            JournalEntry::ColWidth { sheet, col, prev_width } => {
+                let key = (sheet, col);
+                match prev_width {
+                    Some(w) => {
+                        self.wb_mut().col_widths.insert(key, w);
+                    }
+                    None => {
+                        self.wb_mut().col_widths.remove(&key);
                     }
                 }
             }
@@ -885,7 +1018,7 @@ impl App {
     /// repeatedly; no-op in terms of values but always clears the pending
     /// flag.
     fn do_recalc(&mut self) {
-        self.engine.recalc();
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
         self.recalc_pending = false;
     }
@@ -992,6 +1125,18 @@ impl App {
                 self.group_mode = false;
                 self.close_menu();
             }
+            Action::WorksheetGlobalDefaultOtherUndoEnable => {
+                self.undo_enabled = true;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherUndoDisable => {
+                // Clear the existing journal so Alt-F4 can't pop a
+                // pre-disable entry after the user has explicitly
+                // turned undo off.
+                self.wb_mut().journal.clear();
+                self.undo_enabled = false;
+                self.close_menu();
+            }
             Action::WorksheetColumnSetWidth => self.start_col_width_prompt(),
             Action::RangeNameCreate => self.start_name_prompt(
                 "Enter name:",
@@ -1042,7 +1187,7 @@ impl App {
 
     fn start_file_save_prompt(&mut self) {
         self.menu = None;
-        let (buffer, fresh) = match &self.active_path {
+        let (buffer, fresh) = match &self.wb_mut().active_path {
             Some(p) => (p.to_string_lossy().into_owned(), true),
             None => (String::new(), false),
         };
@@ -1064,7 +1209,7 @@ impl App {
                 let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                 list_worksheet_files_in(&cwd)
             }
-            FileListKind::Active => self.active_path.iter().cloned().collect(),
+            FileListKind::Active => self.wb_mut().active_path.iter().cloned().collect(),
         };
         self.file_list = Some(FileListState {
             kind,
@@ -1136,9 +1281,9 @@ impl App {
     /// Before and After branches collapse to this same reset for now;
     /// true multi-file insertion is M5.
     fn execute_file_new(&mut self) {
-        self.cells.clear();
-        self.cell_formats.clear();
-        self.col_widths.clear();
+        self.wb_mut().cells.clear();
+        self.wb_mut().cell_formats.clear();
+        self.wb_mut().col_widths.clear();
         self.entry = None;
         self.menu = None;
         self.prompt = None;
@@ -1146,13 +1291,13 @@ impl App {
         self.save_confirm = None;
         self.pending_name = None;
         self.pending_xtract_path = None;
-        self.active_path = None;
-        self.pointer = Address::A1;
-        self.viewport_col_offset = 0;
-        self.viewport_row_offset = 0;
+        self.wb_mut().active_path = None;
+        self.wb_mut().pointer = Address::A1;
+        self.wb_mut().viewport_col_offset = 0;
+        self.wb_mut().viewport_row_offset = 0;
         self.recalc_pending = false;
         if let Ok(engine) = IronCalcEngine::new() {
-            self.engine = engine;
+            self.wb_mut().engine = engine;
         }
         self.mode = Mode::Ready;
     }
@@ -1168,47 +1313,10 @@ impl App {
         self.mode = Mode::Menu;
     }
 
-    /// Snapshot the App's current primary-file state into a
-    /// [`StashedFile`]. The new primary slot is left in an IronCalc
-    /// "empty" state that the caller is expected to populate.
-    fn stash_current_file(&mut self) -> StashedFile {
-        let engine = std::mem::replace(
-            &mut self.engine,
-            IronCalcEngine::new().expect("IronCalc engine init"),
-        );
-        StashedFile {
-            engine,
-            cells: std::mem::take(&mut self.cells),
-            cell_formats: std::mem::take(&mut self.cell_formats),
-            col_widths: std::mem::take(&mut self.col_widths),
-            active_path: self.active_path.take(),
-            pointer: self.pointer,
-            viewport_col_offset: self.viewport_col_offset,
-            viewport_row_offset: self.viewport_row_offset,
-        }
-    }
-
-    /// Restore a stashed file into the primary slot, returning the
-    /// state that was there before. Caller is responsible for
-    /// placing the returned value back into `stashed_files` wherever
-    /// the rotation policy says.
-    fn install_from_stash(&mut self, s: StashedFile) -> StashedFile {
-        let old = self.stash_current_file();
-        self.engine = s.engine;
-        self.cells = s.cells;
-        self.cell_formats = s.cell_formats;
-        self.col_widths = s.col_widths;
-        self.active_path = s.active_path;
-        self.pointer = s.pointer;
-        self.viewport_col_offset = s.viewport_col_offset;
-        self.viewport_row_offset = s.viewport_row_offset;
-        old
-    }
-
     /// Load an xlsx from `path` as an additional active file.
-    /// `before = true` installs it in the current slot and pushes
-    /// the old slot to the front of `stashed_files`; `before = false`
-    /// appends it as the last file without disturbing the current view.
+    /// `before = true` inserts it immediately before the current slot
+    /// and makes it the foreground file. `before = false` appends it
+    /// after the current slot without disturbing the current view.
     fn open_file_alongside(&mut self, path: PathBuf, before: bool) {
         let Ok(mut engine) = IronCalcEngine::new() else {
             self.mode = Mode::Ready;
@@ -1225,7 +1333,7 @@ impl App {
                 cells.insert(addr, contents);
             }
         }
-        let new_slot = StashedFile {
+        let new_file = Workbook {
             engine,
             cells,
             cell_formats: HashMap::new(),
@@ -1234,39 +1342,34 @@ impl App {
             pointer: Address::A1,
             viewport_col_offset: 0,
             viewport_row_offset: 0,
+            journal: Vec::new(),
         };
         if before {
-            // New file becomes current; current is stashed at front.
-            let old = self.install_from_stash(new_slot);
-            self.stashed_files.insert(0, old);
+            self.active_files.insert(self.current, new_file);
+            // `current` still points to the old (now shifted) file;
+            // Before convention is that the new file takes focus, so
+            // move focus to the just-inserted slot.
+            // After insert at `current`, old file is now at current+1
+            // and new file is at current. Keep current as-is.
         } else {
-            self.stashed_files.push(new_slot);
+            self.active_files.insert(self.current + 1, new_file);
         }
         self.mode = Mode::Ready;
     }
 
-    /// Rotate the file ring by `delta` slots. +1 = Ctrl-PgDn (next
-    /// file); -1 = Ctrl-PgUp (prev file). No-op if only one file is
-    /// active. Clears the Ctrl-End prefix.
+    /// Rotate the foreground file by `delta` slots. +1 = Ctrl-PgDn
+    /// (next file); -1 = Ctrl-PgUp (prev file). No-op if only one
+    /// file is active. Clears the Ctrl-End prefix.
     fn rotate_files(&mut self, delta: i32) {
         self.file_nav_pending = false;
-        if self.stashed_files.is_empty() || delta == 0 {
+        let n = self.active_files.len();
+        if n <= 1 || delta == 0 {
             return;
         }
-        if delta > 0 {
-            // Move current to the end; bring front to current.
-            let front = self.stashed_files.remove(0);
-            let old = self.install_from_stash(front);
-            self.stashed_files.push(old);
-        } else {
-            // Move current to front; bring back to current.
-            let back = self
-                .stashed_files
-                .pop()
-                .expect("non-empty checked above");
-            let old = self.install_from_stash(back);
-            self.stashed_files.insert(0, old);
-        }
+        let len = n as i32;
+        let mut next = self.current as i32 + delta;
+        next = ((next % len) + len) % len;
+        self.current = next as usize;
     }
 
     fn start_file_dir_prompt(&mut self) {
@@ -1306,7 +1409,7 @@ impl App {
             return;
         };
         let rows = l123_io::csv::parse(&body);
-        let origin = self.pointer;
+        let origin = self.wb_mut().pointer;
         for (dr, row) in rows.iter().enumerate() {
             for (dc, field) in row.iter().enumerate() {
                 if field.is_empty() {
@@ -1330,11 +1433,11 @@ impl App {
                         format!("'{field}"),
                     ),
                 };
-                let _ = self.engine.set_user_input(addr, &engine_input);
-                self.cells.insert(addr, contents);
+                let _ = self.wb_mut().engine.set_user_input(addr, &engine_input);
+                self.wb_mut().cells.insert(addr, contents);
             }
         }
-        self.engine.recalc();
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
         self.mode = Mode::Ready;
     }
@@ -1352,7 +1455,7 @@ impl App {
 
     fn start_file_retrieve_prompt(&mut self) {
         self.menu = None;
-        let (buffer, fresh) = match &self.active_path {
+        let (buffer, fresh) = match &self.wb_mut().active_path {
             Some(p) => (p.to_string_lossy().into_owned(), true),
             None => (String::new(), false),
         };
@@ -1368,28 +1471,28 @@ impl App {
     /// Load an xlsx from disk, wiping the current in-memory workbook
     /// and repopulating the UI cache from the loaded engine model.
     fn load_workbook_from(&mut self, path: PathBuf) {
-        if self.engine.load_xlsx(&path).is_err() {
+        if self.wb_mut().engine.load_xlsx(&path).is_err() {
             self.mode = Mode::Ready;
             return;
         }
         // Wipe UI state; the loaded engine is the new source of truth.
-        self.cells.clear();
-        self.cell_formats.clear();
-        self.col_widths.clear();
+        self.wb_mut().cells.clear();
+        self.wb_mut().cell_formats.clear();
+        self.wb_mut().col_widths.clear();
         self.entry = None;
-        self.pointer = Address::A1;
-        self.viewport_col_offset = 0;
-        self.viewport_row_offset = 0;
+        self.wb_mut().pointer = Address::A1;
+        self.wb_mut().viewport_col_offset = 0;
+        self.wb_mut().viewport_row_offset = 0;
         self.recalc_pending = false;
 
         // Pull every non-empty cell into the UI cache.
-        for (addr, cv) in self.engine.used_cells() {
+        for (addr, cv) in self.wb_mut().engine.used_cells() {
             if let Some(contents) = cell_view_to_contents(&cv) {
-                self.cells.insert(addr, contents);
+                self.wb_mut().cells.insert(addr, contents);
             }
         }
 
-        self.active_path = Some(path);
+        self.wb_mut().active_path = Some(path);
         self.mode = Mode::Ready;
     }
 
@@ -1401,8 +1504,8 @@ impl App {
                 let _ = std::fs::create_dir_all(parent);
             }
         }
-        if self.engine.save_xlsx(&path).is_ok() {
-            self.active_path = Some(path);
+        if self.wb_mut().engine.save_xlsx(&path).is_ok() {
+            self.wb_mut().active_path = Some(path);
         }
     }
 
@@ -1478,49 +1581,54 @@ impl App {
     /// only the pointer's sheet.
     fn target_sheets(&self) -> Vec<SheetId> {
         if self.group_mode {
-            (0..self.engine.sheet_count()).map(SheetId).collect()
+            (0..self.wb().engine.sheet_count()).map(SheetId).collect()
         } else {
-            vec![self.pointer.sheet]
+            vec![self.wb().pointer.sheet]
         }
     }
 
     fn insert_row_at_pointer(&mut self, n: u32) {
-        let at = self.pointer.row;
+        let at = self.wb().pointer.row;
+        let mut batch: Vec<JournalEntry> = Vec::new();
         for sheet in self.target_sheets() {
-            if self.engine.insert_rows(sheet, at, n).is_ok() {
-                shift_cells_rows(&mut self.cells, sheet, at, n as i64);
+            if self.wb_mut().engine.insert_rows(sheet, at, n).is_ok() {
+                shift_cells_rows(&mut self.wb_mut().cells, sheet, at, n as i64);
+                // One RowInsert entry per inserted row so undo can
+                // replay them cleanly (delete_rows with n=1).
+                for k in 0..n {
+                    batch.push(JournalEntry::RowInsert { sheet, at: at + k });
+                }
             }
         }
-        self.engine.recalc();
+        self.push_journal_batch(batch);
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
         self.close_menu();
     }
 
     fn delete_row_at_pointer(&mut self, n: u32) {
-        let at = self.pointer.row;
+        let at = self.wb_mut().pointer.row;
         let mut batch: Vec<JournalEntry> = Vec::new();
         for sheet in self.target_sheets() {
             // Capture the cells and formats about to be destroyed so
             // Alt-F4 can reinstate them. Only the first `n` rows on
             // this sheet are captured; deletion is always 1 for M5.
-            let captured_cells: Vec<(Address, CellContents)> = self
-                .cells
+            let captured_cells: Vec<(Address, CellContents)> = self.wb_mut().cells
                 .iter()
                 .filter(|(a, _)| a.sheet == sheet && a.row >= at && a.row < at + n)
                 .map(|(a, c)| (*a, c.clone()))
                 .collect();
-            let captured_formats: Vec<(Address, Format)> = self
-                .cell_formats
+            let captured_formats: Vec<(Address, Format)> = self.wb_mut().cell_formats
                 .iter()
                 .filter(|(a, _)| a.sheet == sheet && a.row >= at && a.row < at + n)
                 .map(|(a, f)| (*a, *f))
                 .collect();
-            if self.engine.delete_rows(sheet, at, n).is_ok() {
-                self.cells
+            if self.wb_mut().engine.delete_rows(sheet, at, n).is_ok() {
+                self.wb_mut().cells
                     .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
-                self.cell_formats
+                self.wb_mut().cell_formats
                     .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
-                shift_cells_rows(&mut self.cells, sheet, at + n, -(n as i64));
+                shift_cells_rows(&mut self.wb_mut().cells, sheet, at + n, -(n as i64));
                 batch.push(JournalEntry::RowDelete {
                     sheet,
                     at,
@@ -1529,26 +1637,25 @@ impl App {
                 });
             }
         }
-        if !batch.is_empty() {
-            self.journal.push(if batch.len() == 1 {
-                batch.into_iter().next().unwrap()
-            } else {
-                JournalEntry::Batch(batch)
-            });
-        }
-        self.engine.recalc();
+        self.push_journal_batch(batch);
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
         self.close_menu();
     }
 
     fn insert_col_at_pointer(&mut self, n: u16) {
-        let at = self.pointer.col;
+        let at = self.wb().pointer.col;
+        let mut batch: Vec<JournalEntry> = Vec::new();
         for sheet in self.target_sheets() {
-            if self.engine.insert_cols(sheet, at, n).is_ok() {
-                shift_cells_cols(&mut self.cells, sheet, at, n as i32);
+            if self.wb_mut().engine.insert_cols(sheet, at, n).is_ok() {
+                shift_cells_cols(&mut self.wb_mut().cells, sheet, at, n as i32);
+                for k in 0..n {
+                    batch.push(JournalEntry::ColInsert { sheet, at: at + k });
+                }
             }
         }
-        self.engine.recalc();
+        self.push_journal_batch(batch);
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
         self.close_menu();
     }
@@ -1558,18 +1665,19 @@ impl App {
     /// position. The pointer follows the original data, so it ends up
     /// on the (shifted) original sheet rather than on the new blank.
     fn insert_sheet_before_current(&mut self) {
-        let at = self.pointer.sheet.0;
-        if self.engine.insert_sheet_at(at).is_ok() {
+        let at = self.wb().pointer.sheet.0;
+        let (col, row) = (self.wb().pointer.col, self.wb().pointer.row);
+        let wb = self.wb_mut();
+        if wb.engine.insert_sheet_at(at).is_ok() {
             shift_sheets_from(
-                &mut self.cells,
-                &mut self.cell_formats,
-                &mut self.col_widths,
+                &mut wb.cells,
+                &mut wb.cell_formats,
+                &mut wb.col_widths,
                 at,
                 1,
             );
-            self.pointer =
-                Address::new(SheetId(at + 1), self.pointer.col, self.pointer.row);
-            self.engine.recalc();
+            wb.pointer = Address::new(SheetId(at + 1), col, row);
+            wb.engine.recalc();
             self.refresh_formula_caches();
         }
         self.close_menu();
@@ -1579,16 +1687,17 @@ impl App {
     /// the position after the current one. The pointer stays on the
     /// current sheet; Ctrl-PgDn reveals the new blank.
     fn insert_sheet_after_current(&mut self) {
-        let at = self.pointer.sheet.0 + 1;
-        if self.engine.insert_sheet_at(at).is_ok() {
+        let at = self.wb().pointer.sheet.0 + 1;
+        let wb = self.wb_mut();
+        if wb.engine.insert_sheet_at(at).is_ok() {
             shift_sheets_from(
-                &mut self.cells,
-                &mut self.cell_formats,
-                &mut self.col_widths,
+                &mut wb.cells,
+                &mut wb.cell_formats,
+                &mut wb.col_widths,
                 at,
                 1,
             );
-            self.engine.recalc();
+            wb.engine.recalc();
             self.refresh_formula_caches();
         }
         self.close_menu();
@@ -1597,16 +1706,17 @@ impl App {
     /// Ctrl-PgDn / Ctrl-PgUp: jump to the next / previous sheet. Clamps
     /// at the bookends — no wrap.
     fn move_sheet(&mut self, delta: i32) {
-        let count = self.engine.sheet_count();
+        let count = self.wb().engine.sheet_count();
         if count == 0 {
             return;
         }
-        let cur = self.pointer.sheet.0 as i32;
+        let cur = self.wb().pointer.sheet.0 as i32;
         let next = (cur + delta).clamp(0, count as i32 - 1) as u16;
-        if next != self.pointer.sheet.0 {
-            self.pointer = Address::new(SheetId(next), 0, 0);
-            self.viewport_col_offset = 0;
-            self.viewport_row_offset = 0;
+        let wb = self.wb_mut();
+        if next != wb.pointer.sheet.0 {
+            wb.pointer = Address::new(SheetId(next), 0, 0);
+            wb.viewport_col_offset = 0;
+            wb.viewport_row_offset = 0;
         }
     }
 
@@ -1614,7 +1724,7 @@ impl App {
 
     fn begin_point(&mut self, pending: PendingCommand) {
         self.menu = None;
-        self.point = Some(PointState { anchor: Some(self.pointer), pending });
+        self.point = Some(PointState { anchor: Some(self.wb().pointer), pending });
         self.mode = Mode::Point;
     }
 
@@ -1627,8 +1737,8 @@ impl App {
     /// this collapses to the pointer's cell.
     fn highlight_range(&self) -> Range {
         match self.point.as_ref().and_then(|p| p.anchor) {
-            Some(anchor) => Range { start: anchor, end: self.pointer }.normalized(),
-            None => Range::single(self.pointer),
+            Some(anchor) => Range { start: anchor, end: self.wb().pointer }.normalized(),
+            None => Range::single(self.wb().pointer),
         }
     }
 
@@ -1639,7 +1749,7 @@ impl App {
             KeyCode::Left => self.move_pointer(-1, 0),
             KeyCode::Right => self.move_pointer(1, 0),
             KeyCode::Home => {
-                self.pointer = Address::A1;
+                self.wb_mut().pointer = Address::A1;
                 self.scroll_into_view();
             }
             KeyCode::PageDown => self.move_pointer(0, 20),
@@ -1665,27 +1775,37 @@ impl App {
     /// `.` during POINT: if unanchored, anchor at current pointer. If
     /// anchored, cycle the free corner clockwise.
     fn period_in_point(&mut self) {
-        let Some(ps) = self.point.as_mut() else { return };
-        match ps.anchor {
-            None => ps.anchor = Some(self.pointer),
+        // Snapshot the pointer up-front so the inner match can touch
+        // both the point state (via `self.point`) and the workbook
+        // (via `self.wb_mut()`) without simultaneous borrows.
+        let pointer = self.wb().pointer;
+        let anchor = self.point.as_ref().and_then(|p| p.anchor);
+        match anchor {
+            None => {
+                if let Some(ps) = self.point.as_mut() {
+                    ps.anchor = Some(pointer);
+                }
+            }
             Some(anchor) => {
-                let (min_c, max_c) = (self.pointer.col.min(anchor.col), self.pointer.col.max(anchor.col));
-                let (min_r, max_r) = (self.pointer.row.min(anchor.row), self.pointer.row.max(anchor.row));
-                // Classify the current free corner (= pointer) and rotate.
-                let at_min_col = self.pointer.col == min_c;
-                let at_min_row = self.pointer.row == min_r;
-                let (new_col, new_row, new_anchor_col, new_anchor_row) = match (at_min_col, at_min_row) {
-                    // TL → TR
-                    (true, true) => (max_c, min_r, min_c, max_r),
-                    // TR → BR
-                    (false, true) => (max_c, max_r, min_c, min_r),
-                    // BR → BL
-                    (false, false) => (min_c, max_r, max_c, min_r),
-                    // BL → TL
-                    (true, false) => (min_c, min_r, max_c, max_r),
-                };
-                self.pointer = Address::new(self.pointer.sheet, new_col, new_row);
-                ps.anchor = Some(Address::new(anchor.sheet, new_anchor_col, new_anchor_row));
+                let (min_c, max_c) = (pointer.col.min(anchor.col), pointer.col.max(anchor.col));
+                let (min_r, max_r) = (pointer.row.min(anchor.row), pointer.row.max(anchor.row));
+                let at_min_col = pointer.col == min_c;
+                let at_min_row = pointer.row == min_r;
+                let (new_col, new_row, new_anchor_col, new_anchor_row) =
+                    match (at_min_col, at_min_row) {
+                        // TL → TR
+                        (true, true) => (max_c, min_r, min_c, max_r),
+                        // TR → BR
+                        (false, true) => (max_c, max_r, min_c, min_r),
+                        // BR → BL
+                        (false, false) => (min_c, max_r, max_c, min_r),
+                        // BL → TL
+                        (true, false) => (min_c, min_r, max_c, max_r),
+                    };
+                self.wb_mut().pointer = Address::new(pointer.sheet, new_col, new_row);
+                if let Some(ps) = self.point.as_mut() {
+                    ps.anchor = Some(Address::new(anchor.sheet, new_anchor_col, new_anchor_row));
+                }
                 self.scroll_into_view();
             }
         }
@@ -1697,8 +1817,8 @@ impl App {
             return;
         };
         let range = match ps.anchor {
-            Some(a) => Range { start: a, end: self.pointer }.normalized(),
-            None => Range::single(self.pointer),
+            Some(a) => Range { start: a, end: self.wb_mut().pointer }.normalized(),
+            None => Range::single(self.wb_mut().pointer),
         };
         match ps.pending {
             PendingCommand::RangeErase => {
@@ -1711,12 +1831,12 @@ impl App {
                 // Destination anchor is the pointer's current position,
                 // regardless of how the TO range was painted — for M3
                 // this is the common case (single-cell destination anchor).
-                let dest = self.pointer;
+                let dest = self.wb_mut().pointer;
                 self.execute_copy(source, dest);
                 self.mode = Mode::Ready;
             }
             PendingCommand::MoveTo { source } => {
-                let dest = self.pointer;
+                let dest = self.wb_mut().pointer;
                 self.execute_move(source, dest);
                 self.mode = Mode::Ready;
             }
@@ -1730,8 +1850,8 @@ impl App {
             }
             PendingCommand::RangeNameCreate => {
                 if let Some(name) = self.pending_name.take() {
-                    let _ = self.engine.define_name(&name, range);
-                    self.engine.recalc();
+                    let _ = self.wb_mut().engine.define_name(&name, range);
+                    self.wb_mut().engine.recalc();
                     self.refresh_formula_caches();
                 }
                 self.mode = Mode::Ready;
@@ -1756,7 +1876,7 @@ impl App {
         for row in r.start.row..=r.end.row {
             for col in r.start.col..=r.end.col {
                 let addr = Address::new(r.start.sheet, col, row);
-                let Ok(cv) = self.engine.get_cell(addr) else {
+                let Ok(cv) = self.wb_mut().engine.get_cell(addr) else {
                     continue;
                 };
                 if cv.value == Value::Empty && cv.formula.is_none() {
@@ -1790,7 +1910,8 @@ impl App {
 
     fn start_col_width_prompt(&mut self) {
         self.menu = None;
-        let current = self.col_width_of(self.pointer.sheet, self.pointer.col);
+        let p = self.wb().pointer;
+        let current = self.col_width_of(p.sheet, p.col);
         self.prompt = Some(PromptState {
             label: "Enter column width (1..240):".into(),
             buffer: current.to_string(),
@@ -1816,7 +1937,7 @@ impl App {
     /// Width of `col` in `sheet`. Returns the stored width, or the default
     /// (9) if none is set.
     fn col_width_of(&self, sheet: SheetId, col: u16) -> u8 {
-        self.col_widths.get(&(sheet, col)).copied().unwrap_or(9)
+        self.wb().col_widths.get(&(sheet, col)).copied().unwrap_or(9)
     }
 
     fn handle_key_prompt(&mut self, k: KeyEvent) {
@@ -1868,15 +1989,19 @@ impl App {
             }
             PromptNext::WorksheetColumnSetWidth => {
                 let width: u8 = p.buffer.parse().unwrap_or(9).clamp(1, 240);
-                let col = self.pointer.col;
+                let col = self.wb().pointer.col;
+                let mut batch: Vec<JournalEntry> = Vec::new();
                 for sheet in self.target_sheets() {
                     let key = (sheet, col);
+                    let prev = self.wb().col_widths.get(&key).copied();
                     if width == 9 {
-                        self.col_widths.remove(&key);
+                        self.wb_mut().col_widths.remove(&key);
                     } else {
-                        self.col_widths.insert(key, width);
+                        self.wb_mut().col_widths.insert(key, width);
                     }
+                    batch.push(JournalEntry::ColWidth { sheet, col, prev_width: prev });
                 }
+                self.push_journal_batch(batch);
                 self.mode = Mode::Ready;
             }
             PromptNext::RangeNameCreate => {
@@ -1889,8 +2014,8 @@ impl App {
             }
             PromptNext::RangeNameDelete => {
                 if !p.buffer.is_empty() {
-                    let _ = self.engine.delete_name(&p.buffer);
-                    self.engine.recalc();
+                    let _ = self.wb_mut().engine.delete_name(&p.buffer);
+                    self.wb_mut().engine.recalc();
                     self.refresh_formula_caches();
                 }
                 self.mode = Mode::Ready;
@@ -1959,21 +2084,28 @@ impl App {
         let r = range.normalized();
         // GROUP mode: broadcast to every sheet in the active file.
         let sheets: Vec<SheetId> = if self.group_mode {
-            (0..self.engine.sheet_count()).map(SheetId).collect()
+            (0..self.wb().engine.sheet_count()).map(SheetId).collect()
         } else {
             vec![r.start.sheet]
         };
-        for sheet in sheets {
+        let mut prior: Vec<(Address, Option<Format>)> = Vec::new();
+        for sheet in &sheets {
             for row in r.start.row..=r.end.row {
                 for col in r.start.col..=r.end.col {
-                    let addr = Address::new(sheet, col, row);
+                    let addr = Address::new(*sheet, col, row);
+                    prior.push((addr, self.wb().cell_formats.get(&addr).copied()));
                     if matches!(format.kind, FormatKind::Reset) {
-                        self.cell_formats.remove(&addr);
+                        self.wb_mut().cell_formats.remove(&addr);
                     } else {
-                        self.cell_formats.insert(addr, format);
+                        self.wb_mut().cell_formats.insert(addr, format);
                     }
                 }
             }
+        }
+        if self.undo_enabled && !prior.is_empty() {
+            self.wb_mut()
+                .journal
+                .push(JournalEntry::RangeFormat { entries: prior });
         }
         // No recalc needed — format is presentation only.
     }
@@ -1983,7 +2115,7 @@ impl App {
         for row in r.start.row..=r.end.row {
             for col in r.start.col..=r.end.col {
                 let addr = Address::new(r.start.sheet, col, row);
-                if let Some(CellContents::Label { prefix, .. }) = self.cells.get_mut(&addr) {
+                if let Some(CellContents::Label { prefix, .. }) = self.wb_mut().cells.get_mut(&addr) {
                     *prefix = new_prefix;
                 }
             }
@@ -1998,12 +2130,12 @@ impl App {
     fn transition_point(&mut self, next: PendingCommand) {
         let source_tl = match next {
             PendingCommand::CopyTo { source } | PendingCommand::MoveTo { source } => source.start,
-            _ => self.pointer,
+            _ => self.wb_mut().pointer,
         };
-        self.pointer = source_tl;
+        self.wb_mut().pointer = source_tl;
         self.scroll_into_view();
         self.point = Some(PointState {
-            anchor: Some(self.pointer),
+            anchor: Some(self.wb_mut().pointer),
             pending: next,
         });
         // mode stays POINT
@@ -2012,7 +2144,7 @@ impl App {
     fn execute_copy(&mut self, source: Range, dest_anchor: Address) {
         let src_cells = self.collect_cells_in_range(source);
         self.write_cells_at_offset(&src_cells, source.start, dest_anchor);
-        self.engine.recalc();
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
     }
 
@@ -2030,11 +2162,11 @@ impl App {
         };
         for (src, _) in &src_cells {
             if !dest_range.contains(*src) {
-                self.cells.remove(src);
-                let _ = self.engine.clear_cell(*src);
+                self.wb_mut().cells.remove(src);
+                let _ = self.wb_mut().engine.clear_cell(*src);
             }
         }
-        self.engine.recalc();
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
     }
 
@@ -2044,7 +2176,7 @@ impl App {
         for row in r.start.row..=r.end.row {
             for col in r.start.col..=r.end.col {
                 let addr = Address::new(r.start.sheet, col, row);
-                if let Some(c) = self.cells.get(&addr) {
+                if let Some(c) = self.wb().cells.get(&addr) {
                     out.push((addr, c.clone()));
                 }
             }
@@ -2067,31 +2199,30 @@ impl App {
                 dest_anchor.col + (src.col - src_origin.col),
                 dest_anchor.row + (src.row - src_origin.row),
             );
-            self.cells.insert(dst, contents.clone());
+            self.wb_mut().cells.insert(dst, contents.clone());
             self.push_to_engine_at(dst, contents);
         }
     }
 
     /// Like `push_to_engine` but for an arbitrary address (not
-    /// `self.pointer`). Used during Copy/Move.
+    /// `self.wb_mut().pointer`). Used during Copy/Move.
     fn push_to_engine_at(&mut self, addr: Address, contents: &CellContents) {
         let result = match contents {
-            CellContents::Empty => self.engine.clear_cell(addr),
+            CellContents::Empty => self.wb_mut().engine.clear_cell(addr),
             CellContents::Label { text, .. } => {
-                self.engine.set_user_input(addr, &format!("'{text}"))
+                self.wb_mut().engine.set_user_input(addr, &format!("'{text}"))
             }
-            CellContents::Constant(Value::Number(n)) => self
-                .engine
+            CellContents::Constant(Value::Number(n)) => self.wb_mut().engine
                 .set_user_input(addr, &l123_core::format_number_general(*n)),
             CellContents::Constant(Value::Text(s)) => {
-                self.engine.set_user_input(addr, &format!("'{s}"))
+                self.wb_mut().engine.set_user_input(addr, &format!("'{s}"))
             }
             CellContents::Constant(_) => Ok(()),
             CellContents::Formula { expr, .. } => {
-                let names = self.engine.all_sheet_names();
+                let names = self.wb_mut().engine.all_sheet_names();
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
                 let excel = l123_parse::to_engine_source(expr, &names_ref);
-                self.engine.set_user_input(addr, &excel)
+                self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
         let _ = result;
@@ -2101,27 +2232,83 @@ impl App {
         let r = range.normalized();
         // Single-sheet only for now; 3D ranges arrive with M5.
         let sheet = r.start.sheet;
+        // Capture prior cell contents and format overrides for undo.
+        let mut cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut formats: Vec<(Address, Format)> = Vec::new();
         for row in r.start.row..=r.end.row {
             for col in r.start.col..=r.end.col {
                 let addr = Address::new(sheet, col, row);
-                self.cells.remove(&addr);
-                let _ = self.engine.clear_cell(addr);
+                if let Some(c) = self.wb().cells.get(&addr) {
+                    cells.push((addr, c.clone()));
+                }
+                if let Some(f) = self.wb().cell_formats.get(&addr) {
+                    formats.push((addr, *f));
+                }
+                self.wb_mut().cells.remove(&addr);
+                self.wb_mut().cell_formats.remove(&addr);
+                let _ = self.wb_mut().engine.clear_cell(addr);
             }
         }
-        self.engine.recalc();
+        if self.undo_enabled && (!cells.is_empty() || !formats.is_empty()) {
+            self.wb_mut()
+                .journal
+                .push(JournalEntry::RangeRestore { cells, formats });
+        }
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
     }
 
     fn delete_col_at_pointer(&mut self, n: u16) {
-        let at = self.pointer.col;
+        let at = self.wb().pointer.col;
+        let mut batch: Vec<JournalEntry> = Vec::new();
         for sheet in self.target_sheets() {
-            if self.engine.delete_cols(sheet, at, n).is_ok() {
-                self.cells
+            let captured_cells: Vec<(Address, CellContents)> = self
+                .wb()
+                .cells
+                .iter()
+                .filter(|(a, _)| a.sheet == sheet && a.col >= at && a.col < at + n)
+                .map(|(a, c)| (*a, c.clone()))
+                .collect();
+            let captured_formats: Vec<(Address, Format)> = self
+                .wb()
+                .cell_formats
+                .iter()
+                .filter(|(a, _)| a.sheet == sheet && a.col >= at && a.col < at + n)
+                .map(|(a, f)| (*a, *f))
+                .collect();
+            if self.wb_mut().engine.delete_cols(sheet, at, n).is_ok() {
+                self.wb_mut()
+                    .cells
                     .retain(|a, _| !(a.sheet == sheet && a.col >= at && a.col < at + n));
-                shift_cells_cols(&mut self.cells, sheet, at + n, -(n as i32));
+                self.wb_mut()
+                    .cell_formats
+                    .retain(|a, _| !(a.sheet == sheet && a.col >= at && a.col < at + n));
+                shift_cells_cols(&mut self.wb_mut().cells, sheet, at + n, -(n as i32));
+                // One ColDelete per deleted column so undo restores in
+                // the correct order via apply_undo.
+                for k in 0..n {
+                    let col_k = at + k;
+                    let cells_k: Vec<_> = captured_cells
+                        .iter()
+                        .filter(|(a, _)| a.col == col_k)
+                        .cloned()
+                        .collect();
+                    let formats_k: Vec<_> = captured_formats
+                        .iter()
+                        .filter(|(a, _)| a.col == col_k)
+                        .cloned()
+                        .collect();
+                    batch.push(JournalEntry::ColDelete {
+                        sheet,
+                        at: col_k,
+                        cells: cells_k,
+                        formats: formats_k,
+                    });
+                }
             }
         }
-        self.engine.recalc();
+        self.push_journal_batch(batch);
+        self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
         self.close_menu();
     }
@@ -2148,24 +2335,23 @@ impl App {
     /// push it. Labels are stored with a `'` prefix so the engine treats
     /// them as text. Formulas are translated to Excel syntax.
     fn push_to_engine(&mut self, contents: &CellContents) {
-        let addr = self.pointer;
+        let addr = self.wb_mut().pointer;
         let result = match contents {
-            CellContents::Empty => self.engine.clear_cell(addr),
+            CellContents::Empty => self.wb_mut().engine.clear_cell(addr),
             CellContents::Label { text, .. } => {
-                self.engine.set_user_input(addr, &format!("'{text}"))
+                self.wb_mut().engine.set_user_input(addr, &format!("'{text}"))
             }
-            CellContents::Constant(Value::Number(n)) => self
-                .engine
+            CellContents::Constant(Value::Number(n)) => self.wb_mut().engine
                 .set_user_input(addr, &l123_core::format_number_general(*n)),
             CellContents::Constant(Value::Text(s)) => {
-                self.engine.set_user_input(addr, &format!("'{s}"))
+                self.wb_mut().engine.set_user_input(addr, &format!("'{s}"))
             }
             CellContents::Constant(_) => Ok(()),
             CellContents::Formula { expr, .. } => {
-                let names = self.engine.all_sheet_names();
+                let names = self.wb_mut().engine.all_sheet_names();
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
                 let excel = l123_parse::to_engine_source(expr, &names_ref);
-                self.engine.set_user_input(addr, &excel)
+                self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
         // Engine errors are non-fatal for the UI — an ERR value will
@@ -2177,32 +2363,31 @@ impl App {
     /// Walk every `Formula` cell and re-read its computed value from the
     /// engine.  Called after every recalc.
     fn refresh_formula_caches(&mut self) {
-        let formula_addrs: Vec<Address> = self
-            .cells
+        let formula_addrs: Vec<Address> = self.wb_mut().cells
             .iter()
             .filter_map(|(addr, c)| matches!(c, CellContents::Formula { .. }).then_some(*addr))
             .collect();
         for addr in formula_addrs {
-            let Ok(view) = self.engine.get_cell(addr) else { continue };
-            if let Some(CellContents::Formula { cached_value, .. }) = self.cells.get_mut(&addr) {
+            let Ok(view) = self.wb_mut().engine.get_cell(addr) else { continue };
+            if let Some(CellContents::Formula { cached_value, .. }) = self.wb_mut().cells.get_mut(&addr) {
                 *cached_value = Some(view.value);
             }
         }
     }
 
     fn move_pointer(&mut self, d_col: i32, d_row: i32) {
-        if let Some(next) = self.pointer.shifted(d_col, d_row) {
-            self.pointer = next;
+        if let Some(next) = self.wb_mut().pointer.shifted(d_col, d_row) {
+            self.wb_mut().pointer = next;
             self.scroll_into_view();
         }
     }
 
     fn scroll_into_view(&mut self) {
-        if self.pointer.col < self.viewport_col_offset {
-            self.viewport_col_offset = self.pointer.col;
+        if self.wb_mut().pointer.col < self.wb_mut().viewport_col_offset {
+            self.wb_mut().viewport_col_offset = self.wb_mut().pointer.col;
         }
-        if self.pointer.row < self.viewport_row_offset {
-            self.viewport_row_offset = self.pointer.row;
+        if self.wb_mut().pointer.row < self.wb_mut().viewport_row_offset {
+            self.wb_mut().viewport_row_offset = self.wb_mut().pointer.row;
         }
     }
 
@@ -2244,15 +2429,15 @@ impl App {
             tags.push(&width_tag);
         }
         let left = if readout.is_empty() && tags.is_empty() {
-            format!(" {}: ", self.pointer.display_full())
+            format!(" {}: ", self.wb().pointer.display_full())
         } else if tags.is_empty() {
-            format!(" {}: {}", self.pointer.display_full(), readout)
+            format!(" {}: {}", self.wb().pointer.display_full(), readout)
         } else if readout.is_empty() {
-            format!(" {}: {}", self.pointer.display_full(), tags.join(" "))
+            format!(" {}: {}", self.wb().pointer.display_full(), tags.join(" "))
         } else {
             format!(
                 " {}: {} {}",
-                self.pointer.display_full(),
+                self.wb().pointer.display_full(),
                 tags.join(" "),
                 readout
             )
@@ -2483,8 +2668,8 @@ impl App {
     }
 
     fn cell_readout_for_line1(&self) -> String {
-        self.cells
-            .get(&self.pointer)
+        self.wb().cells
+            .get(&self.wb().pointer)
             .map(|c| c.control_panel_readout())
             .unwrap_or_default()
     }
@@ -2492,9 +2677,9 @@ impl App {
     /// Parenthesized format tag (e.g. `(G)`, `(C2)`, `(F3)`) for the current
     /// cell. Empty for labels, empty cells, or cells using `Reset` format.
     fn format_tag_for_line1(&self) -> String {
-        match self.cells.get(&self.pointer) {
+        match self.wb().cells.get(&self.wb().pointer) {
             Some(CellContents::Constant(Value::Number(_)))
-            | Some(CellContents::Formula { .. }) => match self.format_for_cell(self.pointer).tag() {
+            | Some(CellContents::Formula { .. }) => match self.format_for_cell(self.wb().pointer).tag() {
                 Some(s) => format!("({s})"),
                 None => String::new(),
             },
@@ -2505,7 +2690,7 @@ impl App {
     /// Resolve the format for a given cell — the per-cell override if set,
     /// else General.
     fn format_for_cell(&self, addr: Address) -> Format {
-        self.cell_formats
+        self.wb().cell_formats
             .get(&addr)
             .copied()
             .unwrap_or(Format::GENERAL)
@@ -2513,7 +2698,7 @@ impl App {
 
     /// `[Wn]` tag when the current column's width is non-default.
     fn width_tag_for_line1(&self) -> String {
-        let w = self.col_width_of(self.pointer.sheet, self.pointer.col);
+        let w = self.col_width_of(self.wb().pointer.sheet, self.wb().pointer.col);
         if w == 9 {
             String::new()
         } else {
@@ -2531,7 +2716,7 @@ impl App {
 
         // Column header row
         for i in 0..visible_cols {
-            let c = self.viewport_col_offset + i;
+            let c = self.wb().viewport_col_offset + i;
             let letters = col_to_letters(c);
             let x = area.x + ROW_GUTTER + i * COL_WIDTH;
             let y = area.y;
@@ -2547,7 +2732,7 @@ impl App {
 
         // Body rows
         for r in 0..visible_rows {
-            let row_idx = self.viewport_row_offset + r as u32;
+            let row_idx = self.wb().viewport_row_offset + r as u32;
             let y = area.y + 1 + r;
             // Row number gutter
             let label = format!("{:>width$}", row_idx + 1, width = (ROW_GUTTER - 1) as usize);
@@ -2563,12 +2748,12 @@ impl App {
             let highlight = if self.mode == Mode::Point {
                 self.highlight_range()
             } else {
-                Range::single(self.pointer)
+                Range::single(self.wb().pointer)
             };
             for c in 0..visible_cols {
-                let col_idx = self.viewport_col_offset + c;
+                let col_idx = self.wb().viewport_col_offset + c;
                 let x = area.x + ROW_GUTTER + c * COL_WIDTH;
-                let addr = Address::new(self.pointer.sheet, col_idx, row_idx);
+                let addr = Address::new(self.wb().pointer.sheet, col_idx, row_idx);
                 let highlighted = highlight.contains(addr);
                 let cell_style = if highlighted {
                     Style::default().add_modifier(Modifier::REVERSED)
@@ -2580,7 +2765,7 @@ impl App {
                     buf[(x + k, y)].set_char(' ').set_style(cell_style);
                 }
                 // Content
-                if let Some(contents) = self.cells.get(&addr) {
+                if let Some(contents) = self.wb().cells.get(&addr) {
                     let fmt = self.format_for_cell(addr);
                     draw_cell_contents(buf, x, y, COL_WIDTH, contents, cell_style, fmt);
                 }
@@ -2599,6 +2784,9 @@ impl App {
         }
         if self.group_mode {
             indicators.push("GROUP");
+        }
+        if self.undo_enabled {
+            indicators.push("UNDO");
         }
         if self.recalc_pending {
             indicators.push("CALC");
@@ -2859,7 +3047,7 @@ mod tests {
     #[test]
     fn starts_at_a1() {
         let app = App::new();
-        assert_eq!(app.pointer, Address::A1);
+        assert_eq!(app.wb().pointer, Address::A1);
         assert_eq!(app.mode, Mode::Ready);
         assert!(app.entry.is_none());
     }
@@ -2868,13 +3056,13 @@ mod tests {
     fn arrow_nav() {
         let mut app = App::new();
         app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        assert_eq!(app.pointer.col, 1);
+        assert_eq!(app.wb().pointer.col, 1);
         app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(app.pointer.row, 1);
+        assert_eq!(app.wb().pointer.row, 1);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        assert_eq!(app.pointer.col, 0);
+        assert_eq!(app.wb().pointer.col, 0);
         app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(app.pointer.row, 0);
+        assert_eq!(app.wb().pointer.row, 0);
     }
 
     #[test]
@@ -2882,15 +3070,15 @@ mod tests {
         let mut app = App::new();
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(app.pointer, Address::A1);
+        assert_eq!(app.wb().pointer, Address::A1);
     }
 
     #[test]
     fn home_resets_pointer() {
         let mut app = App::new();
-        app.pointer = Address::new(SheetId::A, 10, 10);
+        app.wb_mut().pointer = Address::new(SheetId::A, 10, 10);
         app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-        assert_eq!(app.pointer, Address::A1);
+        assert_eq!(app.wb().pointer, Address::A1);
     }
 
     #[test]
@@ -2904,7 +3092,7 @@ mod tests {
     fn pgdn_moves_twenty_rows() {
         let mut app = App::new();
         app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
-        assert_eq!(app.pointer.row, 20);
+        assert_eq!(app.wb().pointer.row, 20);
     }
 
     #[test]
@@ -2942,7 +3130,7 @@ mod tests {
     #[test]
     fn begin_point_auto_anchors_at_pointer() {
         let mut app = App::new();
-        app.pointer = Address::new(SheetId::A, 1, 1); // B2
+        app.wb_mut().pointer = Address::new(SheetId::A, 1, 1); // B2
         app.begin_point(PendingCommand::RangeErase);
         assert_eq!(app.mode, Mode::Point);
         let anchor = app.point.as_ref().unwrap().anchor.unwrap();
@@ -3001,20 +3189,20 @@ mod tests {
         // Pointer was at BR(B2), so we're detecting at_min_col=false, at_min_row=false,
         // which the code treats as "BR → BL", moving pointer to BL (A2).
         press_ch(&mut app, '.');
-        assert_eq!(app.pointer, Address::new(SheetId::A, 0, 1)); // BL
+        assert_eq!(app.wb().pointer, Address::new(SheetId::A, 0, 1)); // BL
         // Range unchanged.
         assert_eq!(app.highlight_range(), before);
         // Next `.` from BL → TL.
         press_ch(&mut app, '.');
-        assert_eq!(app.pointer, Address::A1); // TL
+        assert_eq!(app.wb().pointer, Address::A1); // TL
         assert_eq!(app.highlight_range(), before);
         // Next `.` from TL → TR.
         press_ch(&mut app, '.');
-        assert_eq!(app.pointer, Address::new(SheetId::A, 1, 0)); // TR
+        assert_eq!(app.wb().pointer, Address::new(SheetId::A, 1, 0)); // TR
         assert_eq!(app.highlight_range(), before);
         // Next `.` from TR → BR. Full loop.
         press_ch(&mut app, '.');
-        assert_eq!(app.pointer, Address::new(SheetId::A, 1, 1)); // BR
+        assert_eq!(app.wb().pointer, Address::new(SheetId::A, 1, 1)); // BR
         assert_eq!(app.highlight_range(), before);
     }
 
@@ -3030,7 +3218,7 @@ mod tests {
             let _ = row;
         }
         // Go back to A1 and erase A1..A3
-        app.pointer = Address::A1;
+        app.wb_mut().pointer = Address::A1;
         app.begin_point(PendingCommand::RangeErase);
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Down);
@@ -3038,7 +3226,7 @@ mod tests {
         assert_eq!(app.mode, Mode::Ready);
         for row in 0..3 {
             assert!(
-                !app.cells.contains_key(&Address::new(SheetId::A, 0, row)),
+                !app.wb().cells.contains_key(&Address::new(SheetId::A, 0, row)),
                 "A{} should be empty",
                 row + 1
             );
@@ -3113,7 +3301,7 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         // In Manual mode, the just-committed formula has no cached value yet.
-        let formula = app.cells.get(&Address::new(SheetId::A, 0, 1)).unwrap();
+        let formula = app.wb().cells.get(&Address::new(SheetId::A, 0, 1)).unwrap();
         if let CellContents::Formula { cached_value, .. } = formula {
             assert!(cached_value.is_none(), "manual mode should not auto-eval");
         } else {
@@ -3124,7 +3312,7 @@ mod tests {
         // F9 computes and clears the pending flag.
         app.handle_key(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE));
         assert!(!app.recalc_pending());
-        let formula = app.cells.get(&Address::new(SheetId::A, 0, 1)).unwrap();
+        let formula = app.wb().cells.get(&Address::new(SheetId::A, 0, 1)).unwrap();
         match formula {
             CellContents::Formula { cached_value, .. } => {
                 assert_eq!(*cached_value, Some(Value::Number(20.0)));
@@ -3173,7 +3361,7 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let a3 = app.cells.get(&Address::new(SheetId::A, 0, 2)).unwrap();
+        let a3 = app.wb().cells.get(&Address::new(SheetId::A, 0, 2)).unwrap();
         match a3 {
             CellContents::Formula { expr, cached_value } => {
                 assert_eq!(expr, "@SUM(A1..A2)");
@@ -3197,7 +3385,7 @@ mod tests {
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
-            app.cells
+            app.wb().cells
                 .get(&Address::new(SheetId::A, 0, 1))
                 .and_then(|c| match c {
                     CellContents::Formula { cached_value, .. } => cached_value.clone(),
@@ -3210,7 +3398,7 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
-            app.cells
+            app.wb().cells
                 .get(&Address::new(SheetId::A, 0, 1))
                 .and_then(|c| match c {
                     CellContents::Formula { cached_value, .. } => cached_value.clone(),
@@ -3231,7 +3419,7 @@ mod tests {
     #[test]
     fn f2_loads_label_source_into_buffer_with_prefix() {
         let mut app = App::new();
-        app.cells.insert(
+        app.wb_mut().cells.insert(
             Address::A1,
             CellContents::Label {
                 prefix: LabelPrefix::Quote,
@@ -3246,7 +3434,7 @@ mod tests {
     #[test]
     fn f2_commit_reparses_via_first_char_rule() {
         let mut app = App::new();
-        app.cells.insert(
+        app.wb_mut().cells.insert(
             Address::A1,
             CellContents::Label {
                 prefix: LabelPrefix::Apostrophe,
@@ -3269,7 +3457,7 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        match app.cells.get(&Address::A1).unwrap() {
+        match app.wb().cells.get(&Address::A1).unwrap() {
             CellContents::Label { prefix, text } => {
                 assert_eq!(*prefix, LabelPrefix::Quote);
                 assert_eq!(text, "right");
@@ -3287,7 +3475,7 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Ready);
         assert!(app.entry.is_none());
-        assert!(!app.cells.contains_key(&Address::A1));
+        assert!(!app.wb().cells.contains_key(&Address::A1));
     }
 
     #[test]
@@ -3298,9 +3486,9 @@ mod tests {
         }
         app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Ready);
-        assert_eq!(app.pointer, Address::new(SheetId::A, 0, 1));
+        assert_eq!(app.wb().pointer, Address::new(SheetId::A, 0, 1));
         assert!(matches!(
-            app.cells.get(&Address::A1),
+            app.wb().cells.get(&Address::A1),
             Some(CellContents::Label { .. })
         ));
     }
@@ -3354,7 +3542,7 @@ mod tests {
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Ready);
-        match app.cells.get(&Address::A1).unwrap() {
+        match app.wb().cells.get(&Address::A1).unwrap() {
             CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 123.0),
             other => panic!("expected Number, got {other:?}"),
         }
@@ -3367,7 +3555,7 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        match app.cells.get(&Address::A1).unwrap() {
+        match app.wb().cells.get(&Address::A1).unwrap() {
             CellContents::Constant(Value::Number(n)) => {
                 assert!((*n - (-1.25)).abs() < 1e-9, "got {n}");
             }
@@ -3384,7 +3572,7 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Ready);
         assert!(app.entry.is_none());
-        let stored = app.cells.get(&Address::A1).unwrap();
+        let stored = app.wb().cells.get(&Address::A1).unwrap();
         match stored {
             CellContents::Label { prefix, text } => {
                 assert_eq!(*prefix, LabelPrefix::Apostrophe);
@@ -3689,8 +3877,8 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Ready);
         assert!(app.file_list.is_none());
-        assert_eq!(app.active_path.as_deref(), Some(b.as_path()));
-        match app.cells.get(&Address::A1).unwrap() {
+        assert_eq!(app.wb().active_path.as_deref(), Some(b.as_path()));
+        match app.wb().cells.get(&Address::A1).unwrap() {
             CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 222.0),
             other => panic!("A1 expected Number(222) from b.xlsx, got {other:?}"),
         }
@@ -3705,7 +3893,7 @@ mod tests {
     #[test]
     fn file_list_active_shows_active_path_and_esc_dismisses() {
         let mut app = App::new();
-        app.active_path = Some(PathBuf::from("workbook.xlsx"));
+        app.wb_mut().active_path = Some(PathBuf::from("workbook.xlsx"));
         for c in ['/', 'F', 'L', 'A'] {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
@@ -3729,17 +3917,17 @@ mod tests {
         }
         app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        app.active_path = Some(PathBuf::from("/tmp/pretend.xlsx"));
-        assert!(!app.cells.is_empty());
+        app.wb_mut().active_path = Some(PathBuf::from("/tmp/pretend.xlsx"));
+        assert!(!app.wb().cells.is_empty());
 
         // /FNA (After).
         for c in ['/', 'F', 'N', 'A'] {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         assert_eq!(app.mode, Mode::Ready);
-        assert!(app.cells.is_empty(), "cells should be cleared");
-        assert_eq!(app.pointer, Address::A1);
-        assert!(app.active_path.is_none(), "active_path should be cleared");
+        assert!(app.wb().cells.is_empty(), "cells should be cleared");
+        assert_eq!(app.wb().pointer, Address::A1);
+        assert!(app.wb().active_path.is_none(), "active_path should be cleared");
     }
 
     /// /FIN drops the CSV rows into the grid starting at the pointer.
@@ -3761,15 +3949,15 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(app.mode, Mode::Ready);
-        match app.cells.get(&Address::new(SheetId::A, 0, 0)).unwrap() {
+        match app.wb().cells.get(&Address::new(SheetId::A, 0, 0)).unwrap() {
             CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 10.0),
             other => panic!("A1 expected Number(10), got {other:?}"),
         }
-        match app.cells.get(&Address::new(SheetId::A, 2, 0)).unwrap() {
+        match app.wb().cells.get(&Address::new(SheetId::A, 2, 0)).unwrap() {
             CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 30.0),
             other => panic!("C1 expected Number(30), got {other:?}"),
         }
-        match app.cells.get(&Address::new(SheetId::A, 0, 1)).unwrap() {
+        match app.wb().cells.get(&Address::new(SheetId::A, 0, 1)).unwrap() {
             CellContents::Label { text, .. } => assert_eq!(text, "foo"),
             other => panic!("A2 expected Label(foo), got {other:?}"),
         }
@@ -3805,11 +3993,11 @@ mod tests {
         app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(app2.mode, Mode::Ready);
-        let stored = app2.cells.get(&Address::A1).unwrap_or_else(|| {
-            panic!("A1 not populated after /FR — have: {:?}", app2.cells)
+        let stored = app2.wb().cells.get(&Address::A1).unwrap_or_else(|| {
+            panic!("A1 not populated after /FR — have: {:?}", app2.wb().cells)
         });
         match stored {
-            CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 42.0),
+            CellContents::Constant(Value::Number(n)) => assert_eq!(n, &42.0),
             other => panic!("expected Constant(42), got {other:?}"),
         }
 

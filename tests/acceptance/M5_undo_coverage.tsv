@@ -1,0 +1,75 @@
+# Alt-F4 coverage for the mutating commands beyond cell-edit and
+# row-delete.  Each block performs one mutation, asserts the effect,
+# then Alt-F4s and asserts the undo.
+
+# Seed A:A1=1, A:B1=2, A:C1=3 on row 1.
+KEYS 1
+ENTER
+RIGHT
+KEYS 2
+ENTER
+RIGHT
+KEYS 3
+ENTER
+
+# ---- /WIC (Insert Column): at pointer (C), so 3 shifts right to D ----
+ASSERT_POINTER   A:C1
+KEY /
+KEY W
+KEY I
+KEY C
+ASSERT_CELL      A:C1
+ASSERT_CELL      A:D1  3
+ALT_F 4
+ASSERT_CELL      A:C1  3
+ASSERT_CELL      A:D1
+
+# ---- /WDC (Delete Column): at pointer (C), so 3 goes away ----
+KEY /
+KEY W
+KEY D
+KEY C
+ASSERT_CELL      A:C1
+ALT_F 4
+ASSERT_CELL      A:C1  3
+
+# ---- /RE (Range Erase): erase A:A1..A:C1, then undo ----
+HOME
+KEY /
+KEY R
+KEY E
+KEY .
+RIGHT
+RIGHT
+ENTER
+ASSERT_CELL      A:A1
+ASSERT_CELL      A:B1
+ASSERT_CELL      A:C1
+ALT_F 4
+ASSERT_CELL      A:A1  1
+ASSERT_CELL      A:B1  2
+ASSERT_CELL      A:C1  3
+
+# ---- /RFC 0 (Currency format, 0 decimals) on A1, then undo ----
+HOME
+KEY /
+KEY R
+KEY F
+KEY C
+KEYS 0
+ENTER
+ENTER
+ASSERT_CELL      A:A1  $1
+ALT_F 4
+ASSERT_CELL      A:A1  1
+
+# ---- /WIR (Insert Row) above row 1; alt-F4 undoes ----
+KEY /
+KEY W
+KEY I
+KEY R
+ASSERT_CELL      A:A1
+ASSERT_CELL      A:A2  1
+ALT_F 4
+ASSERT_CELL      A:A1  1
+ASSERT_CELL      A:A2

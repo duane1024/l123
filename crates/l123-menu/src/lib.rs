@@ -56,6 +56,8 @@ pub enum Action {
     WorksheetGlobalRecalcManual,
     WorksheetGlobalGroupEnable,
     WorksheetGlobalGroupDisable,
+    WorksheetGlobalDefaultOtherUndoEnable,
+    WorksheetGlobalDefaultOtherUndoDisable,
     RangeErase,
     RangeLabelLeft,
     RangeLabelRight,
@@ -294,6 +296,123 @@ const WS_GLOBAL_RECALC_MENU: &[MenuItem] = &[
     },
 ];
 
+const WG_DEFAULT_OTHER_UNDO_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Enable",
+        help: "Enable the undo journal (Alt-F4 reverts mutating commands)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherUndoEnable),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Disable",
+        help: "Disable the undo journal",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherUndoDisable),
+    },
+];
+
+const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'I',
+        name: "International",
+        help: "Locale-specific punctuation, dates, and currency",
+        body: MenuBody::NotImplemented("wgdo-intl"),
+    },
+    MenuItem {
+        letter: 'H',
+        name: "Help",
+        help: "Help mode: Instant / Removable",
+        body: MenuBody::NotImplemented("wgdo-help"),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Clock",
+        help: "Clock display: Standard / International / None / Filename",
+        body: MenuBody::NotImplemented("wgdo-clock"),
+    },
+    MenuItem {
+        letter: 'U',
+        name: "Undo",
+        help: "Enable/disable the undo journal",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_UNDO_MENU),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "Beep",
+        help: "Enable/disable error beep",
+        body: MenuBody::NotImplemented("wgdo-beep"),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Add-In",
+        help: "Add-in auto-load settings",
+        body: MenuBody::NotImplemented("wgdo-addin"),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "Expanded-Memory",
+        help: "Expanded-memory options (legacy DOS)",
+        body: MenuBody::NotImplemented("wgdo-ems"),
+    },
+];
+
+const WG_DEFAULT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'P',
+        name: "Printer",
+        help: "Default printer settings",
+        body: MenuBody::NotImplemented("wgd-printer"),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Dir",
+        help: "Default directory",
+        body: MenuBody::NotImplemented("wgd-dir"),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Status",
+        help: "Display global default settings",
+        body: MenuBody::NotImplemented("wgd-status"),
+    },
+    MenuItem {
+        letter: 'U',
+        name: "Update",
+        help: "Persist defaults to the config file",
+        body: MenuBody::NotImplemented("wgd-update"),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "Miscellaneous defaults (Undo, International, Clock, …)",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_MENU),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Autoexec",
+        help: "Run autoexec macro (\\0) on file retrieve",
+        body: MenuBody::NotImplemented("wgd-autoexec"),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "Ext",
+        help: "Default file extensions",
+        body: MenuBody::NotImplemented("wgd-ext"),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Graph",
+        help: "Default graph settings",
+        body: MenuBody::NotImplemented("wgd-graph"),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Temp",
+        help: "Temporary file directory",
+        body: MenuBody::NotImplemented("wgd-temp"),
+    },
+];
+
 const WG_GROUP_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'E',
@@ -350,7 +469,7 @@ const WS_GLOBAL_MENU: &[MenuItem] = &[
         letter: 'D',
         name: "Default",
         help: "Default settings (printer, dir, other, ...)",
-        body: MenuBody::NotImplemented("wg-default"),
+        body: MenuBody::Submenu(WG_DEFAULT_MENU),
     },
     MenuItem {
         letter: 'G',
@@ -1037,6 +1156,20 @@ mod tests {
         assert!(matches!(
             node.body,
             MenuBody::Action(Action::WorksheetInsertRow)
+        ));
+    }
+
+    #[test]
+    fn resolve_wgdo_undo_enable_and_disable() {
+        let e = resolve(&['W', 'G', 'D', 'O', 'U', 'E']).unwrap();
+        assert!(matches!(
+            e.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherUndoEnable)
+        ));
+        let d = resolve(&['W', 'G', 'D', 'O', 'U', 'D']).unwrap();
+        assert!(matches!(
+            d.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherUndoDisable)
         ));
     }
 

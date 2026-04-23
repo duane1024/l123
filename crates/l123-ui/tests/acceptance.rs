@@ -6,9 +6,17 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use l123_ui::App;
+
+/// Transcripts share process CWD (set per transcript) and write to
+/// `target/`. `/FD` mutates CWD; parallel tests racing on CWD or on
+/// file-existence checks (`/FS` Cancel/Replace branching) are the
+/// cause of historical flakes. Serializing the transcripts is cheap
+/// (tests take <200ms total) and removes the race outright.
+static ACCEPTANCE_LOCK: Mutex<()> = Mutex::new(());
 
 fn workspace_root() -> PathBuf {
     // CARGO_MANIFEST_DIR is crates/l123-ui; workspace root is two up.
@@ -21,10 +29,12 @@ fn workspace_root() -> PathBuf {
 }
 
 fn run_transcript(path: &Path) {
-    // Run each transcript with CWD set to the workspace root. All
-    // transcripts share the same CWD, so this is safe under cargo's
-    // parallel test harness. Transcripts that write files (M4+) use
-    // paths relative to this root (e.g. `target/foo.xlsx`).
+    // Serialize across transcripts — see ACCEPTANCE_LOCK. Poison is
+    // ignored: a panicked test elsewhere shouldn't block later runs.
+    let _guard = ACCEPTANCE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // Run each transcript with CWD set to the workspace root. /FD
+    // mutates CWD so the lock above is what actually keeps
+    // concurrent writes correct.
     let _ = std::env::set_current_dir(workspace_root());
 
     let body = fs::read_to_string(path)
@@ -282,4 +292,6 @@ transcripts! {
     m5_3d_sum          => "M5_3d_sum.tsv",
     m5_file_open       => "M5_file_open.tsv",
     m5_undo            => "M5_undo.tsv",
+    m5_undo_toggle     => "M5_undo_toggle.tsv",
+    m5_undo_coverage   => "M5_undo_coverage.tsv",
 }

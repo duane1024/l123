@@ -1,0 +1,52 @@
+# /WGD Other Undo Enable|Disable + the UNDO status indicator.
+#
+# Undo defaults to Enabled in L123, so the indicator lights at startup.
+# Disabling via /WGDOUD stops the journal recording: subsequent edits
+# are not revertible. Re-enabling via /WGDOUE resumes journaling.
+
+ASSERT_STATUS   UNDO
+
+# Seed A:A1 = 42.
+KEYS 42
+ENTER
+UP
+ASSERT_CELL     A:A1  42
+
+# /WGDOUD — Disable. Indicator clears.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY U
+KEY D
+ASSERT_MODE     READY
+
+# Overwriting while disabled is not recorded.
+KEYS 100
+ENTER
+UP
+ASSERT_CELL     A:A1  100
+
+# Alt-F4 is a no-op; cell stays at 100.
+ALT_F 4
+ASSERT_CELL     A:A1  100
+
+# /WGDOUE re-enables the journal.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY U
+KEY E
+ASSERT_MODE     READY
+ASSERT_STATUS   UNDO
+
+# Now edits are journaled again.
+KEYS 200
+ENTER
+UP
+ASSERT_CELL     A:A1  200
+ALT_F 4
+ASSERT_CELL     A:A1  100
