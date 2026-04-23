@@ -71,6 +71,9 @@ pub enum Action {
     Move,
     FileSave,
     FileRetrieve,
+    FileXtractFormulas,
+    FileXtractValues,
+    FileImportNumbers,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -590,6 +593,36 @@ const RANGE_MENU: &[MenuItem] = &[
     },
 ];
 
+const FILE_IMPORT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'T',
+        name: "Text",
+        help: "Import each line as a label in one column",
+        body: MenuBody::NotImplemented("f-import-text"),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Numbers",
+        help: "Parse CSV: numeric tokens as values, quoted strings as labels",
+        body: MenuBody::Action(Action::FileImportNumbers),
+    },
+];
+
+const FILE_XTRACT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'F',
+        name: "Formulas",
+        help: "Save the range with formulas intact",
+        body: MenuBody::Action(Action::FileXtractFormulas),
+    },
+    MenuItem {
+        letter: 'V',
+        name: "Values",
+        help: "Save the range with formulas replaced by their values",
+        body: MenuBody::Action(Action::FileXtractValues),
+    },
+];
+
 const FILE_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'R',
@@ -613,7 +646,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'X',
         name: "Xtract",
         help: "Save a range as a new file",
-        body: MenuBody::NotImplemented("f-xtract"),
+        body: MenuBody::Submenu(FILE_XTRACT_MENU),
     },
     MenuItem {
         letter: 'E',
@@ -631,7 +664,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'I',
         name: "Import",
         help: "Import text or delimited numbers",
-        body: MenuBody::NotImplemented("f-import"),
+        body: MenuBody::Submenu(FILE_IMPORT_MENU),
     },
     MenuItem {
         letter: 'D',

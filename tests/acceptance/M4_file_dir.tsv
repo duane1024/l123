@@ -1,0 +1,14 @@
+# /File Dir — change the session directory.
+#
+# The transcript only walks the UI.  A unit test verifies the resulting
+# CWD change, because the harness itself sets CWD to the workspace root
+# at the start of every transcript and the side effect is per-process.
+
+KEY /
+KEY F
+KEY D
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter new session directory
+KEYS tests/acceptance
+ENTER
+ASSERT_MODE      READY

@@ -1,0 +1,49 @@
+# /File Xtract — save a range to a new file.
+#
+# Flow: /FX descends into Formulas|Values submenu, picks one, prompts
+# for a filename, then POINTs for the range to extract.  The resulting
+# file can be retrieved and inspected.
+#
+# This transcript walks the UI for the Formulas branch.  Whether the
+# saved file preserves formulas vs. replaces them with values is the
+# subject of a separate unit test.
+
+RM_FILE target/m4_file_xtract.xlsx
+
+# Seed A1=10 A2=20 A3=+A1+A2  (= 30).
+KEYS 10
+DOWN
+KEYS 20
+DOWN
+KEYS +A1+A2
+ENTER
+ASSERT_CELL      A:A3  30
+
+# /FX → submenu shows Formulas and Values.
+KEY /
+KEY F
+KEY X
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Formulas
+ASSERT_PANEL_L2  Values
+
+# Pick Formulas → filename prompt.
+KEY F
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter extract file name
+KEYS target/m4_file_xtract.xlsx
+ENTER
+
+# POINT for the range.  POINT auto-anchors at the current pointer
+# (A3 after the formula commit).  HOME slides the free corner up to
+# A1, giving a full A1..A3 range.
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  Enter range to extract
+HOME
+ASSERT_PANEL_L3  A:A1..A:A3
+
+# Commit → back to READY, data unchanged in memory.
+ENTER
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1  10
+ASSERT_CELL      A:A3  30

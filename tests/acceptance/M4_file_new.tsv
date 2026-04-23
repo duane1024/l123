@@ -1,0 +1,25 @@
+# /File New — wipe the current active file and start fresh.
+#
+# 1-2-3's /FN has a Before|After submenu for inserting a new active
+# file relative to the current one in a multi-file session.  Multi-file
+# is an M5 topic; for Slice 6 we treat both branches as "replace the
+# single active file with a fresh blank one."
+
+# Seed A1 so we can detect the wipe.
+KEYS 42
+ENTER
+ASSERT_CELL      A:A1  42
+
+# /FN → Before|After submenu.
+KEY /
+KEY F
+KEY N
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Before
+ASSERT_PANEL_L2  After
+
+# Pick After.  A1 is now blank.
+KEY A
+ASSERT_MODE      READY
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1

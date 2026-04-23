@@ -1,0 +1,26 @@
+# /File Import Numbers — parse a CSV file into cells starting at the
+# pointer.  Numbers become values, quoted strings become labels.
+#
+# The fixture at tests/acceptance/fixtures/m4_import.csv has two rows:
+#   10,20,30
+#   "foo","bar","baz"
+# We import starting at A1 and check the top-left and a string cell.
+
+KEY /
+KEY F
+KEY I
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Text
+ASSERT_PANEL_L2  Numbers
+
+KEY N
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter import file name
+KEYS tests/acceptance/fixtures/m4_import.csv
+ENTER
+
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1  10
+ASSERT_CELL      A:B1  20
+ASSERT_CELL      A:C1  30
+ASSERT_CELL      A:A2  foo

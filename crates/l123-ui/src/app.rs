@@ -85,6 +85,10 @@ pub struct App {
     /// carries the chosen path through the Cancel/Replace/Backup
     /// submenu. Mode stays MENU while present.
     save_confirm: Option<SaveConfirmState>,
+    /// Transient slot for the two-step /File Xtract flow — the typed
+    /// filename is stashed here after the prompt step and consumed by
+    /// commit_point.
+    pending_xtract_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +137,20 @@ enum PromptNext {
     /// After the user types a filename, load that xlsx file, replacing
     /// all in-memory workbook state.
     FileRetrieveFilename,
+    /// After the user types a filename, enter POINT to pick the range
+    /// to extract with the given kind (Formulas or Values).
+    FileXtractFilename { kind: XtractKind },
+    /// After the user types a filename, parse it as CSV and paint the
+    /// values into cells starting at the pointer.
+    FileImportNumbersFilename,
+}
+
+/// /File Xtract sub-command: does the extracted file keep formulas,
+/// or is each cell written as its current cached value?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum XtractKind {
+    Formulas,
+    Values,
 }
 
 impl PromptNext {
@@ -144,7 +162,10 @@ impl PromptNext {
             PromptNext::RangeNameCreate | PromptNext::RangeNameDelete => {
                 c.is_ascii_alphanumeric() || c == '_'
             }
-            PromptNext::FileSaveFilename | PromptNext::FileRetrieveFilename => is_path_char(c),
+            PromptNext::FileSaveFilename
+            | PromptNext::FileRetrieveFilename
+            | PromptNext::FileXtractFilename { .. }
+            | PromptNext::FileImportNumbersFilename => is_path_char(c),
         }
     }
 }
@@ -165,6 +186,29 @@ fn resolve_save_path(input: &str) -> PathBuf {
         p.set_extension("xlsx");
     }
     p
+}
+
+/// Render a source-engine [`CellView`] into the `set_user_input`
+/// string shape appropriate for `/File Xtract`'s kind. Formulas keeps
+/// the formula string; Values flattens it to the cached scalar.
+fn xtract_cell_input(cv: &CellView, kind: XtractKind) -> String {
+    if let Some(f) = &cv.formula {
+        if matches!(kind, XtractKind::Formulas) {
+            return f.clone();
+        }
+    }
+    match &cv.value {
+        Value::Number(n) => l123_core::format_number_general(*n),
+        Value::Text(s) => format!("'{s}"),
+        Value::Bool(b) => {
+            if *b {
+                "TRUE".into()
+            } else {
+                "FALSE".into()
+            }
+        }
+        _ => String::new(),
+    }
 }
 
 /// Best-effort reconstruction of [`CellContents`] from a
@@ -214,6 +258,9 @@ enum PendingCommand {
     /// `pending_name` on App carries the name; on commit, define it over
     /// the selected range.
     RangeNameCreate,
+    /// `pending_xtract_path` on App carries the destination path; on
+    /// commit, extract the selected range into a new workbook file.
+    FileXtractRange { kind: XtractKind },
 }
 
 impl PendingCommand {
@@ -227,6 +274,7 @@ impl PendingCommand {
             PendingCommand::RangeLabel { .. } => "Enter range for label-prefix change:",
             PendingCommand::RangeFormat { .. } => "Enter range to format:",
             PendingCommand::RangeNameCreate => "Enter range for the named range:",
+            PendingCommand::FileXtractRange { .. } => "Enter range to extract:",
         }
     }
 }
@@ -279,6 +327,7 @@ impl App {
             pending_name: None,
             active_path: None,
             save_confirm: None,
+            pending_xtract_path: None,
         }
     }
 
@@ -683,6 +732,9 @@ impl App {
             }),
             Action::FileSave => self.start_file_save_prompt(),
             Action::FileRetrieve => self.start_file_retrieve_prompt(),
+            Action::FileXtractFormulas => self.start_file_xtract_prompt(XtractKind::Formulas),
+            Action::FileXtractValues => self.start_file_xtract_prompt(XtractKind::Values),
+            Action::FileImportNumbers => self.start_file_import_numbers_prompt(),
             // Subsequent cycles wire these. For now, descent is a no-op.
             _ => self.close_menu(),
         }
@@ -699,6 +751,71 @@ impl App {
             buffer,
             next: PromptNext::FileSaveFilename,
             fresh,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_file_import_numbers_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter import file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileImportNumbersFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Read `path` as CSV, paint values into cells starting at the
+    /// pointer. Numeric tokens become `Constant(Number)`; everything
+    /// else becomes `Label { Apostrophe, text }`. Empty fields are
+    /// skipped (no overwrite).
+    fn import_numbers_from(&mut self, path: PathBuf) {
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            self.mode = Mode::Ready;
+            return;
+        };
+        let rows = l123_io::csv::parse(&body);
+        let origin = self.pointer;
+        for (dr, row) in rows.iter().enumerate() {
+            for (dc, field) in row.iter().enumerate() {
+                if field.is_empty() {
+                    continue;
+                }
+                let addr = Address::new(
+                    origin.sheet,
+                    origin.col + dc as u16,
+                    origin.row + dr as u32,
+                );
+                let (contents, engine_input) = match field.parse::<f64>() {
+                    Ok(n) => (
+                        CellContents::Constant(Value::Number(n)),
+                        l123_core::format_number_general(n),
+                    ),
+                    Err(_) => (
+                        CellContents::Label {
+                            prefix: LabelPrefix::Apostrophe,
+                            text: field.clone(),
+                        },
+                        format!("'{field}"),
+                    ),
+                };
+                let _ = self.engine.set_user_input(addr, &engine_input);
+                self.cells.insert(addr, contents);
+            }
+        }
+        self.engine.recalc();
+        self.refresh_formula_caches();
+        self.mode = Mode::Ready;
+    }
+
+    fn start_file_xtract_prompt(&mut self, kind: XtractKind) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter extract file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileXtractFilename { kind },
+            fresh: false,
         });
         self.mode = Mode::Menu;
     }
@@ -988,7 +1105,43 @@ impl App {
                 }
                 self.mode = Mode::Ready;
             }
+            PendingCommand::FileXtractRange { kind } => {
+                if let Some(path) = self.pending_xtract_path.take() {
+                    self.execute_file_xtract(range, kind, path);
+                }
+                self.mode = Mode::Ready;
+            }
         }
+    }
+
+    /// Build a fresh IronCalc workbook containing just `range`, then
+    /// write it to `path`. Formulas variant preserves formulas;
+    /// Values variant writes cached numeric/text values instead.
+    fn execute_file_xtract(&mut self, range: Range, kind: XtractKind, path: PathBuf) {
+        let r = range.normalized();
+        let Ok(mut out) = IronCalcEngine::new() else {
+            return;
+        };
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                let Ok(cv) = self.engine.get_cell(addr) else {
+                    continue;
+                };
+                if cv.value == Value::Empty && cv.formula.is_none() {
+                    continue;
+                }
+                let input = xtract_cell_input(&cv, kind);
+                let _ = out.set_user_input(addr, &input);
+            }
+        }
+        out.recalc();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        let _ = out.save_xlsx(&path);
     }
 
     // ---------------- command-argument prompt ----------------
@@ -1131,6 +1284,23 @@ impl App {
                 }
                 let path = PathBuf::from(&p.buffer);
                 self.load_workbook_from(path);
+            }
+            PromptNext::FileXtractFilename { kind } => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = resolve_save_path(&p.buffer);
+                self.pending_xtract_path = Some(path);
+                self.begin_point(PendingCommand::FileXtractRange { kind });
+            }
+            PromptNext::FileImportNumbersFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(&p.buffer);
+                self.import_numbers_from(path);
             }
         }
     }
@@ -2493,6 +2663,139 @@ mod tests {
 
         let _ = std::fs::remove_file(&target);
         let _ = std::fs::remove_file(&bak);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Helper: drive /FX<kind> <path><Enter> HOME <Enter>. Assumes the
+    /// pointer is at the bottom-right of the intended range before the
+    /// call (POINT auto-anchors there; HOME slides the free corner to
+    /// A1 → highlight covers A1..pointer).
+    fn drive_xtract_keys(app: &mut App, kind: char, path: &Path) {
+        for c in ['/', 'F', 'X', kind] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        for c in path.to_str().unwrap().chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    /// /FXF — Formulas extract keeps the formula string intact so the
+    /// extracted file, when reloaded, still has a live formula in A3.
+    #[test]
+    fn file_xtract_formulas_preserves_formula() {
+        let dir = temp_test_dir("xtract_f");
+        let target = dir.join("x.xlsx");
+        if target.exists() {
+            std::fs::remove_file(&target).unwrap();
+        }
+
+        let mut app = App::new();
+        // DOWN during entry commits-and-moves; ENTER commits-in-place.
+        for line in ["10", "20"] {
+            for c in line.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
+            app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        for c in "+A1+A2".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        drive_xtract_keys(&mut app, 'F', &target);
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(target.exists(), "extract did not write the file");
+
+        // Re-open and inspect.
+        let mut e = IronCalcEngine::new().unwrap();
+        e.load_xlsx(&target).unwrap();
+        let a3 = e.get_cell(Address::new(SheetId::A, 0, 2)).unwrap();
+        assert_eq!(a3.value, Value::Number(30.0));
+        assert!(
+            a3.formula.is_some(),
+            "Formulas variant should preserve the formula"
+        );
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// /FXV — Values extract replaces the formula with its cached
+    /// value; reloaded A3 has a number but no formula.
+    #[test]
+    fn file_xtract_values_strips_formula() {
+        let dir = temp_test_dir("xtract_v");
+        let target = dir.join("x.xlsx");
+        if target.exists() {
+            std::fs::remove_file(&target).unwrap();
+        }
+
+        let mut app = App::new();
+        // DOWN during entry commits-and-moves; ENTER commits-in-place.
+        for line in ["10", "20"] {
+            for c in line.chars() {
+                app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
+            app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        for c in "+A1+A2".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        drive_xtract_keys(&mut app, 'V', &target);
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(target.exists());
+
+        let mut e = IronCalcEngine::new().unwrap();
+        e.load_xlsx(&target).unwrap();
+        let a3 = e.get_cell(Address::new(SheetId::A, 0, 2)).unwrap();
+        assert_eq!(a3.value, Value::Number(30.0));
+        assert!(
+            a3.formula.is_none(),
+            "Values variant should flatten formula to value"
+        );
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// /FIN drops the CSV rows into the grid starting at the pointer.
+    /// Numbers become constants; strings become labels.
+    #[test]
+    fn file_import_numbers_populates_cells_from_csv() {
+        let dir = temp_test_dir("import_n");
+        let src = dir.join("in.csv");
+        std::fs::write(&src, "10,20,30\n\"foo\",\"bar\",\"baz\"\n").unwrap();
+
+        let mut app = App::new();
+        // /FIN <path><Enter>
+        for c in ['/', 'F', 'I', 'N'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        for c in src.to_str().unwrap().chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.mode, Mode::Ready);
+        match app.cells.get(&Address::new(SheetId::A, 0, 0)).unwrap() {
+            CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 10.0),
+            other => panic!("A1 expected Number(10), got {other:?}"),
+        }
+        match app.cells.get(&Address::new(SheetId::A, 2, 0)).unwrap() {
+            CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 30.0),
+            other => panic!("C1 expected Number(30), got {other:?}"),
+        }
+        match app.cells.get(&Address::new(SheetId::A, 0, 1)).unwrap() {
+            CellContents::Label { text, .. } => assert_eq!(text, "foo"),
+            other => panic!("A2 expected Label(foo), got {other:?}"),
+        }
+
+        let _ = std::fs::remove_file(&src);
         let _ = std::fs::remove_dir(&dir);
     }
 
