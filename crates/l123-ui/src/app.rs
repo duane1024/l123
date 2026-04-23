@@ -29,7 +29,7 @@ use l123_core::{
     address::col_to_letters, label::is_value_starter, Address, CellContents, Format, FormatKind,
     LabelPrefix, Mode, Range, SheetId, Value,
 };
-use l123_engine::{Engine, IronCalcEngine, RecalcMode};
+use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_menu::{self as menu, Action, MenuBody, MenuItem};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
@@ -81,7 +81,26 @@ pub struct App {
     /// subsequent /File Save prompts so re-save is a single Enter. `None`
     /// until the user has saved at least once.
     active_path: Option<PathBuf>,
+    /// After committing a filename that already exists on disk, this
+    /// carries the chosen path through the Cancel/Replace/Backup
+    /// submenu. Mode stays MENU while present.
+    save_confirm: Option<SaveConfirmState>,
 }
+
+#[derive(Debug, Clone)]
+struct SaveConfirmState {
+    path: PathBuf,
+    /// 0=Cancel, 1=Replace, 2=Backup — matches `SAVE_CONFIRM_ITEMS` below.
+    highlight: usize,
+}
+
+/// Items shown on line 2 of the Cancel/Replace/Backup submenu. The
+/// first letter of each is the accelerator.
+const SAVE_CONFIRM_ITEMS: &[(&str, &str)] = &[
+    ("Cancel", "Abort the save"),
+    ("Replace", "Overwrite the existing file"),
+    ("Backup", "Rename existing to .BAK then save"),
+];
 
 /// Numeric (or short-text) prompt state for commands that need an argument
 /// before descending into POINT. E.g. /RFC → "Enter number of decimal
@@ -111,6 +130,9 @@ enum PromptNext {
     /// After the user types a filename, save the workbook to that path
     /// as xlsx.
     FileSaveFilename,
+    /// After the user types a filename, load that xlsx file, replacing
+    /// all in-memory workbook state.
+    FileRetrieveFilename,
 }
 
 impl PromptNext {
@@ -122,7 +144,7 @@ impl PromptNext {
             PromptNext::RangeNameCreate | PromptNext::RangeNameDelete => {
                 c.is_ascii_alphanumeric() || c == '_'
             }
-            PromptNext::FileSaveFilename => is_path_char(c),
+            PromptNext::FileSaveFilename | PromptNext::FileRetrieveFilename => is_path_char(c),
         }
     }
 }
@@ -143,6 +165,29 @@ fn resolve_save_path(input: &str) -> PathBuf {
         p.set_extension("xlsx");
     }
     p
+}
+
+/// Best-effort reconstruction of [`CellContents`] from a
+/// freshly-loaded engine cell. Formulas are stored with the leading `=`
+/// stripped so that `to_engine_source` will re-prepend it cleanly on
+/// save (the reverse Excel→1-2-3 translation is a later milestone;
+/// edits of loaded formulas will see the Excel-shape expression).
+fn cell_view_to_contents(cv: &CellView) -> Option<CellContents> {
+    if let Some(f) = &cv.formula {
+        let expr = f.strip_prefix('=').unwrap_or(f).to_string();
+        return Some(CellContents::Formula {
+            expr,
+            cached_value: Some(cv.value.clone()),
+        });
+    }
+    match &cv.value {
+        Value::Empty => None,
+        Value::Text(s) => Some(CellContents::Label {
+            prefix: LabelPrefix::Apostrophe,
+            text: s.clone(),
+        }),
+        other => Some(CellContents::Constant(other.clone())),
+    }
 }
 
 /// Transient state while the user is selecting a cell/range in POINT mode.
@@ -233,6 +278,7 @@ impl App {
             prompt: None,
             pending_name: None,
             active_path: None,
+            save_confirm: None,
         }
     }
 
@@ -339,6 +385,13 @@ impl App {
         // Ctrl-C (Ctrl-Break alias) always exits.
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
             self.running = false;
+            return;
+        }
+        // Save-confirm submenu runs before the prompt/menu dispatcher:
+        // it overrides line 2 with its own three-item picker and owns
+        // the keyboard until the user commits or cancels.
+        if self.save_confirm.is_some() {
+            self.handle_key_save_confirm(k);
             return;
         }
         // A command argument prompt takes precedence over the mode-based
@@ -629,6 +682,7 @@ impl App {
                 format: Format { kind: FormatKind::Text, decimals: 0 },
             }),
             Action::FileSave => self.start_file_save_prompt(),
+            Action::FileRetrieve => self.start_file_retrieve_prompt(),
             // Subsequent cycles wire these. For now, descent is a no-op.
             _ => self.close_menu(),
         }
@@ -647,6 +701,129 @@ impl App {
             fresh,
         });
         self.mode = Mode::Menu;
+    }
+
+    fn start_file_retrieve_prompt(&mut self) {
+        self.menu = None;
+        let (buffer, fresh) = match &self.active_path {
+            Some(p) => (p.to_string_lossy().into_owned(), true),
+            None => (String::new(), false),
+        };
+        self.prompt = Some(PromptState {
+            label: "Enter file to retrieve:".into(),
+            buffer,
+            next: PromptNext::FileRetrieveFilename,
+            fresh,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Load an xlsx from disk, wiping the current in-memory workbook
+    /// and repopulating the UI cache from the loaded engine model.
+    fn load_workbook_from(&mut self, path: PathBuf) {
+        if self.engine.load_xlsx(&path).is_err() {
+            self.mode = Mode::Ready;
+            return;
+        }
+        // Wipe UI state; the loaded engine is the new source of truth.
+        self.cells.clear();
+        self.cell_formats.clear();
+        self.col_widths.clear();
+        self.entry = None;
+        self.pointer = Address::A1;
+        self.viewport_col_offset = 0;
+        self.viewport_row_offset = 0;
+        self.recalc_pending = false;
+
+        // Pull every non-empty cell into the UI cache.
+        for (addr, cv) in self.engine.used_cells() {
+            if let Some(contents) = cell_view_to_contents(&cv) {
+                self.cells.insert(addr, contents);
+            }
+        }
+
+        self.active_path = Some(path);
+        self.mode = Mode::Ready;
+    }
+
+    /// Create parent dirs and write the workbook as xlsx. On success,
+    /// update `active_path` so the next /FS prefills this path.
+    fn save_workbook_to(&mut self, path: PathBuf) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        if self.engine.save_xlsx(&path).is_ok() {
+            self.active_path = Some(path);
+        }
+    }
+
+    /// Handle a keystroke while the Cancel/Replace/Backup confirm is up.
+    fn handle_key_save_confirm(&mut self, k: KeyEvent) {
+        let Some(sc) = self.save_confirm.as_mut() else { return };
+        match k.code {
+            KeyCode::Esc => {
+                self.save_confirm = None;
+                self.mode = Mode::Ready;
+            }
+            KeyCode::Left => {
+                if sc.highlight > 0 {
+                    sc.highlight -= 1;
+                }
+            }
+            KeyCode::Right => {
+                if sc.highlight + 1 < SAVE_CONFIRM_ITEMS.len() {
+                    sc.highlight += 1;
+                }
+            }
+            KeyCode::Home => sc.highlight = 0,
+            KeyCode::End => sc.highlight = SAVE_CONFIRM_ITEMS.len() - 1,
+            KeyCode::Enter => {
+                let choice = sc.highlight;
+                self.commit_save_confirm(choice);
+            }
+            KeyCode::Char(c) => {
+                // Letter accelerators: C(ancel), R(eplace), B(ackup).
+                let upper = c.to_ascii_uppercase();
+                if let Some(idx) = SAVE_CONFIRM_ITEMS
+                    .iter()
+                    .position(|(name, _)| name.starts_with(upper))
+                {
+                    self.commit_save_confirm(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Execute the user's pick on the Cancel/Replace/Backup submenu.
+    fn commit_save_confirm(&mut self, choice: usize) {
+        let Some(sc) = self.save_confirm.take() else {
+            self.mode = Mode::Ready;
+            return;
+        };
+        match choice {
+            0 => {
+                // Cancel — no write.
+                self.mode = Mode::Ready;
+            }
+            1 => {
+                // Replace — overwrite.
+                self.save_workbook_to(sc.path);
+                self.mode = Mode::Ready;
+            }
+            2 => {
+                // Backup — rename existing to .BAK, then save.
+                let backup = sc.path.with_extension("BAK");
+                let _ = std::fs::rename(&sc.path, &backup);
+                self.save_workbook_to(sc.path);
+                self.mode = Mode::Ready;
+            }
+            _ => {
+                self.mode = Mode::Ready;
+            }
+        }
     }
 
     fn insert_row_at_pointer(&mut self, n: u32) {
@@ -932,18 +1109,28 @@ impl App {
                 self.mode = Mode::Ready;
             }
             PromptNext::FileSaveFilename => {
-                if !p.buffer.is_empty() {
-                    let path = resolve_save_path(&p.buffer);
-                    if let Some(parent) = path.parent() {
-                        if !parent.as_os_str().is_empty() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                    }
-                    if self.engine.save_xlsx(&path).is_ok() {
-                        self.active_path = Some(path);
-                    }
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
                 }
-                self.mode = Mode::Ready;
+                let path = resolve_save_path(&p.buffer);
+                if path.exists() {
+                    // Default highlight = Cancel, matching 1-2-3's
+                    // "safe if you Enter by accident" convention.
+                    self.save_confirm = Some(SaveConfirmState { path, highlight: 0 });
+                    self.mode = Mode::Menu;
+                } else {
+                    self.save_workbook_to(path);
+                    self.mode = Mode::Ready;
+                }
+            }
+            PromptNext::FileRetrieveFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(&p.buffer);
+                self.load_workbook_from(path);
             }
         }
     }
@@ -1245,9 +1432,12 @@ impl App {
             Span::raw(" "),
         ]);
 
-        // Line 2 & 3 depend on mode. A command-argument prompt takes
-        // precedence over the mode-specific rendering.
-        let (line2, line3) = if let Some(p) = self.prompt.as_ref() {
+        // Line 2 & 3 depend on mode. Save-confirm takes absolute
+        // precedence (it owns the keyboard); then a command-argument
+        // prompt; then the mode-specific rendering.
+        let (line2, line3) = if self.save_confirm.is_some() {
+            self.render_save_confirm_lines()
+        } else if let Some(p) = self.prompt.as_ref() {
             (
                 Line::from(format!(" {}", p.buffer)),
                 Line::from(format!(" {}", p.label)),
@@ -1267,6 +1457,34 @@ impl App {
         };
 
         Paragraph::new(vec![line1, line2, line3]).render(inner, buf);
+    }
+
+    fn render_save_confirm_lines(&self) -> (Line<'_>, Line<'_>) {
+        let Some(sc) = self.save_confirm.as_ref() else {
+            return (Line::from(""), Line::from(""));
+        };
+        let mut spans: Vec<Span<'_>> = Vec::with_capacity(SAVE_CONFIRM_ITEMS.len() * 2 + 1);
+        spans.push(Span::raw(" "));
+        for (i, (name, _)) in SAVE_CONFIRM_ITEMS.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  "));
+            }
+            if i == sc.highlight {
+                spans.push(Span::styled(
+                    *name,
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ));
+            } else {
+                spans.push(Span::raw(*name));
+            }
+        }
+        let line2 = Line::from(spans);
+        let help = SAVE_CONFIRM_ITEMS
+            .get(sc.highlight)
+            .map(|(_, h)| *h)
+            .unwrap_or("");
+        let line3 = Line::from(format!(" {help}"));
+        (line2, line3)
     }
 
     fn render_point_lines(&self) -> (Line<'_>, Line<'_>) {
@@ -1650,6 +1868,7 @@ fn repeat_to_width(pattern: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn starts_at_a1() {
@@ -2189,11 +2408,7 @@ mod tests {
         }
     }
 
-    /// End-to-end: /FS <path><Enter> writes an xlsx file at <path> that
-    /// IronCalc can open. The temp dir is unique per test invocation so
-    /// parallel runs don't collide.
-    #[test]
-    fn file_save_writes_xlsx_at_typed_path() {
+    fn temp_test_dir(tag: &str) -> PathBuf {
         use std::process;
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()
@@ -2201,38 +2416,146 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let dir = std::env::temp_dir().join(format!(
-            "l123_test_file_save_{}_{}",
+            "l123_test_{}_{}_{}",
+            tag,
             process::id(),
             nanos,
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let target = dir.join("saved.xlsx");
-        if target.exists() {
-            std::fs::remove_file(&target).unwrap();
-        }
+        dir
+    }
 
-        let mut app = App::new();
-        // Seed one cell.
-        for c in "42".chars() {
+    fn drive_save_keys(app: &mut App, seed_label: &str, path: &Path) {
+        for c in seed_label.chars() {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        // /FS
         for c in ['/', 'F', 'S'] {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
-        // Type the absolute path.
-        for c in target.to_str().unwrap().chars() {
+        for c in path.to_str().unwrap().chars() {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    /// End-to-end: /FS <path><Enter> writes an xlsx file at <path> that
+    /// IronCalc can open. The temp dir is unique per test invocation so
+    /// parallel runs don't collide.
+    #[test]
+    fn file_save_writes_xlsx_at_typed_path() {
+        let dir = temp_test_dir("file_save");
+        let target = dir.join("saved.xlsx");
+
+        let mut app = App::new();
+        drive_save_keys(&mut app, "42", &target);
 
         assert_eq!(app.mode, Mode::Ready);
         assert!(
             target.exists(),
             "expected xlsx at {target:?} — prompt did not write the file"
         );
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Backup path: when the file already exists, picking Backup
+    /// renames the existing file to `.BAK` and then writes a fresh one.
+    #[test]
+    fn file_save_backup_renames_existing_to_bak() {
+        let dir = temp_test_dir("file_save_backup");
+        let target = dir.join("sheet.xlsx");
+
+        // First save populates the file.
+        let mut app = App::new();
+        drive_save_keys(&mut app, "42", &target);
+        assert!(target.exists());
+
+        // Modify, then /FS again — prefilled; Enter opens confirm.
+        app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        for c in "99".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        for c in ['/', 'F', 'S'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.save_confirm.is_some(), "confirm submenu did not open");
+
+        // Press B — Backup.
+        app.handle_key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+        let bak = target.with_extension("BAK");
+        assert!(bak.exists(), "expected {bak:?} after Backup");
+        assert!(target.exists(), "fresh {target:?} after Backup");
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_file(&bak);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// /FR: save a workbook, dirty memory, retrieve — cells should
+    /// show the saved values, not the dirty ones.
+    #[test]
+    fn file_retrieve_replaces_memory_with_saved_contents() {
+        let dir = temp_test_dir("file_retrieve");
+        let target = dir.join("sheet.xlsx");
+
+        let mut app = App::new();
+        drive_save_keys(&mut app, "42", &target);
+        assert!(target.exists());
+
+        // Dirty A1 in a fresh app, then /FR from disk.
+        let mut app2 = App::new();
+        for c in "99".chars() {
+            app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        for c in ['/', 'F', 'R'] {
+            app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        for c in target.to_str().unwrap().chars() {
+            app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app2.mode, Mode::Ready);
+        let stored = app2.cells.get(&Address::A1).unwrap_or_else(|| {
+            panic!("A1 not populated after /FR — have: {:?}", app2.cells)
+        });
+        match stored {
+            CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 42.0),
+            other => panic!("expected Constant(42), got {other:?}"),
+        }
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Cancel path: pressing C on the confirm submenu leaves the
+    /// existing file untouched.
+    #[test]
+    fn file_save_cancel_leaves_existing_untouched() {
+        let dir = temp_test_dir("file_save_cancel");
+        let target = dir.join("sheet.xlsx");
+        let mut app = App::new();
+        drive_save_keys(&mut app, "42", &target);
+        let before_len = std::fs::metadata(&target).unwrap().len();
+
+        // Second /FS opens confirm; Cancel (C) aborts.
+        for c in ['/', 'F', 'S'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.save_confirm.is_some());
+        app.handle_key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(app.save_confirm.is_none());
+        let after_len = std::fs::metadata(&target).unwrap().len();
+        assert_eq!(before_len, after_len, "Cancel unexpectedly wrote the file");
 
         let _ = std::fs::remove_file(&target);
         let _ = std::fs::remove_dir(&dir);

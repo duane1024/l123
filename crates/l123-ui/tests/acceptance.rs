@@ -152,6 +152,11 @@ fn run_transcript(path: &Path) {
                 width = parts.next().unwrap().parse().unwrap();
                 height = parts.next().unwrap().parse().unwrap();
             }
+            // Pre-clean a file on disk so the transcript starts from a
+            // known state. Errors (e.g. not-present) are ignored.
+            "RM_FILE" => {
+                let _ = std::fs::remove_file(rest);
+            }
             other => {
                 panic!(
                     "{}:{line_no}: unknown directive {other:?}",
@@ -245,4 +250,6 @@ transcripts! {
     m3_ws_col_width    => "M3_ws_col_width.tsv",
     m3_range_name      => "M3_range_name.tsv",
     m4_file_save       => "M4_file_save.tsv",
+    m4_file_save_replace => "M4_file_save_replace.tsv",
+    m4_file_retrieve   => "M4_file_retrieve.tsv",
 }

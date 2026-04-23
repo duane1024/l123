@@ -1,0 +1,45 @@
+# /File Save — re-save over existing file, Replace branch.
+#
+# After a first save the app remembers the path (active_path).  A
+# subsequent /FS prefills the filename prompt; pressing Enter with a
+# path that already exists on disk opens the Cancel/Replace/Backup
+# submenu.  This transcript covers the Replace path end-to-end.
+
+# Start from a clean slate — earlier runs may have left the target.
+RM_FILE target/m4_file_save_replace.xlsx
+RM_FILE target/m4_file_save_replace.BAK
+
+# Seed A1 and do the first save.
+KEYS 42
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS target/m4_file_save_replace.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Change A1 so a second save has something new to write.
+HOME
+KEYS 99
+ENTER
+ASSERT_CELL      A:A1  99
+
+# /FS again — buffer is prefilled from active_path.
+KEY /
+KEY F
+KEY S
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  target/m4_file_save_replace.xlsx
+
+# Enter commits the filename. File already exists → confirm submenu.
+ENTER
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Cancel
+ASSERT_PANEL_L2  Replace
+ASSERT_PANEL_L2  Backup
+
+# Press R — Replace.  Back to READY.
+KEY R
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1  99

@@ -8,8 +8,9 @@
 
 use std::path::Path;
 
-use ironcalc::base::{expressions::utils::number_to_column, Model};
+use ironcalc::base::{expressions::utils::number_to_column, types::Cell, Model};
 use ironcalc::export::save_to_xlsx;
+use ironcalc::import::load_from_xlsx;
 
 use l123_core::{address::col_to_letters, Address, Range, SheetId, Value};
 
@@ -173,6 +174,48 @@ impl Engine for IronCalcEngine {
         })?;
         save_to_xlsx(&self.model, path_str).map_err(|e| EngineError::Backend(e.to_string()))
     }
+
+    fn load_xlsx(&mut self, path: &Path) -> Result<()> {
+        let path_str = path.to_str().ok_or_else(|| {
+            EngineError::Backend(format!("non-UTF8 path: {}", path.display()))
+        })?;
+        let mut model = load_from_xlsx(path_str, "en", "UTC", "en")
+            .map_err(|e| EngineError::Backend(e.to_string()))?;
+        model.evaluate();
+        self.model = model;
+        Ok(())
+    }
+}
+
+impl IronCalcEngine {
+    /// Enumerate every non-empty cell in the workbook. Used after
+    /// `load_xlsx` to repopulate the UI's `cells` cache.
+    pub fn used_cells(&self) -> Vec<(Address, CellView)> {
+        let mut out = Vec::new();
+        for (sheet_idx, ws) in self.model.workbook.worksheets.iter().enumerate() {
+            let sheet = SheetId(sheet_idx as u16);
+            for (&row_1b, row_cells) in &ws.sheet_data {
+                if row_1b < 1 {
+                    continue;
+                }
+                let row_0b = (row_1b - 1) as u32;
+                for (&col_1b, cell) in row_cells {
+                    if col_1b < 1 {
+                        continue;
+                    }
+                    if matches!(cell, Cell::EmptyCell { .. }) {
+                        continue;
+                    }
+                    let col_0b = (col_1b - 1) as u16;
+                    let addr = Address::new(sheet, col_0b, row_0b);
+                    if let Ok(cv) = self.get_cell(addr) {
+                        out.push((addr, cv));
+                    }
+                }
+            }
+        }
+        out
+    }
 }
 
 /// Convenience: IronCalc column index (1-based) → letters. Only used in tests.
@@ -319,5 +362,46 @@ mod tests {
         e.recalc();
         let cv = e.get_cell(Address::new(SheetId::A, 2, 0)).unwrap();
         assert_eq!(cv.value, Value::Number(150.0));
+    }
+
+    #[test]
+    fn save_then_load_xlsx_round_trips_number_text_and_formula() {
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "l123_engine_rt_{}_{}",
+            process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "42").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 1, 0), "'hello").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "=A1+10").unwrap();
+        e.recalc();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        assert_eq!(
+            e2.get_cell(Address::new(SheetId::A, 0, 0)).unwrap().value,
+            Value::Number(42.0)
+        );
+        assert_eq!(
+            e2.get_cell(Address::new(SheetId::A, 1, 0)).unwrap().value,
+            Value::Text("hello".into())
+        );
+        let a2 = e2.get_cell(Address::new(SheetId::A, 0, 1)).unwrap();
+        assert_eq!(a2.value, Value::Number(52.0));
+        assert!(a2.formula.is_some(), "formula preserved across round-trip");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 }

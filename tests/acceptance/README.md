@@ -44,3 +44,4 @@ and its argument (separated by tabs or spaces). `#` starts a comment.
 | Directive | Meaning |
 |---|---|
 | `SIZE <w> <h>` | Set render buffer size (default 80×25) |
+| `RM_FILE <path>` | Delete a file on disk (ignored if missing). Use at the top of a transcript to start from a known state. |

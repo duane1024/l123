@@ -70,6 +70,7 @@ pub enum Action {
     Copy,
     Move,
     FileSave,
+    FileRetrieve,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -594,7 +595,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'R',
         name: "Retrieve",
         help: "Replace all active files with one from disk",
-        body: MenuBody::NotImplemented("f-retrieve"),
+        body: MenuBody::Action(Action::FileRetrieve),
     },
     MenuItem {
         letter: 'S',
