@@ -1,0 +1,23 @@
+# /File List Worksheet — open the overlay, navigate, dismiss.
+#
+# Content assertions (which file names appear, Enter retrieves the
+# highlighted one) are covered by unit tests — those can control the
+# listing directory without touching process CWD.  This transcript
+# just walks the UI state transitions.
+
+KEY /
+KEY F
+KEY L
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Worksheet
+
+KEY W
+ASSERT_MODE      FILES
+ASSERT_PANEL_L2  File List — Worksheet
+
+DOWN
+DOWN
+ASSERT_MODE      FILES
+
+ESC
+ASSERT_MODE      READY

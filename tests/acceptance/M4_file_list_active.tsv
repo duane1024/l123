@@ -22,10 +22,11 @@ ASSERT_MODE      MENU
 ASSERT_PANEL_L2  Worksheet
 ASSERT_PANEL_L2  Active
 
-# Pick Active — FILES mode with the one active file on line 2.
+# Pick Active — FILES mode; the overlay body shows the filename.
 KEY A
 ASSERT_MODE      FILES
-ASSERT_PANEL_L2  m4_file_list_active.xlsx
+ASSERT_PANEL_L2  File List — Active
+ASSERT_SCREEN    m4_file_list_active.xlsx
 
 # Esc dismisses.
 ESC

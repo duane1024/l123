@@ -173,7 +173,16 @@ pub(crate) struct FileListState {
     kind: FileListKind,
     entries: Vec<PathBuf>,
     highlight: usize,
+    /// Index of the first entry rendered on the overlay. Kept in sync
+    /// with `highlight` so the selected row is always visible.
+    view_offset: usize,
 }
+
+/// Visible window size (rows) for the /File List overlay. Also the
+/// distance moved by PgUp / PgDn. Fixed rather than dynamic because the
+/// key handler runs before render knows the real terminal height;
+/// render clamps to the actual area anyway.
+const FILE_LIST_PAGE_SIZE: usize = 10;
 
 impl PromptNext {
     fn accepts_char(self, c: char) -> bool {
@@ -209,6 +218,85 @@ fn resolve_save_path(input: &str) -> PathBuf {
         p.set_extension("xlsx");
     }
     p
+}
+
+/// Format one row of the /File List overlay: name left-padded into
+/// `name_w` chars, size right-aligned into `size_w`, separated by a
+/// gap. Truncated to `total_w` so the caller can write a full line.
+fn format_file_list_row(
+    name: &str,
+    size: &str,
+    name_w: usize,
+    size_w: usize,
+    total_w: usize,
+) -> String {
+    let name_trunc = truncate_to(name, name_w);
+    let size_trunc = truncate_to(size, size_w);
+    let mut out = String::with_capacity(total_w);
+    out.push(' ');
+    out.push_str(&name_trunc);
+    // Pad name to name_w.
+    let pad = name_w.saturating_sub(name_trunc.chars().count());
+    out.extend(std::iter::repeat_n(' ', pad));
+    out.push(' ');
+    // Right-align size into size_w.
+    let size_pad = size_w.saturating_sub(size_trunc.chars().count());
+    out.extend(std::iter::repeat_n(' ', size_pad));
+    out.push_str(&size_trunc);
+    // Final trim to total_w.
+    let chars: Vec<char> = out.chars().collect();
+    if chars.len() > total_w {
+        chars.into_iter().take(total_w).collect()
+    } else {
+        let mut s: String = chars.into_iter().collect();
+        s.extend(std::iter::repeat_n(' ', total_w - s.chars().count()));
+        s
+    }
+}
+
+fn truncate_to(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
+/// Human-readable byte size: B / K / M / G with one decimal place for
+/// the larger units.
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bytes < KB {
+        format!("{bytes}B")
+    } else if bytes < MB {
+        format!("{:.1}K", bytes as f64 / KB as f64)
+    } else if bytes < GB {
+        format!("{:.1}M", bytes as f64 / MB as f64)
+    } else {
+        format!("{:.1}G", bytes as f64 / GB as f64)
+    }
+}
+
+/// Write `text` at `(x, y)` into `buf`, padded or truncated to exactly
+/// `width` cells, with `style` applied over the whole span.
+fn set_line(buf: &mut Buffer, x: u16, y: u16, text: &str, width: u16, style: Style) {
+    let mut chars = text.chars();
+    for i in 0..width {
+        let cx = x + i;
+        if cx >= buf.area.x + buf.area.width || y >= buf.area.y + buf.area.height {
+            break;
+        }
+        let ch = chars.next().unwrap_or(' ');
+        buf[(cx, y)].set_char(ch).set_style(style);
+    }
+}
+
+/// Keep the /File List view window centered around the highlighted
+/// row: `view_offset <= highlight < view_offset + FILE_LIST_PAGE_SIZE`.
+fn adjust_file_list_view(fl: &mut FileListState) {
+    if fl.highlight < fl.view_offset {
+        fl.view_offset = fl.highlight;
+    } else if fl.highlight >= fl.view_offset + FILE_LIST_PAGE_SIZE {
+        fl.view_offset = fl.highlight + 1 - FILE_LIST_PAGE_SIZE;
+    }
 }
 
 /// List every `.xlsx` file in `dir`, sorted by filename (case-
@@ -825,6 +913,7 @@ impl App {
             kind,
             entries,
             highlight: 0,
+            view_offset: 0,
         });
         self.mode = Mode::Files;
     }
@@ -836,14 +925,25 @@ impl App {
                 self.file_list = None;
                 self.mode = Mode::Ready;
             }
-            KeyCode::Left => {
+            // Vertical navigation is the primary axis for the overlay;
+            // Left/Right are kept as aliases for muscle memory.
+            KeyCode::Up | KeyCode::Left => {
                 if fl.highlight > 0 {
                     fl.highlight -= 1;
                 }
             }
-            KeyCode::Right => {
+            KeyCode::Down | KeyCode::Right => {
                 if fl.highlight + 1 < fl.entries.len() {
                     fl.highlight += 1;
+                }
+            }
+            KeyCode::PageUp => {
+                fl.highlight = fl.highlight.saturating_sub(FILE_LIST_PAGE_SIZE);
+            }
+            KeyCode::PageDown => {
+                if !fl.entries.is_empty() {
+                    fl.highlight = (fl.highlight + FILE_LIST_PAGE_SIZE)
+                        .min(fl.entries.len() - 1);
                 }
             }
             KeyCode::Home => fl.highlight = 0,
@@ -868,7 +968,10 @@ impl App {
                     }
                 }
             }
-            _ => {}
+            _ => return,
+        }
+        if let Some(fl) = self.file_list.as_mut() {
+            adjust_file_list_view(fl);
         }
     }
 
@@ -1722,7 +1825,11 @@ impl App {
             .split(area);
 
         self.render_control_panel(chunks[0], buf);
-        self.render_grid(chunks[1], buf);
+        if self.file_list.is_some() {
+            self.render_file_list_overlay(chunks[1], buf);
+        } else {
+            self.render_grid(chunks[1], buf);
+        }
         self.render_status(chunks[2], buf);
     }
 
@@ -1799,44 +1906,97 @@ impl App {
         let Some(fl) = self.file_list.as_ref() else {
             return (Line::from(""), Line::from(""));
         };
+        // Panel lines are just the header + highlighted path / count.
+        // The full picker lives in the overlay below.
+        let header = match fl.kind {
+            FileListKind::Worksheet => " File List — Worksheet",
+            FileListKind::Active => " File List — Active",
+        };
+        let tail = if fl.entries.is_empty() {
+            match fl.kind {
+                FileListKind::Worksheet => " (no worksheet files in directory)".to_string(),
+                FileListKind::Active => " (no active file)".to_string(),
+            }
+        } else {
+            format!(
+                " {}   [{}/{}]   Enter: retrieve  Esc: cancel",
+                fl.entries
+                    .get(fl.highlight)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                fl.highlight + 1,
+                fl.entries.len(),
+            )
+        };
+        (Line::from(header), Line::from(tail))
+    }
+
+    /// Draw the scrollable file picker in `area`. Each row shows the
+    /// file name and, when available, its size (in bytes). Highlighted
+    /// row is reverse-video.
+    fn render_file_list_overlay(&self, area: Rect, buf: &mut Buffer) {
+        let Some(fl) = self.file_list.as_ref() else { return };
+        let width = area.width as usize;
+        let rows = area.height as usize;
+        if rows == 0 || width == 0 {
+            return;
+        }
+
+        let size_col_width: usize = 10;
+        let name_col_width = width.saturating_sub(size_col_width + 3);
+
+        // Header row.
+        let header = format_file_list_row(
+            "NAME",
+            "SIZE",
+            name_col_width,
+            size_col_width,
+            width,
+        );
+        set_line(buf, area.x, area.y, &header, area.width, Style::default());
+
         if fl.entries.is_empty() {
-            let label = match fl.kind {
-                FileListKind::Worksheet => " (no worksheet files in directory)",
-                FileListKind::Active => " (no active file)",
+            let empty_msg = match fl.kind {
+                FileListKind::Worksheet => "(no worksheet files in directory)",
+                FileListKind::Active => "(no active file)",
             };
-            return (Line::from(label), Line::from(""));
+            set_line(
+                buf,
+                area.x,
+                area.y + 1,
+                empty_msg,
+                area.width,
+                Style::default(),
+            );
+            return;
         }
-        let names: Vec<String> = fl
-            .entries
-            .iter()
-            .map(|p| {
-                p.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            })
-            .collect();
-        let mut spans: Vec<Span<'_>> = Vec::with_capacity(names.len() * 2 + 1);
-        spans.push(Span::raw(" "));
-        for (i, name) in names.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::raw("  "));
-            }
-            if i == fl.highlight {
-                spans.push(Span::styled(
-                    name.clone(),
-                    Style::default().add_modifier(Modifier::REVERSED),
-                ));
+
+        let visible_rows = rows.saturating_sub(1);
+        let start = fl.view_offset.min(fl.entries.len());
+        let end = (start + visible_rows).min(fl.entries.len());
+        for (i, path) in fl.entries[start..end].iter().enumerate() {
+            let idx = start + i;
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let size = std::fs::metadata(path)
+                .map(|m| format_size(m.len()))
+                .unwrap_or_default();
+            let row = format_file_list_row(
+                &name,
+                &size,
+                name_col_width,
+                size_col_width,
+                width,
+            );
+            let style = if idx == fl.highlight {
+                Style::default().add_modifier(Modifier::REVERSED)
             } else {
-                spans.push(Span::raw(name.clone()));
-            }
+                Style::default()
+            };
+            set_line(buf, area.x, area.y + 1 + i as u16, &row, area.width, style);
         }
-        let line2 = Line::from(spans);
-        let line3 = fl
-            .entries
-            .get(fl.highlight)
-            .map(|p| format!(" {}", p.display()))
-            .unwrap_or_default();
-        (line2, Line::from(line3))
     }
 
     fn render_save_confirm_lines(&self) -> (Line<'_>, Line<'_>) {
@@ -2991,6 +3151,106 @@ mod tests {
         for name in ["zeta.xlsx", "alpha.xlsx", "other.txt", "mid.XLSX"] {
             let _ = std::fs::remove_file(dir.join(name));
         }
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Vertical navigation + scroll: with 20 files and a PAGE_SIZE of
+    /// 10, pressing Down 15 times should advance the view so the
+    /// highlight is still visible.
+    #[test]
+    fn file_list_vertical_nav_and_scroll() {
+        let dir = temp_test_dir("list_scroll");
+        for i in 0..20 {
+            std::fs::write(dir.join(format!("f{i:02}.xlsx")), b"data").unwrap();
+        }
+        let entries = list_worksheet_files_in(&dir);
+        assert_eq!(entries.len(), 20);
+
+        let mut app = App::new();
+        app.file_list = Some(FileListState {
+            kind: FileListKind::Worksheet,
+            entries,
+            highlight: 0,
+            view_offset: 0,
+        });
+        app.mode = Mode::Files;
+
+        for _ in 0..15 {
+            app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        let fl = app.file_list.as_ref().unwrap();
+        assert_eq!(fl.highlight, 15);
+        assert!(
+            fl.view_offset > 0,
+            "view_offset should have advanced (got {})",
+            fl.view_offset
+        );
+        assert!(
+            fl.highlight >= fl.view_offset
+                && fl.highlight < fl.view_offset + FILE_LIST_PAGE_SIZE,
+            "highlight {} out of window starting at {}",
+            fl.highlight,
+            fl.view_offset
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        assert_eq!(app.file_list.as_ref().unwrap().highlight, 19);
+
+        app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        let fl = app.file_list.as_ref().unwrap();
+        assert_eq!(fl.highlight, 0);
+        assert_eq!(fl.view_offset, 0);
+
+        for i in 0..20 {
+            let _ = std::fs::remove_file(dir.join(format!("f{i:02}.xlsx")));
+        }
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Worksheet branch: pressing Enter on the highlighted row loads
+    /// that xlsx file into the workbook.
+    #[test]
+    fn file_list_worksheet_enter_retrieves_highlighted() {
+        let dir = temp_test_dir("list_ws_enter");
+
+        // Build two xlsx files with distinguishing contents. Driving
+        // through the App would set CWD / active_path; use the engine
+        // directly so the test stays hermetic.
+        let a = dir.join("a.xlsx");
+        let b = dir.join("b.xlsx");
+        {
+            let mut e = IronCalcEngine::new().unwrap();
+            e.set_user_input(Address::A1, "111").unwrap();
+            e.recalc();
+            e.save_xlsx(&a).unwrap();
+        }
+        {
+            let mut e = IronCalcEngine::new().unwrap();
+            e.set_user_input(Address::A1, "222").unwrap();
+            e.recalc();
+            e.save_xlsx(&b).unwrap();
+        }
+
+        let mut app = App::new();
+        app.file_list = Some(FileListState {
+            kind: FileListKind::Worksheet,
+            entries: vec![a.clone(), b.clone()],
+            highlight: 1, // point at b.xlsx
+            view_offset: 0,
+        });
+        app.mode = Mode::Files;
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(app.file_list.is_none());
+        assert_eq!(app.active_path.as_deref(), Some(b.as_path()));
+        match app.cells.get(&Address::A1).unwrap() {
+            CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 222.0),
+            other => panic!("A1 expected Number(222) from b.xlsx, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
         let _ = std::fs::remove_dir(&dir);
     }
 

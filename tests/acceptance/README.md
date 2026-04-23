@@ -37,6 +37,7 @@ and its argument (separated by tabs or spaces). `#` starts a comment.
 | `ASSERT_PANEL_L2 <substr>` | Assert control panel line 2 contains `<substr>` |
 | `ASSERT_PANEL_L3 <substr>` | Assert control panel line 3 contains `<substr>` |
 | `ASSERT_STATUS <substr>` | Assert status line contains `<substr>` |
+| `ASSERT_SCREEN <substr>` | Assert some row of the rendered buffer contains `<substr>` (useful for overlays like `/File List`) |
 | `ASSERT_RUNNING <true\|false>` | Assert app running state |
 
 ### Misc

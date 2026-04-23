@@ -113,6 +113,18 @@ fn run_transcript(path: &Path) {
                     path.display()
                 );
             }
+            // Substring search across every row of the rendered buffer.
+            // Useful for overlays (e.g. /File List) that render outside
+            // the fixed panel lines.
+            "ASSERT_SCREEN" => {
+                let buf = app.render_to_buffer(width, height);
+                let found = (0..height).any(|y| App::line_text(&buf, y).contains(rest));
+                assert!(
+                    found,
+                    "{}:{line_no}: screen does not contain {rest:?}",
+                    path.display()
+                );
+            }
             "ASSERT_CELL" => {
                 // "A:A1  hello" — address then expected trimmed-cell text.
                 let mut parts = rest.splitn(2, char::is_whitespace);
@@ -257,4 +269,5 @@ transcripts! {
     m4_file_new        => "M4_file_new.tsv",
     m4_file_dir        => "M4_file_dir.tsv",
     m4_file_list_active => "M4_file_list_active.tsv",
+    m4_file_list_worksheet => "M4_file_list_worksheet.tsv",
 }
