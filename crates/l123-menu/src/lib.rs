@@ -74,6 +74,10 @@ pub enum Action {
     FileXtractFormulas,
     FileXtractValues,
     FileImportNumbers,
+    FileNew,
+    FileDir,
+    FileListWorksheet,
+    FileListActive,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -593,6 +597,60 @@ const RANGE_MENU: &[MenuItem] = &[
     },
 ];
 
+const FILE_LIST_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'W',
+        name: "Worksheet",
+        help: "List worksheet files in the session directory",
+        body: MenuBody::Action(Action::FileListWorksheet),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Print",
+        help: "List print settings files",
+        body: MenuBody::NotImplemented("f-list-print"),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Graph",
+        help: "List graph files",
+        body: MenuBody::NotImplemented("f-list-graph"),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "List any file",
+        body: MenuBody::NotImplemented("f-list-other"),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Active",
+        help: "List currently active files",
+        body: MenuBody::Action(Action::FileListActive),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Linked",
+        help: "List files linked via formula references",
+        body: MenuBody::NotImplemented("f-list-linked"),
+    },
+];
+
+const FILE_NEW_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Before",
+        help: "Create a new active file before the current one",
+        body: MenuBody::Action(Action::FileNew),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "After",
+        help: "Create a new active file after the current one",
+        body: MenuBody::Action(Action::FileNew),
+    },
+];
+
 const FILE_IMPORT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'T',
@@ -658,7 +716,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'L',
         name: "List",
         help: "Overlay list of files on disk",
-        body: MenuBody::NotImplemented("f-list"),
+        body: MenuBody::Submenu(FILE_LIST_MENU),
     },
     MenuItem {
         letter: 'I',
@@ -670,13 +728,13 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'D',
         name: "Dir",
         help: "Change the session directory",
-        body: MenuBody::NotImplemented("f-dir"),
+        body: MenuBody::Action(Action::FileDir),
     },
     MenuItem {
         letter: 'N',
         name: "New",
         help: "Create a new active file",
-        body: MenuBody::NotImplemented("f-new"),
+        body: MenuBody::Submenu(FILE_NEW_MENU),
     },
     MenuItem {
         letter: 'O',

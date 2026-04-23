@@ -1,0 +1,32 @@
+# /File List Active — show the current active file.
+#
+# We set active_path by saving once, then /FLA opens the FILES overlay
+# showing the file name on line 2.  Esc dismisses to READY.
+
+RM_FILE target/m4_file_list_active.xlsx
+
+KEYS 42
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS target/m4_file_list_active.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# /FL opens the List submenu.
+KEY /
+KEY F
+KEY L
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Worksheet
+ASSERT_PANEL_L2  Active
+
+# Pick Active — FILES mode with the one active file on line 2.
+KEY A
+ASSERT_MODE      FILES
+ASSERT_PANEL_L2  m4_file_list_active.xlsx
+
+# Esc dismisses.
+ESC
+ASSERT_MODE      READY

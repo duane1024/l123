@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossterm::{
@@ -89,6 +89,9 @@ pub struct App {
     /// filename is stashed here after the prompt step and consumed by
     /// commit_point.
     pending_xtract_path: Option<PathBuf>,
+    /// Overlay state for /File List. When present, the mode is Files
+    /// and the grid is obscured by a horizontal picker on lines 2/3.
+    file_list: Option<FileListState>,
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +146,9 @@ enum PromptNext {
     /// After the user types a filename, parse it as CSV and paint the
     /// values into cells starting at the pointer.
     FileImportNumbersFilename,
+    /// After the user types a directory path, make it the session's
+    /// working directory.
+    FileDirPath,
 }
 
 /// /File Xtract sub-command: does the extracted file keep formulas,
@@ -151,6 +157,22 @@ enum PromptNext {
 pub(crate) enum XtractKind {
     Formulas,
     Values,
+}
+
+/// /File List sub-command: which set of files is in the overlay?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileListKind {
+    /// xlsx files in the current session directory.
+    Worksheet,
+    /// Currently-loaded active files (single-file workbook today).
+    Active,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FileListState {
+    kind: FileListKind,
+    entries: Vec<PathBuf>,
+    highlight: usize,
 }
 
 impl PromptNext {
@@ -165,7 +187,8 @@ impl PromptNext {
             PromptNext::FileSaveFilename
             | PromptNext::FileRetrieveFilename
             | PromptNext::FileXtractFilename { .. }
-            | PromptNext::FileImportNumbersFilename => is_path_char(c),
+            | PromptNext::FileImportNumbersFilename
+            | PromptNext::FileDirPath => is_path_char(c),
         }
     }
 }
@@ -186,6 +209,27 @@ fn resolve_save_path(input: &str) -> PathBuf {
         p.set_extension("xlsx");
     }
     p
+}
+
+/// List every `.xlsx` file in `dir`, sorted by filename (case-
+/// insensitive ordering isn't worth the extra code today). Hidden
+/// files and non-file entries are skipped.
+fn list_worksheet_files_in(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<PathBuf> = read
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .map(|x| x.eq_ignore_ascii_case("xlsx"))
+                .unwrap_or(false)
+        })
+        .collect();
+    entries.sort();
+    entries
 }
 
 /// Render a source-engine [`CellView`] into the `set_user_input`
@@ -328,6 +372,7 @@ impl App {
             active_path: None,
             save_confirm: None,
             pending_xtract_path: None,
+            file_list: None,
         }
     }
 
@@ -434,6 +479,12 @@ impl App {
         // Ctrl-C (Ctrl-Break alias) always exits.
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
             self.running = false;
+            return;
+        }
+        // /File List overlay takes precedence when active — it owns the
+        // keyboard in FILES mode.
+        if self.file_list.is_some() {
+            self.handle_key_file_list(k);
             return;
         }
         // Save-confirm submenu runs before the prompt/menu dispatcher:
@@ -735,6 +786,10 @@ impl App {
             Action::FileXtractFormulas => self.start_file_xtract_prompt(XtractKind::Formulas),
             Action::FileXtractValues => self.start_file_xtract_prompt(XtractKind::Values),
             Action::FileImportNumbers => self.start_file_import_numbers_prompt(),
+            Action::FileNew => self.execute_file_new(),
+            Action::FileDir => self.start_file_dir_prompt(),
+            Action::FileListWorksheet => self.open_file_list(FileListKind::Worksheet),
+            Action::FileListActive => self.open_file_list(FileListKind::Active),
             // Subsequent cycles wire these. For now, descent is a no-op.
             _ => self.close_menu(),
         }
@@ -750,6 +805,109 @@ impl App {
             label: "Enter save file name:".into(),
             buffer,
             next: PromptNext::FileSaveFilename,
+            fresh,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// /FL — populate `file_list` with the requested set of files and
+    /// enter FILES mode.
+    fn open_file_list(&mut self, kind: FileListKind) {
+        self.menu = None;
+        let entries = match kind {
+            FileListKind::Worksheet => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                list_worksheet_files_in(&cwd)
+            }
+            FileListKind::Active => self.active_path.iter().cloned().collect(),
+        };
+        self.file_list = Some(FileListState {
+            kind,
+            entries,
+            highlight: 0,
+        });
+        self.mode = Mode::Files;
+    }
+
+    fn handle_key_file_list(&mut self, k: KeyEvent) {
+        let Some(fl) = self.file_list.as_mut() else { return };
+        match k.code {
+            KeyCode::Esc => {
+                self.file_list = None;
+                self.mode = Mode::Ready;
+            }
+            KeyCode::Left => {
+                if fl.highlight > 0 {
+                    fl.highlight -= 1;
+                }
+            }
+            KeyCode::Right => {
+                if fl.highlight + 1 < fl.entries.len() {
+                    fl.highlight += 1;
+                }
+            }
+            KeyCode::Home => fl.highlight = 0,
+            KeyCode::End => {
+                if !fl.entries.is_empty() {
+                    fl.highlight = fl.entries.len() - 1;
+                }
+            }
+            KeyCode::Enter => {
+                let Some(fl) = self.file_list.take() else { return };
+                match fl.kind {
+                    FileListKind::Worksheet => {
+                        if let Some(path) = fl.entries.get(fl.highlight).cloned() {
+                            self.load_workbook_from(path);
+                        } else {
+                            self.mode = Mode::Ready;
+                        }
+                    }
+                    FileListKind::Active => {
+                        // Already the active file — just dismiss.
+                        self.mode = Mode::Ready;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// /FN — wipe the current workbook back to a blank slate. Both the
+    /// Before and After branches collapse to this same reset for now;
+    /// true multi-file insertion is M5.
+    fn execute_file_new(&mut self) {
+        self.cells.clear();
+        self.cell_formats.clear();
+        self.col_widths.clear();
+        self.entry = None;
+        self.menu = None;
+        self.prompt = None;
+        self.point = None;
+        self.save_confirm = None;
+        self.pending_name = None;
+        self.pending_xtract_path = None;
+        self.active_path = None;
+        self.pointer = Address::A1;
+        self.viewport_col_offset = 0;
+        self.viewport_row_offset = 0;
+        self.recalc_pending = false;
+        if let Ok(engine) = IronCalcEngine::new() {
+            self.engine = engine;
+        }
+        self.mode = Mode::Ready;
+    }
+
+    fn start_file_dir_prompt(&mut self) {
+        self.menu = None;
+        let buffer = std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let fresh = !buffer.is_empty();
+        self.prompt = Some(PromptState {
+            label: "Enter new session directory:".into(),
+            buffer,
+            next: PromptNext::FileDirPath,
             fresh,
         });
         self.mode = Mode::Menu;
@@ -1302,6 +1460,12 @@ impl App {
                 let path = PathBuf::from(&p.buffer);
                 self.import_numbers_from(path);
             }
+            PromptNext::FileDirPath => {
+                if !p.buffer.is_empty() {
+                    let _ = std::env::set_current_dir(PathBuf::from(&p.buffer));
+                }
+                self.mode = Mode::Ready;
+            }
         }
     }
 
@@ -1602,10 +1766,12 @@ impl App {
             Span::raw(" "),
         ]);
 
-        // Line 2 & 3 depend on mode. Save-confirm takes absolute
-        // precedence (it owns the keyboard); then a command-argument
-        // prompt; then the mode-specific rendering.
-        let (line2, line3) = if self.save_confirm.is_some() {
+        // Line 2 & 3 depend on mode. File-list and save-confirm take
+        // absolute precedence (they own the keyboard); then a
+        // command-argument prompt; then mode-specific rendering.
+        let (line2, line3) = if self.file_list.is_some() {
+            self.render_file_list_lines()
+        } else if self.save_confirm.is_some() {
             self.render_save_confirm_lines()
         } else if let Some(p) = self.prompt.as_ref() {
             (
@@ -1627,6 +1793,50 @@ impl App {
         };
 
         Paragraph::new(vec![line1, line2, line3]).render(inner, buf);
+    }
+
+    fn render_file_list_lines(&self) -> (Line<'_>, Line<'_>) {
+        let Some(fl) = self.file_list.as_ref() else {
+            return (Line::from(""), Line::from(""));
+        };
+        if fl.entries.is_empty() {
+            let label = match fl.kind {
+                FileListKind::Worksheet => " (no worksheet files in directory)",
+                FileListKind::Active => " (no active file)",
+            };
+            return (Line::from(label), Line::from(""));
+        }
+        let names: Vec<String> = fl
+            .entries
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
+            .collect();
+        let mut spans: Vec<Span<'_>> = Vec::with_capacity(names.len() * 2 + 1);
+        spans.push(Span::raw(" "));
+        for (i, name) in names.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  "));
+            }
+            if i == fl.highlight {
+                spans.push(Span::styled(
+                    name.clone(),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ));
+            } else {
+                spans.push(Span::raw(name.clone()));
+            }
+        }
+        let line2 = Line::from(spans);
+        let line3 = fl
+            .entries
+            .get(fl.highlight)
+            .map(|p| format!(" {}", p.display()))
+            .unwrap_or_default();
+        (line2, Line::from(line3))
     }
 
     fn render_save_confirm_lines(&self) -> (Line<'_>, Line<'_>) {
@@ -2761,6 +2971,69 @@ mod tests {
 
         let _ = std::fs::remove_file(&target);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Worksheet listing is an alphabetical list of xlsx files in the
+    /// given directory. Pure function of the directory's contents so
+    /// we can test it without touching process CWD.
+    #[test]
+    fn list_worksheet_files_in_returns_xlsx_sorted() {
+        let dir = temp_test_dir("list_ws");
+        for name in ["zeta.xlsx", "alpha.xlsx", "other.txt", "mid.XLSX"] {
+            std::fs::write(dir.join(name), b"placeholder").unwrap();
+        }
+        let got = list_worksheet_files_in(&dir);
+        let names: Vec<String> = got
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["alpha.xlsx", "mid.XLSX", "zeta.xlsx"]);
+        for name in ["zeta.xlsx", "alpha.xlsx", "other.txt", "mid.XLSX"] {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// /FLA shows the single active_path on line 2. Enter / Esc both
+    /// dismiss to READY without mutating the workbook.
+    #[test]
+    fn file_list_active_shows_active_path_and_esc_dismisses() {
+        let mut app = App::new();
+        app.active_path = Some(PathBuf::from("workbook.xlsx"));
+        for c in ['/', 'F', 'L', 'A'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(app.mode, Mode::Files);
+        let fl = app.file_list.as_ref().expect("file_list populated");
+        assert_eq!(fl.entries.len(), 1);
+        assert_eq!(fl.entries[0], PathBuf::from("workbook.xlsx"));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(app.file_list.is_none());
+    }
+
+    /// /FN wipes the entire in-memory workbook back to a blank sheet —
+    /// cells, formats, active path, pointer, and the engine itself.
+    #[test]
+    fn file_new_wipes_in_memory_state() {
+        let mut app = App::new();
+        // Seed A1 and move pointer off origin so we can detect the reset.
+        for c in "42".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        app.active_path = Some(PathBuf::from("/tmp/pretend.xlsx"));
+        assert!(!app.cells.is_empty());
+
+        // /FNA (After).
+        for c in ['/', 'F', 'N', 'A'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(app.cells.is_empty(), "cells should be cleared");
+        assert_eq!(app.pointer, Address::A1);
+        assert!(app.active_path.is_none(), "active_path should be cleared");
     }
 
     /// /FIN drops the CSV rows into the grid starting at the pointer.
