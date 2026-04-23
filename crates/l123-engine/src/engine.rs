@@ -76,6 +76,15 @@ pub trait Engine {
     fn delete_cols(&mut self, _sheet: SheetId, _at: u16, _n: u16) -> Result<()> {
         Err(EngineError::Unsupported("delete_cols"))
     }
+    /// Insert a new empty worksheet at `at`; existing sheets at `at..`
+    /// shift forward one position.
+    fn insert_sheet_at(&mut self, _at: u16) -> Result<()> {
+        Err(EngineError::Unsupported("insert_sheet_at"))
+    }
+    /// Number of worksheets in the current workbook.
+    fn sheet_count(&self) -> u16 {
+        0
+    }
     fn copy_range(&mut self, _src: Range, _dst: Address) -> Result<()> {
         Err(EngineError::Unsupported("copy_range"))
     }

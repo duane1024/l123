@@ -1,0 +1,43 @@
+# Undo (Alt-F4) — reverts the previous mutating command.
+#
+# Covers:
+#   - /Worksheet Delete Row: Alt-F4 restores the removed row's cells.
+#   - Cell edit overwrite: Alt-F4 restores the prior contents.
+
+# Seed A:A1=42, A:A2=7.
+KEYS 42
+ENTER
+DOWN
+KEYS 7
+ENTER
+UP
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1  42
+ASSERT_CELL       A:A2  7
+
+# /WDR — delete the pointer's row (row 1, value 42). Row 2 shifts up.
+KEY /
+KEY W
+KEY D
+KEY R
+ASSERT_CELL       A:A1  7
+ASSERT_CELL       A:A2
+
+# Alt-F4 restores the deleted row.
+ALT_F 4
+ASSERT_CELL       A:A1  42
+ASSERT_CELL       A:A2  7
+
+# Overwrite A:A1 with 100.
+KEYS 100
+ENTER
+ASSERT_CELL       A:A1  100
+
+# Alt-F4 reverts the cell back to 42.
+ALT_F 4
+ASSERT_CELL       A:A1  42
+ASSERT_CELL       A:A2  7
+
+# Extra Alt-F4 with an empty journal is a no-op.
+ALT_F 4
+ASSERT_CELL       A:A1  42

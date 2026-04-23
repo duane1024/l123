@@ -135,6 +135,39 @@ impl Engine for IronCalcEngine {
         self.extend_sheets_to(id)
     }
 
+    fn insert_sheet_at(&mut self, at: u16) -> Result<()> {
+        let current = self.model.workbook.worksheets.len();
+        if at as usize > current {
+            return Err(EngineError::BadAddress(format!(
+                "insert_sheet_at: index {at} > current count {current}"
+            )));
+        }
+        // IronCalc requires a unique sheet name regardless of insert
+        // position; pick "Sheet<N>" where N avoids any existing.
+        let existing: Vec<String> = self
+            .model
+            .workbook
+            .get_worksheet_names()
+            .iter()
+            .map(|s| s.to_uppercase())
+            .collect();
+        let mut n = current + 1;
+        let name = loop {
+            let candidate = format!("Sheet{n}");
+            if !existing.contains(&candidate.to_uppercase()) {
+                break candidate;
+            }
+            n += 1;
+        };
+        self.model
+            .insert_sheet(&name, at as u32, None)
+            .map_err(EngineError::Backend)
+    }
+
+    fn sheet_count(&self) -> u16 {
+        self.model.workbook.worksheets.len() as u16
+    }
+
     fn define_name(&mut self, name: &str, range: Range) -> Result<()> {
         let r = range.normalized();
         let sheet_name = self.sheet_name(r.start.sheet).ok_or_else(|| {
@@ -188,6 +221,12 @@ impl Engine for IronCalcEngine {
 }
 
 impl IronCalcEngine {
+    /// All sheet names in workbook order, ready to index by SheetId.0.
+    /// Used by the formula translator to expand sheet-qualified refs.
+    pub fn all_sheet_names(&self) -> Vec<String> {
+        self.model.workbook.get_worksheet_names()
+    }
+
     /// Enumerate every non-empty cell in the workbook. Used after
     /// `load_xlsx` to repopulate the UI's `cells` cache.
     pub fn used_cells(&self) -> Vec<(Address, CellView)> {
@@ -292,6 +331,40 @@ mod tests {
     fn sheet_name_is_sheet1_by_default() {
         let e = IronCalcEngine::new().unwrap();
         assert_eq!(e.sheet_name(SheetId::A).as_deref(), Some("Sheet1"));
+    }
+
+    #[test]
+    fn insert_sheet_at_end_appends() {
+        let mut e = IronCalcEngine::new().unwrap();
+        assert_eq!(e.sheet_count(), 1);
+        e.insert_sheet_at(1).unwrap();
+        assert_eq!(e.sheet_count(), 2);
+        assert!(e.sheet_name(SheetId(1)).is_some());
+    }
+
+    #[test]
+    fn insert_sheet_at_start_shifts_existing() {
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId(0), 0, 0), "42").unwrap();
+        let original_name = e.sheet_name(SheetId(0)).unwrap();
+        e.insert_sheet_at(0).unwrap();
+        assert_eq!(e.sheet_count(), 2);
+        // The original sheet now sits at index 1; the value follows it.
+        assert_eq!(e.sheet_name(SheetId(1)).as_deref(), Some(original_name.as_str()));
+        assert_eq!(
+            e.get_cell(Address::new(SheetId(1), 0, 0)).unwrap().value,
+            Value::Number(42.0)
+        );
+        assert_eq!(
+            e.get_cell(Address::new(SheetId(0), 0, 0)).unwrap().value,
+            Value::Empty
+        );
+    }
+
+    #[test]
+    fn insert_sheet_at_out_of_range_fails() {
+        let mut e = IronCalcEngine::new().unwrap();
+        assert!(e.insert_sheet_at(5).is_err());
     }
 
     #[test]

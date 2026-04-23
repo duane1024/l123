@@ -1,0 +1,67 @@
+# /Worksheet Global Group Enable + 3D format propagation.
+#
+# GROUP mode is 1-2-3's 3D broadcast: when on, any Format/Label/Column/
+# Row command issued on one sheet is also applied to every other
+# sheet in the active file.  The GROUP status indicator lights on the
+# bottom line while it's in effect.
+
+# Seed A:A1 = 0.5.
+KEYS 0.5
+ENTER
+UP
+ASSERT_POINTER    A:A1
+
+# /WIS A — insert sheet B after A.
+KEY /
+KEY W
+KEY I
+KEY S
+KEY A
+ASSERT_MODE       READY
+
+# Ctrl-PgDn to B, seed B:A1 = 0.25.
+CTRL_PGDN
+ASSERT_POINTER    B:A1
+KEYS 0.25
+ENTER
+UP
+
+# Back to A:A1.
+CTRL_PGUP
+ASSERT_POINTER    A:A1
+
+# /WGGE — Enable GROUP.
+KEY /
+KEY W
+KEY G
+KEY G
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Enable
+ASSERT_PANEL_L2   Disable
+KEY E
+ASSERT_MODE       READY
+ASSERT_STATUS     GROUP
+
+# /RFP 2 ENTER ENTER — apply Percent 2dp to A:A1.
+# Prompt "Enter number of decimal places" defaults to 2; first ENTER
+# accepts. Second ENTER commits the default single-cell POINT.
+KEY /
+KEY R
+KEY F
+KEY P
+ENTER
+ENTER
+ASSERT_CELL       A:A1  50.00%
+
+# GROUP propagated: B:A1 inherits the percent format.
+CTRL_PGDN
+ASSERT_POINTER    B:A1
+ASSERT_CELL       B:A1  25.00%
+
+# /WGGD — Disable.  Indicator clears; further format ops are single-sheet.
+KEY /
+KEY W
+KEY G
+KEY G
+KEY D
+ASSERT_MODE       READY

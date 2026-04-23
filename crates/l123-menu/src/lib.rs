@@ -47,11 +47,15 @@ pub enum Action {
     WorksheetEraseConfirm,
     WorksheetInsertRow,
     WorksheetInsertColumn,
+    WorksheetInsertSheetBefore,
+    WorksheetInsertSheetAfter,
     WorksheetDeleteRow,
     WorksheetDeleteColumn,
     WorksheetColumnSetWidth,
     WorksheetGlobalRecalcAutomatic,
     WorksheetGlobalRecalcManual,
+    WorksheetGlobalGroupEnable,
+    WorksheetGlobalGroupDisable,
     RangeErase,
     RangeLabelLeft,
     RangeLabelRight,
@@ -75,6 +79,8 @@ pub enum Action {
     FileXtractValues,
     FileImportNumbers,
     FileNew,
+    FileOpenBefore,
+    FileOpenAfter,
     FileDir,
     FileListWorksheet,
     FileListActive,
@@ -138,6 +144,21 @@ const QUIT_MENU: &[MenuItem] = &[
     },
 ];
 
+const WS_INSERT_SHEET_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Before",
+        help: "Insert a new worksheet before the current one",
+        body: MenuBody::Action(Action::WorksheetInsertSheetBefore),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "After",
+        help: "Insert a new worksheet after the current one",
+        body: MenuBody::Action(Action::WorksheetInsertSheetAfter),
+    },
+];
+
 const WS_INSERT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'C',
@@ -154,8 +175,8 @@ const WS_INSERT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'S',
         name: "Sheet",
-        help: "Insert one or more worksheets",
-        body: MenuBody::NotImplemented("ws-insert-sheet"),
+        help: "Insert a new worksheet before or after the current one",
+        body: MenuBody::Submenu(WS_INSERT_SHEET_MENU),
     },
 ];
 
@@ -273,6 +294,21 @@ const WS_GLOBAL_RECALC_MENU: &[MenuItem] = &[
     },
 ];
 
+const WG_GROUP_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Enable",
+        help: "Enable GROUP: format/column/row ops propagate across sheets",
+        body: MenuBody::Action(Action::WorksheetGlobalGroupEnable),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Disable",
+        help: "Disable GROUP: commands affect only the current sheet",
+        body: MenuBody::Action(Action::WorksheetGlobalGroupDisable),
+    },
+];
+
 const WS_GLOBAL_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'F',
@@ -320,7 +356,7 @@ const WS_GLOBAL_MENU: &[MenuItem] = &[
         letter: 'G',
         name: "Group",
         help: "Enable/disable GROUP mode across sheets",
-        body: MenuBody::NotImplemented("wg-group"),
+        body: MenuBody::Submenu(WG_GROUP_MENU),
     },
     MenuItem {
         letter: 'Q',
@@ -651,6 +687,21 @@ const FILE_NEW_MENU: &[MenuItem] = &[
     },
 ];
 
+const FILE_OPEN_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Before",
+        help: "Open a file as a new active file before the current one",
+        body: MenuBody::Action(Action::FileOpenBefore),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "After",
+        help: "Open a file as a new active file after the current one",
+        body: MenuBody::Action(Action::FileOpenAfter),
+    },
+];
+
 const FILE_IMPORT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'T',
@@ -740,7 +791,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'O',
         name: "Open",
         help: "Open another file alongside the current one",
-        body: MenuBody::NotImplemented("f-open"),
+        body: MenuBody::Submenu(FILE_OPEN_MENU),
     },
     MenuItem {
         letter: 'A',
@@ -986,6 +1037,42 @@ mod tests {
         assert!(matches!(
             node.body,
             MenuBody::Action(Action::WorksheetInsertRow)
+        ));
+    }
+
+    #[test]
+    fn resolve_file_open_before_and_after() {
+        let b = resolve(&['F', 'O', 'B']).unwrap();
+        assert!(matches!(b.body, MenuBody::Action(Action::FileOpenBefore)));
+        let a = resolve(&['F', 'O', 'A']).unwrap();
+        assert!(matches!(a.body, MenuBody::Action(Action::FileOpenAfter)));
+    }
+
+    #[test]
+    fn resolve_wg_group_enable_and_disable() {
+        let e = resolve(&['W', 'G', 'G', 'E']).unwrap();
+        assert!(matches!(
+            e.body,
+            MenuBody::Action(Action::WorksheetGlobalGroupEnable)
+        ));
+        let d = resolve(&['W', 'G', 'G', 'D']).unwrap();
+        assert!(matches!(
+            d.body,
+            MenuBody::Action(Action::WorksheetGlobalGroupDisable)
+        ));
+    }
+
+    #[test]
+    fn resolve_ws_insert_sheet_before_and_after() {
+        let b = resolve(&['W', 'I', 'S', 'B']).unwrap();
+        assert!(matches!(
+            b.body,
+            MenuBody::Action(Action::WorksheetInsertSheetBefore)
+        ));
+        let a = resolve(&['W', 'I', 'S', 'A']).unwrap();
+        assert!(matches!(
+            a.body,
+            MenuBody::Action(Action::WorksheetInsertSheetAfter)
         ));
     }
 

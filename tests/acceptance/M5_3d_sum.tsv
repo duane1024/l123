@@ -1,0 +1,62 @@
+# 3D range references: @SUM(A:B3..C:B3) sums one cell on each of
+# sheets A, B, and C.  l123-parse translates the sheet-qualified range
+# to a comma-separated list of per-sheet references that IronCalc
+# accepts.
+
+# Seed A:B3 = 1.
+RIGHT
+DOWN
+DOWN
+ASSERT_POINTER    A:B3
+KEYS 1
+ENTER
+
+# Add two more sheets via /WIS A; each leaves pointer on current sheet.
+KEY /
+KEY W
+KEY I
+KEY S
+KEY A
+ASSERT_MODE       READY
+CTRL_PGDN
+ASSERT_POINTER    B:A1
+
+# Seed B:B3 = 2.
+RIGHT
+DOWN
+DOWN
+ASSERT_POINTER    B:B3
+KEYS 2
+ENTER
+
+# /WIS A again while on B — inserts sheet C after B.
+KEY /
+KEY W
+KEY I
+KEY S
+KEY A
+ASSERT_MODE       READY
+CTRL_PGDN
+ASSERT_POINTER    C:A1
+
+# Seed C:B3 = 3.
+RIGHT
+DOWN
+DOWN
+ASSERT_POINTER    C:B3
+KEYS 3
+ENTER
+
+# Back to A:A1, enter the 3D sum in A:C3.
+CTRL_PGUP
+CTRL_PGUP
+ASSERT_POINTER    A:A1
+RIGHT
+RIGHT
+DOWN
+DOWN
+ASSERT_POINTER    A:C3
+KEYS @SUM(A:B3..C:B3)
+ENTER
+ASSERT_CELL       A:C3  6
+ASSERT_PANEL_L1   @SUM(A:B3..C:B3)

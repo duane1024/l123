@@ -1,0 +1,54 @@
+# /Worksheet Insert Sheet After  +  Ctrl-PgUp/PgDn sheet navigation.
+#
+# 1-2-3 R3.x has 256 sheets per active file (letters A..IV). /WIS prompts
+# Before|After; After adds a blank sheet following the current one and
+# leaves the pointer on the original.  Ctrl-PgDn / Ctrl-PgUp cycle
+# between sheets.
+
+# Seed A:A1 so we can verify the original survives the insert.
+KEYS 42
+ENTER
+UP
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1  42
+
+# /WIS — Before|After submenu.
+KEY /
+KEY W
+KEY I
+KEY S
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Before
+ASSERT_PANEL_L2   After
+
+# Pick After: pointer stays on A:A1; data intact.
+KEY A
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1  42
+
+# Ctrl-PgDn moves to the new sheet B.
+CTRL_PGDN
+ASSERT_POINTER    B:A1
+ASSERT_PANEL_L1   B:A1
+ASSERT_CELL       B:A1
+
+# Type in sheet B.
+KEYS 99
+ENTER
+UP
+ASSERT_CELL       B:A1  99
+
+# Ctrl-PgUp back to sheet A; original data still there.
+CTRL_PGUP
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1  42
+
+# Ctrl-PgDn once more — still goes to B (no wrap).
+CTRL_PGDN
+ASSERT_POINTER    B:A1
+ASSERT_CELL       B:A1  99
+
+# Ctrl-PgDn at last sheet is a no-op.
+CTRL_PGDN
+ASSERT_POINTER    B:A1

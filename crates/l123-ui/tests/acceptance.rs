@@ -67,6 +67,13 @@ fn run_transcript(path: &Path) {
             "PGDN" => {
                 app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE))
             }
+            "CTRL_PGUP" => {
+                app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL))
+            }
+            "CTRL_PGDN" => {
+                app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL))
+            }
+            "CTRL_END" => app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
             "F" => {
                 let n: u8 = rest.parse().expect("F directive needs number");
                 app.handle_key(KeyEvent::new(KeyCode::F(n), KeyModifiers::NONE));
@@ -270,4 +277,9 @@ transcripts! {
     m4_file_dir        => "M4_file_dir.tsv",
     m4_file_list_active => "M4_file_list_active.tsv",
     m4_file_list_worksheet => "M4_file_list_worksheet.tsv",
+    m5_insert_sheet    => "M5_insert_sheet.tsv",
+    m5_group_format    => "M5_group_format.tsv",
+    m5_3d_sum          => "M5_3d_sum.tsv",
+    m5_file_open       => "M5_file_open.tsv",
+    m5_undo            => "M5_undo.tsv",
 }

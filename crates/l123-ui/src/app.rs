@@ -70,6 +70,11 @@ pub struct App {
     engine: IronCalcEngine,
     recalc_mode: RecalcMode,
     recalc_pending: bool,
+    /// 1-2-3 GROUP mode: when true, format and row/col operations
+    /// propagate across all sheets of the active file. Toggled by
+    /// `/Worksheet Global Group Enable|Disable`. Lights the GROUP
+    /// indicator on the status line.
+    group_mode: bool,
     menu: Option<MenuState>,
     point: Option<PointState>,
     prompt: Option<PromptState>,
@@ -92,6 +97,56 @@ pub struct App {
     /// Overlay state for /File List. When present, the mode is Files
     /// and the grid is obscured by a horizontal picker on lines 2/3.
     file_list: Option<FileListState>,
+    /// Other "active files" currently swapped out of the foreground.
+    /// Empty in a single-file session. Each Ctrl-End + Ctrl-PgDn
+    /// rotates the front element into the primary slot and the old
+    /// primary to the back.
+    stashed_files: Vec<StashedFile>,
+    /// True after Ctrl-End until the next key. While true, the FILE
+    /// indicator lights and Ctrl-PgUp/PgDn cycle between active files
+    /// instead of between sheets.
+    file_nav_pending: bool,
+    /// Command journal for Undo (Alt-F4). Each mutating command
+    /// pushes an inverse entry. Pop-and-apply reverts.
+    journal: Vec<JournalEntry>,
+}
+
+/// Inverse commands recorded before each mutating operation. See SPEC
+/// §17 / PLAN §4.3.
+#[derive(Debug, Clone)]
+enum JournalEntry {
+    /// Restore a single cell to its prior contents / format. A `None`
+    /// field means the cell was unset before the recorded edit.
+    CellEdit {
+        addr: Address,
+        prev_contents: Option<CellContents>,
+        prev_format: Option<Format>,
+    },
+    /// Reinstate a deleted row on one sheet: insert a fresh row at
+    /// `at`, then rewrite the captured cells.
+    RowDelete {
+        sheet: SheetId,
+        at: u32,
+        cells: Vec<(Address, CellContents)>,
+        formats: Vec<(Address, Format)>,
+    },
+    /// Group of entries popped and applied together — used when
+    /// GROUP propagated a single command to multiple sheets.
+    Batch(Vec<JournalEntry>),
+}
+
+/// Per-file state swapped out when another file is foregrounded. Kept
+/// parallel to `App`'s primary-file fields so Ctrl-End rotation is a
+/// simple `mem::swap`.
+struct StashedFile {
+    engine: IronCalcEngine,
+    cells: HashMap<Address, CellContents>,
+    cell_formats: HashMap<Address, Format>,
+    col_widths: HashMap<(SheetId, u16), u8>,
+    active_path: Option<PathBuf>,
+    pointer: Address,
+    viewport_col_offset: u16,
+    viewport_row_offset: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +204,11 @@ enum PromptNext {
     /// After the user types a directory path, make it the session's
     /// working directory.
     FileDirPath,
+    /// After the user types a filename, load that xlsx file as a
+    /// second active file. `before` controls whether the new file
+    /// takes the current slot (and the old one is stashed ahead) or
+    /// is appended after the current one.
+    FileOpenFilename { before: bool },
 }
 
 /// /File Xtract sub-command: does the extracted file keep formulas,
@@ -197,7 +257,8 @@ impl PromptNext {
             | PromptNext::FileRetrieveFilename
             | PromptNext::FileXtractFilename { .. }
             | PromptNext::FileImportNumbersFilename
-            | PromptNext::FileDirPath => is_path_char(c),
+            | PromptNext::FileDirPath
+            | PromptNext::FileOpenFilename { .. } => is_path_char(c),
         }
     }
 }
@@ -453,6 +514,7 @@ impl App {
             engine: IronCalcEngine::new().expect("IronCalc engine init"),
             recalc_mode: RecalcMode::Automatic,
             recalc_pending: false,
+            group_mode: false,
             menu: None,
             point: None,
             prompt: None,
@@ -461,6 +523,9 @@ impl App {
             save_confirm: None,
             pending_xtract_path: None,
             file_list: None,
+            stashed_files: Vec::new(),
+            file_nav_pending: false,
+            journal: Vec::new(),
         }
     }
 
@@ -599,19 +664,37 @@ impl App {
     }
 
     fn handle_key_ready(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        // Ctrl-End arms the FILE-navigation prefix. The next key
+        // reads the prefix: Ctrl-PgUp/PgDn become file rotations.
+        if ctrl && matches!(k.code, KeyCode::End) {
+            self.file_nav_pending = true;
+            return;
+        }
+        let file_nav = self.file_nav_pending;
+        // Any keystroke other than the file-nav follow-through clears
+        // the prefix — so a typo drops you back into normal nav.
+        if file_nav {
+            self.file_nav_pending = false;
+        }
         match k.code {
             KeyCode::Up => self.move_pointer(0, -1),
             KeyCode::Down => self.move_pointer(0, 1),
             KeyCode::Left => self.move_pointer(-1, 0),
             KeyCode::Right => self.move_pointer(1, 0),
             KeyCode::Home => {
-                self.pointer = Address::A1;
+                self.pointer = Address::new(self.pointer.sheet, 0, 0);
                 self.viewport_col_offset = 0;
                 self.viewport_row_offset = 0;
             }
+            KeyCode::PageDown if ctrl && file_nav => self.rotate_files(1),
+            KeyCode::PageUp if ctrl && file_nav => self.rotate_files(-1),
+            KeyCode::PageDown if ctrl => self.move_sheet(1),
+            KeyCode::PageUp if ctrl => self.move_sheet(-1),
             KeyCode::PageDown => self.move_pointer(0, 20),
             KeyCode::PageUp => self.move_pointer(0, -20),
             KeyCode::F(2) => self.begin_edit(),
+            KeyCode::F(4) if k.modifiers.contains(KeyModifiers::ALT) => self.undo(),
             KeyCode::F(9) => self.do_recalc(),
             KeyCode::Char('/') => self.open_menu(),
             KeyCode::Char(c) => self.begin_entry(c),
@@ -696,6 +779,15 @@ impl App {
             self.mode = Mode::Ready;
             return;
         };
+        // Capture the prior state at the pointer before committing so
+        // Alt-F4 can revert.
+        let prev_contents = self.cells.get(&self.pointer).cloned();
+        let prev_format = self.cell_formats.get(&self.pointer).copied();
+        self.journal.push(JournalEntry::CellEdit {
+            addr: self.pointer,
+            prev_contents,
+            prev_format,
+        });
         let mut contents = match entry.kind {
             EntryKind::Label(prefix) => CellContents::Label { prefix, text: entry.buffer },
             EntryKind::Value => match entry.buffer.parse::<f64>() {
@@ -734,6 +826,59 @@ impl App {
             self.cells.insert(self.pointer, contents);
         }
         self.mode = Mode::Ready;
+    }
+
+    /// Pop the most recent journal entry and replay its inverse.
+    /// No-op when the journal is empty.
+    fn undo(&mut self) {
+        let Some(entry) = self.journal.pop() else { return };
+        self.apply_undo(entry);
+        self.engine.recalc();
+        self.refresh_formula_caches();
+    }
+
+    fn apply_undo(&mut self, entry: JournalEntry) {
+        match entry {
+            JournalEntry::CellEdit { addr, prev_contents, prev_format } => {
+                match prev_contents {
+                    Some(c) => {
+                        self.push_to_engine_at(addr, &c);
+                        self.cells.insert(addr, c);
+                    }
+                    None => {
+                        self.cells.remove(&addr);
+                        let _ = self.engine.clear_cell(addr);
+                    }
+                }
+                match prev_format {
+                    Some(f) => {
+                        self.cell_formats.insert(addr, f);
+                    }
+                    None => {
+                        self.cell_formats.remove(&addr);
+                    }
+                }
+            }
+            JournalEntry::RowDelete { sheet, at, cells, formats } => {
+                if self.engine.insert_rows(sheet, at, 1).is_ok() {
+                    shift_cells_rows(&mut self.cells, sheet, at, 1);
+                    for (addr, contents) in cells {
+                        self.push_to_engine_at(addr, &contents);
+                        self.cells.insert(addr, contents);
+                    }
+                    for (addr, fmt) in formats {
+                        self.cell_formats.insert(addr, fmt);
+                    }
+                }
+            }
+            JournalEntry::Batch(entries) => {
+                // Apply in reverse order so the "outer" state restores
+                // after the "inner" details.
+                for e in entries.into_iter().rev() {
+                    self.apply_undo(e);
+                }
+            }
+        }
     }
 
     /// Explicit recalculation — invoked by F9 in READY mode. Safe to call
@@ -825,6 +970,8 @@ impl App {
             }
             Action::WorksheetInsertRow => self.insert_row_at_pointer(1),
             Action::WorksheetInsertColumn => self.insert_col_at_pointer(1),
+            Action::WorksheetInsertSheetBefore => self.insert_sheet_before_current(),
+            Action::WorksheetInsertSheetAfter => self.insert_sheet_after_current(),
             Action::WorksheetDeleteRow => self.delete_row_at_pointer(1),
             Action::WorksheetDeleteColumn => self.delete_col_at_pointer(1),
             Action::WorksheetGlobalRecalcAutomatic => {
@@ -835,6 +982,14 @@ impl App {
             }
             Action::WorksheetGlobalRecalcManual => {
                 self.recalc_mode = RecalcMode::Manual;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalGroupEnable => {
+                self.group_mode = true;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalGroupDisable => {
+                self.group_mode = false;
                 self.close_menu();
             }
             Action::WorksheetColumnSetWidth => self.start_col_width_prompt(),
@@ -875,6 +1030,8 @@ impl App {
             Action::FileXtractValues => self.start_file_xtract_prompt(XtractKind::Values),
             Action::FileImportNumbers => self.start_file_import_numbers_prompt(),
             Action::FileNew => self.execute_file_new(),
+            Action::FileOpenBefore => self.start_file_open_prompt(true),
+            Action::FileOpenAfter => self.start_file_open_prompt(false),
             Action::FileDir => self.start_file_dir_prompt(),
             Action::FileListWorksheet => self.open_file_list(FileListKind::Worksheet),
             Action::FileListActive => self.open_file_list(FileListKind::Active),
@@ -998,6 +1155,118 @@ impl App {
             self.engine = engine;
         }
         self.mode = Mode::Ready;
+    }
+
+    fn start_file_open_prompt(&mut self, before: bool) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter file to open:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileOpenFilename { before },
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Snapshot the App's current primary-file state into a
+    /// [`StashedFile`]. The new primary slot is left in an IronCalc
+    /// "empty" state that the caller is expected to populate.
+    fn stash_current_file(&mut self) -> StashedFile {
+        let engine = std::mem::replace(
+            &mut self.engine,
+            IronCalcEngine::new().expect("IronCalc engine init"),
+        );
+        StashedFile {
+            engine,
+            cells: std::mem::take(&mut self.cells),
+            cell_formats: std::mem::take(&mut self.cell_formats),
+            col_widths: std::mem::take(&mut self.col_widths),
+            active_path: self.active_path.take(),
+            pointer: self.pointer,
+            viewport_col_offset: self.viewport_col_offset,
+            viewport_row_offset: self.viewport_row_offset,
+        }
+    }
+
+    /// Restore a stashed file into the primary slot, returning the
+    /// state that was there before. Caller is responsible for
+    /// placing the returned value back into `stashed_files` wherever
+    /// the rotation policy says.
+    fn install_from_stash(&mut self, s: StashedFile) -> StashedFile {
+        let old = self.stash_current_file();
+        self.engine = s.engine;
+        self.cells = s.cells;
+        self.cell_formats = s.cell_formats;
+        self.col_widths = s.col_widths;
+        self.active_path = s.active_path;
+        self.pointer = s.pointer;
+        self.viewport_col_offset = s.viewport_col_offset;
+        self.viewport_row_offset = s.viewport_row_offset;
+        old
+    }
+
+    /// Load an xlsx from `path` as an additional active file.
+    /// `before = true` installs it in the current slot and pushes
+    /// the old slot to the front of `stashed_files`; `before = false`
+    /// appends it as the last file without disturbing the current view.
+    fn open_file_alongside(&mut self, path: PathBuf, before: bool) {
+        let Ok(mut engine) = IronCalcEngine::new() else {
+            self.mode = Mode::Ready;
+            return;
+        };
+        if engine.load_xlsx(&path).is_err() {
+            self.mode = Mode::Ready;
+            return;
+        }
+        // Pre-populate the new file's cells cache from the engine.
+        let mut cells = HashMap::new();
+        for (addr, cv) in engine.used_cells() {
+            if let Some(contents) = cell_view_to_contents(&cv) {
+                cells.insert(addr, contents);
+            }
+        }
+        let new_slot = StashedFile {
+            engine,
+            cells,
+            cell_formats: HashMap::new(),
+            col_widths: HashMap::new(),
+            active_path: Some(path),
+            pointer: Address::A1,
+            viewport_col_offset: 0,
+            viewport_row_offset: 0,
+        };
+        if before {
+            // New file becomes current; current is stashed at front.
+            let old = self.install_from_stash(new_slot);
+            self.stashed_files.insert(0, old);
+        } else {
+            self.stashed_files.push(new_slot);
+        }
+        self.mode = Mode::Ready;
+    }
+
+    /// Rotate the file ring by `delta` slots. +1 = Ctrl-PgDn (next
+    /// file); -1 = Ctrl-PgUp (prev file). No-op if only one file is
+    /// active. Clears the Ctrl-End prefix.
+    fn rotate_files(&mut self, delta: i32) {
+        self.file_nav_pending = false;
+        if self.stashed_files.is_empty() || delta == 0 {
+            return;
+        }
+        if delta > 0 {
+            // Move current to the end; bring front to current.
+            let front = self.stashed_files.remove(0);
+            let old = self.install_from_stash(front);
+            self.stashed_files.push(old);
+        } else {
+            // Move current to front; bring back to current.
+            let back = self
+                .stashed_files
+                .pop()
+                .expect("non-empty checked above");
+            let old = self.install_from_stash(back);
+            self.stashed_files.insert(0, old);
+        }
     }
 
     fn start_file_dir_prompt(&mut self) {
@@ -1204,40 +1473,141 @@ impl App {
         }
     }
 
-    fn insert_row_at_pointer(&mut self, n: u32) {
-        let sheet = self.pointer.sheet;
-        let at = self.pointer.row;
-        if self.engine.insert_rows(sheet, at, n).is_ok() {
-            shift_cells_rows(&mut self.cells, sheet, at, n as i64);
-            self.engine.recalc();
-            self.refresh_formula_caches();
+    /// Sheets targeted by a structural op at the current pointer. GROUP
+    /// mode broadcasts to every sheet in the active file; otherwise
+    /// only the pointer's sheet.
+    fn target_sheets(&self) -> Vec<SheetId> {
+        if self.group_mode {
+            (0..self.engine.sheet_count()).map(SheetId).collect()
+        } else {
+            vec![self.pointer.sheet]
         }
+    }
+
+    fn insert_row_at_pointer(&mut self, n: u32) {
+        let at = self.pointer.row;
+        for sheet in self.target_sheets() {
+            if self.engine.insert_rows(sheet, at, n).is_ok() {
+                shift_cells_rows(&mut self.cells, sheet, at, n as i64);
+            }
+        }
+        self.engine.recalc();
+        self.refresh_formula_caches();
         self.close_menu();
     }
 
     fn delete_row_at_pointer(&mut self, n: u32) {
-        let sheet = self.pointer.sheet;
         let at = self.pointer.row;
-        if self.engine.delete_rows(sheet, at, n).is_ok() {
-            // Remove the deleted rows from our map, then shift the rest up.
-            self.cells
-                .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
-            shift_cells_rows(&mut self.cells, sheet, at + n, -(n as i64));
+        let mut batch: Vec<JournalEntry> = Vec::new();
+        for sheet in self.target_sheets() {
+            // Capture the cells and formats about to be destroyed so
+            // Alt-F4 can reinstate them. Only the first `n` rows on
+            // this sheet are captured; deletion is always 1 for M5.
+            let captured_cells: Vec<(Address, CellContents)> = self
+                .cells
+                .iter()
+                .filter(|(a, _)| a.sheet == sheet && a.row >= at && a.row < at + n)
+                .map(|(a, c)| (*a, c.clone()))
+                .collect();
+            let captured_formats: Vec<(Address, Format)> = self
+                .cell_formats
+                .iter()
+                .filter(|(a, _)| a.sheet == sheet && a.row >= at && a.row < at + n)
+                .map(|(a, f)| (*a, *f))
+                .collect();
+            if self.engine.delete_rows(sheet, at, n).is_ok() {
+                self.cells
+                    .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
+                self.cell_formats
+                    .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
+                shift_cells_rows(&mut self.cells, sheet, at + n, -(n as i64));
+                batch.push(JournalEntry::RowDelete {
+                    sheet,
+                    at,
+                    cells: captured_cells,
+                    formats: captured_formats,
+                });
+            }
+        }
+        if !batch.is_empty() {
+            self.journal.push(if batch.len() == 1 {
+                batch.into_iter().next().unwrap()
+            } else {
+                JournalEntry::Batch(batch)
+            });
+        }
+        self.engine.recalc();
+        self.refresh_formula_caches();
+        self.close_menu();
+    }
+
+    fn insert_col_at_pointer(&mut self, n: u16) {
+        let at = self.pointer.col;
+        for sheet in self.target_sheets() {
+            if self.engine.insert_cols(sheet, at, n).is_ok() {
+                shift_cells_cols(&mut self.cells, sheet, at, n as i32);
+            }
+        }
+        self.engine.recalc();
+        self.refresh_formula_caches();
+        self.close_menu();
+    }
+
+    /// /Worksheet Insert Sheet Before: a new empty sheet takes the
+    /// current sheet's slot; the existing sheet shifts forward one
+    /// position. The pointer follows the original data, so it ends up
+    /// on the (shifted) original sheet rather than on the new blank.
+    fn insert_sheet_before_current(&mut self) {
+        let at = self.pointer.sheet.0;
+        if self.engine.insert_sheet_at(at).is_ok() {
+            shift_sheets_from(
+                &mut self.cells,
+                &mut self.cell_formats,
+                &mut self.col_widths,
+                at,
+                1,
+            );
+            self.pointer =
+                Address::new(SheetId(at + 1), self.pointer.col, self.pointer.row);
             self.engine.recalc();
             self.refresh_formula_caches();
         }
         self.close_menu();
     }
 
-    fn insert_col_at_pointer(&mut self, n: u16) {
-        let sheet = self.pointer.sheet;
-        let at = self.pointer.col;
-        if self.engine.insert_cols(sheet, at, n).is_ok() {
-            shift_cells_cols(&mut self.cells, sheet, at, n as i32);
+    /// /Worksheet Insert Sheet After: a new empty sheet is inserted at
+    /// the position after the current one. The pointer stays on the
+    /// current sheet; Ctrl-PgDn reveals the new blank.
+    fn insert_sheet_after_current(&mut self) {
+        let at = self.pointer.sheet.0 + 1;
+        if self.engine.insert_sheet_at(at).is_ok() {
+            shift_sheets_from(
+                &mut self.cells,
+                &mut self.cell_formats,
+                &mut self.col_widths,
+                at,
+                1,
+            );
             self.engine.recalc();
             self.refresh_formula_caches();
         }
         self.close_menu();
+    }
+
+    /// Ctrl-PgDn / Ctrl-PgUp: jump to the next / previous sheet. Clamps
+    /// at the bookends — no wrap.
+    fn move_sheet(&mut self, delta: i32) {
+        let count = self.engine.sheet_count();
+        if count == 0 {
+            return;
+        }
+        let cur = self.pointer.sheet.0 as i32;
+        let next = (cur + delta).clamp(0, count as i32 - 1) as u16;
+        if next != self.pointer.sheet.0 {
+            self.pointer = Address::new(SheetId(next), 0, 0);
+            self.viewport_col_offset = 0;
+            self.viewport_row_offset = 0;
+        }
     }
 
     // ---------------- POINT mode ----------------
@@ -1498,11 +1868,14 @@ impl App {
             }
             PromptNext::WorksheetColumnSetWidth => {
                 let width: u8 = p.buffer.parse().unwrap_or(9).clamp(1, 240);
-                let key = (self.pointer.sheet, self.pointer.col);
-                if width == 9 {
-                    self.col_widths.remove(&key);
-                } else {
-                    self.col_widths.insert(key, width);
+                let col = self.pointer.col;
+                for sheet in self.target_sheets() {
+                    let key = (sheet, col);
+                    if width == 9 {
+                        self.col_widths.remove(&key);
+                    } else {
+                        self.col_widths.insert(key, width);
+                    }
                 }
                 self.mode = Mode::Ready;
             }
@@ -1569,6 +1942,14 @@ impl App {
                 }
                 self.mode = Mode::Ready;
             }
+            PromptNext::FileOpenFilename { before } => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(&p.buffer);
+                self.open_file_alongside(path, before);
+            }
         }
     }
 
@@ -1576,13 +1957,21 @@ impl App {
 
     fn execute_range_format(&mut self, range: Range, format: Format) {
         let r = range.normalized();
-        for row in r.start.row..=r.end.row {
-            for col in r.start.col..=r.end.col {
-                let addr = Address::new(r.start.sheet, col, row);
-                if matches!(format.kind, FormatKind::Reset) {
-                    self.cell_formats.remove(&addr);
-                } else {
-                    self.cell_formats.insert(addr, format);
+        // GROUP mode: broadcast to every sheet in the active file.
+        let sheets: Vec<SheetId> = if self.group_mode {
+            (0..self.engine.sheet_count()).map(SheetId).collect()
+        } else {
+            vec![r.start.sheet]
+        };
+        for sheet in sheets {
+            for row in r.start.row..=r.end.row {
+                for col in r.start.col..=r.end.col {
+                    let addr = Address::new(sheet, col, row);
+                    if matches!(format.kind, FormatKind::Reset) {
+                        self.cell_formats.remove(&addr);
+                    } else {
+                        self.cell_formats.insert(addr, format);
+                    }
                 }
             }
         }
@@ -1699,7 +2088,9 @@ impl App {
             }
             CellContents::Constant(_) => Ok(()),
             CellContents::Formula { expr, .. } => {
-                let excel = l123_parse::to_engine_source(expr);
+                let names = self.engine.all_sheet_names();
+                let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
+                let excel = l123_parse::to_engine_source(expr, &names_ref);
                 self.engine.set_user_input(addr, &excel)
             }
         };
@@ -1722,15 +2113,16 @@ impl App {
     }
 
     fn delete_col_at_pointer(&mut self, n: u16) {
-        let sheet = self.pointer.sheet;
         let at = self.pointer.col;
-        if self.engine.delete_cols(sheet, at, n).is_ok() {
-            self.cells
-                .retain(|a, _| !(a.sheet == sheet && a.col >= at && a.col < at + n));
-            shift_cells_cols(&mut self.cells, sheet, at + n, -(n as i32));
-            self.engine.recalc();
-            self.refresh_formula_caches();
+        for sheet in self.target_sheets() {
+            if self.engine.delete_cols(sheet, at, n).is_ok() {
+                self.cells
+                    .retain(|a, _| !(a.sheet == sheet && a.col >= at && a.col < at + n));
+                shift_cells_cols(&mut self.cells, sheet, at + n, -(n as i32));
+            }
         }
+        self.engine.recalc();
+        self.refresh_formula_caches();
         self.close_menu();
     }
 
@@ -1770,7 +2162,9 @@ impl App {
             }
             CellContents::Constant(_) => Ok(()),
             CellContents::Formula { expr, .. } => {
-                let excel = l123_parse::to_engine_source(expr);
+                let names = self.engine.all_sheet_names();
+                let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
+                let excel = l123_parse::to_engine_source(expr, &names_ref);
                 self.engine.set_user_input(addr, &excel)
             }
         };
@@ -2174,7 +2568,7 @@ impl App {
             for c in 0..visible_cols {
                 let col_idx = self.viewport_col_offset + c;
                 let x = area.x + ROW_GUTTER + c * COL_WIDTH;
-                let addr = Address::new(SheetId::A, col_idx, row_idx);
+                let addr = Address::new(self.pointer.sheet, col_idx, row_idx);
                 let highlighted = highlight.contains(addr);
                 let cell_style = if highlighted {
                     Style::default().add_modifier(Modifier::REVERSED)
@@ -2200,6 +2594,12 @@ impl App {
         // Active status indicators, in the order 1-2-3 displays them.
         // For M2 we emit CALC only; the others arrive with their features.
         let mut indicators = Vec::new();
+        if self.file_nav_pending {
+            indicators.push("FILE");
+        }
+        if self.group_mode {
+            indicators.push("GROUP");
+        }
         if self.recalc_pending {
             indicators.push("CALC");
         }
@@ -2253,6 +2653,52 @@ fn shift_cells_rows(
         let new_row = (addr.row as i64 + delta).max(0) as u32;
         let new_addr = Address::new(addr.sheet, addr.col, new_row);
         cells.insert(new_addr, contents);
+    }
+}
+
+/// After inserting `delta` sheets at position `at`, every cell whose
+/// sheet index is >= `at` moves forward by `delta`. Applies to the
+/// three per-sheet caches App keeps in sync with the engine.
+fn shift_sheets_from(
+    cells: &mut HashMap<Address, CellContents>,
+    cell_formats: &mut HashMap<Address, Format>,
+    col_widths: &mut HashMap<(SheetId, u16), u8>,
+    at: u16,
+    delta: u16,
+) {
+    if delta == 0 {
+        return;
+    }
+    let shift_addr = |a: Address| -> Address {
+        if a.sheet.0 >= at {
+            Address::new(SheetId(a.sheet.0 + delta), a.col, a.row)
+        } else {
+            a
+        }
+    };
+    let mut affected: Vec<Address> =
+        cells.keys().filter(|a| a.sheet.0 >= at).copied().collect();
+    affected.sort_by_key(|a| std::cmp::Reverse(a.sheet.0));
+    for addr in affected {
+        let contents = cells.remove(&addr).expect("present");
+        cells.insert(shift_addr(addr), contents);
+    }
+    let mut fmt_affected: Vec<Address> = cell_formats
+        .keys()
+        .filter(|a| a.sheet.0 >= at)
+        .copied()
+        .collect();
+    fmt_affected.sort_by_key(|a| std::cmp::Reverse(a.sheet.0));
+    for addr in fmt_affected {
+        let f = cell_formats.remove(&addr).expect("present");
+        cell_formats.insert(shift_addr(addr), f);
+    }
+    let mut cw_affected: Vec<(SheetId, u16)> =
+        col_widths.keys().filter(|(s, _)| s.0 >= at).copied().collect();
+    cw_affected.sort_by_key(|(s, _)| std::cmp::Reverse(s.0));
+    for key in cw_affected {
+        let w = col_widths.remove(&key).expect("present");
+        col_widths.insert((SheetId(key.0.0 + delta), key.1), w);
     }
 }
 

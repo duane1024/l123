@@ -1,0 +1,75 @@
+# /File Open After + Ctrl-End file navigation.
+#
+# Multi-file flow:
+#   1. Save one xlsx with A1=11.
+#   2. /File New After to start fresh; save a second xlsx with A1=22.
+#   3. /File Retrieve the first → only file A is "active".
+#   4. /File Open After → load file B as a second active file.
+#   5. Ctrl-End arms the FILE-navigation prefix.  The FILE indicator
+#      lights on the status line.
+#   6. Ctrl-PgDn while armed rotates to file B.  A1 reads 22.
+#   7. Ctrl-End then Ctrl-PgDn again rotates back to A.  A1 reads 11.
+
+RM_FILE target/m5_file_open_a.xlsx
+RM_FILE target/m5_file_open_b.xlsx
+
+# --- build A on disk ---
+KEYS 11
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS target/m5_file_open_a.xlsx
+ENTER
+ASSERT_MODE     READY
+
+# --- fresh file; build B on disk ---
+KEY /
+KEY F
+KEY N
+KEY A
+KEYS 22
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS target/m5_file_open_b.xlsx
+ENTER
+ASSERT_MODE     READY
+
+# --- start from A via /File Retrieve ---
+KEY /
+KEY F
+KEY R
+KEYS target/m5_file_open_a.xlsx
+ENTER
+ASSERT_MODE     READY
+ASSERT_CELL     A:A1  11
+
+# --- /FOA loads B alongside; current view stays on A ---
+KEY /
+KEY F
+KEY O
+ASSERT_MODE     MENU
+ASSERT_PANEL_L2 Before
+ASSERT_PANEL_L2 After
+KEY A
+KEYS target/m5_file_open_b.xlsx
+ENTER
+ASSERT_MODE     READY
+ASSERT_CELL     A:A1  11
+
+# --- Ctrl-End arms the FILE prefix; indicator visible ---
+CTRL_END
+ASSERT_STATUS   FILE
+
+# --- Ctrl-PgDn while armed swaps to file B ---
+CTRL_PGDN
+ASSERT_CELL     A:A1  22
+# Prefix should clear on use.
+ASSERT_MODE     READY
+
+# --- Ctrl-End + Ctrl-PgDn again rotates back to A ---
+CTRL_END
+CTRL_PGDN
+ASSERT_CELL     A:A1  11
