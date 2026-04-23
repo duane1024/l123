@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::{
@@ -76,6 +77,10 @@ pub struct App {
     /// typed name is stashed here after the prompt step and consumed by
     /// commit_point.
     pending_name: Option<String>,
+    /// Last-saved-to path for the current workbook. Prefilled into
+    /// subsequent /File Save prompts so re-save is a single Enter. `None`
+    /// until the user has saved at least once.
+    active_path: Option<PathBuf>,
 }
 
 /// Numeric (or short-text) prompt state for commands that need an argument
@@ -103,6 +108,9 @@ enum PromptNext {
     RangeNameCreate,
     /// After the user types a name, delete it from the engine.
     RangeNameDelete,
+    /// After the user types a filename, save the workbook to that path
+    /// as xlsx.
+    FileSaveFilename,
 }
 
 impl PromptNext {
@@ -114,8 +122,27 @@ impl PromptNext {
             PromptNext::RangeNameCreate | PromptNext::RangeNameDelete => {
                 c.is_ascii_alphanumeric() || c == '_'
             }
+            PromptNext::FileSaveFilename => is_path_char(c),
         }
     }
+}
+
+/// Characters accepted inside a filename/path prompt. Deliberately
+/// narrower than 1-2-3's "anything goes" — we exclude keys with menu
+/// semantics (`/`, period-free submenus). `/` is fine; `.` is fine.
+fn is_path_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, '.' | '-' | '_' | '/' | '\\' | ' ' | '~')
+}
+
+/// Resolve a user-typed filename into a save-target path. If the input
+/// has no extension, default to `.xlsx` (L123's modern save format).
+fn resolve_save_path(input: &str) -> PathBuf {
+    let mut p = PathBuf::from(input);
+    if p.extension().is_none() {
+        p.set_extension("xlsx");
+    }
+    p
 }
 
 /// Transient state while the user is selecting a cell/range in POINT mode.
@@ -205,6 +232,7 @@ impl App {
             point: None,
             prompt: None,
             pending_name: None,
+            active_path: None,
         }
     }
 
@@ -600,9 +628,25 @@ impl App {
             Action::RangeFormatText => self.begin_point(PendingCommand::RangeFormat {
                 format: Format { kind: FormatKind::Text, decimals: 0 },
             }),
+            Action::FileSave => self.start_file_save_prompt(),
             // Subsequent cycles wire these. For now, descent is a no-op.
             _ => self.close_menu(),
         }
+    }
+
+    fn start_file_save_prompt(&mut self) {
+        self.menu = None;
+        let (buffer, fresh) = match &self.active_path {
+            Some(p) => (p.to_string_lossy().into_owned(), true),
+            None => (String::new(), false),
+        };
+        self.prompt = Some(PromptState {
+            label: "Enter save file name:".into(),
+            buffer,
+            next: PromptNext::FileSaveFilename,
+            fresh,
+        });
+        self.mode = Mode::Menu;
     }
 
     fn insert_row_at_pointer(&mut self, n: u32) {
@@ -884,6 +928,20 @@ impl App {
                     let _ = self.engine.delete_name(&p.buffer);
                     self.engine.recalc();
                     self.refresh_formula_caches();
+                }
+                self.mode = Mode::Ready;
+            }
+            PromptNext::FileSaveFilename => {
+                if !p.buffer.is_empty() {
+                    let path = resolve_save_path(&p.buffer);
+                    if let Some(parent) = path.parent() {
+                        if !parent.as_os_str().is_empty() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                    }
+                    if self.engine.save_xlsx(&path).is_ok() {
+                        self.active_path = Some(path);
+                    }
                 }
                 self.mode = Mode::Ready;
             }
@@ -2129,5 +2187,54 @@ mod tests {
             }
             other => panic!("expected Label, got {other:?}"),
         }
+    }
+
+    /// End-to-end: /FS <path><Enter> writes an xlsx file at <path> that
+    /// IronCalc can open. The temp dir is unique per test invocation so
+    /// parallel runs don't collide.
+    #[test]
+    fn file_save_writes_xlsx_at_typed_path() {
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "l123_test_file_save_{}_{}",
+            process::id(),
+            nanos,
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("saved.xlsx");
+        if target.exists() {
+            std::fs::remove_file(&target).unwrap();
+        }
+
+        let mut app = App::new();
+        // Seed one cell.
+        for c in "42".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // /FS
+        for c in ['/', 'F', 'S'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        // Type the absolute path.
+        for c in target.to_str().unwrap().chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(
+            target.exists(),
+            "expected xlsx at {target:?} — prompt did not write the file"
+        );
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&dir);
     }
 }

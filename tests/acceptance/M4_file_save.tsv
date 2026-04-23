@@ -1,0 +1,33 @@
+# /File Save — filename prompt + commit, writes to CWD.
+#
+# Slice 1 covers the simple case: open the prompt, type a filename,
+# commit.  The Cancel/Replace/Backup submenu (when the target already
+# exists) lands in a later slice.
+#
+# The transcript writes to target/m4_file_save_acceptance.xlsx — the
+# target/ dir is always present and gitignored.  We verify UI state
+# only; the on-disk round-trip is covered by an app-level unit test
+# in crates/l123-ui/src/app.rs.
+
+# Seed one cell so the workbook has something to save.
+KEYS 42
+ENTER
+ASSERT_CELL      A:A1  42
+
+# /FS opens the filename prompt.  Mode stays MENU while the prompt
+# is active (reusing the menu mode for command-argument input).
+KEY /
+KEY F
+KEY S
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter save file name
+
+# Type a filename — buffer appears on line 2.
+KEYS target/m4_file_save_acceptance.xlsx
+ASSERT_PANEL_L2  target/m4_file_save_acceptance.xlsx
+
+# Commit — returns to READY, pointer unchanged.
+ENTER
+ASSERT_MODE      READY
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1  42

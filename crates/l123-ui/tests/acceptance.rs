@@ -21,6 +21,12 @@ fn workspace_root() -> PathBuf {
 }
 
 fn run_transcript(path: &Path) {
+    // Run each transcript with CWD set to the workspace root. All
+    // transcripts share the same CWD, so this is safe under cargo's
+    // parallel test harness. Transcripts that write files (M4+) use
+    // paths relative to this root (e.g. `target/foo.xlsx`).
+    let _ = std::env::set_current_dir(workspace_root());
+
     let body = fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
@@ -238,4 +244,5 @@ transcripts! {
     m3_wg_recalc       => "M3_wg_recalc.tsv",
     m3_ws_col_width    => "M3_ws_col_width.tsv",
     m3_range_name      => "M3_range_name.tsv",
+    m4_file_save       => "M4_file_save.tsv",
 }

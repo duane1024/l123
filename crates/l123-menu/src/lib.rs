@@ -69,6 +69,7 @@ pub enum Action {
     RangeFormatReset,
     Copy,
     Move,
+    FileSave,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -599,7 +600,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'S',
         name: "Save",
         help: "Save all active files",
-        body: MenuBody::NotImplemented("f-save"),
+        body: MenuBody::Action(Action::FileSave),
     },
     MenuItem {
         letter: 'C',
