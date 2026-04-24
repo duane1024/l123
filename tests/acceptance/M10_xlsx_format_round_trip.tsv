@@ -1,0 +1,62 @@
+# Per-cell number formats (Currency, Percent) survive /File Save →
+# /File Retrieve. Regression coverage for the bug where cell formats
+# set in an external xlsx (or set in l123 and saved back) rendered
+# as General on reopen because the loader never read the engine's
+# per-cell num_fmt.
+
+SIZE 200 25
+RM_FILE $TMPDIR/m10_xlsx_format_round_trip.xlsx
+
+# A1 = 10000 with /RFC 2 → $10000.00.
+KEYS 10000
+ENTER
+HOME
+KEY /
+KEY R
+KEY F
+KEY C
+ASSERT_PANEL_L2   2
+ENTER
+ENTER
+ASSERT_PANEL_L1   A:A1: (C2) 10000
+ASSERT_CELL       A:A1  $10000.00
+
+# A2 = 0.125 with /RFP 1 → 12.5%.
+DOWN
+KEYS 0.125
+ENTER
+HOME
+DOWN
+KEY /
+KEY R
+KEY F
+KEY P
+KEY 1
+ENTER
+ENTER
+ASSERT_PANEL_L1   A:A2: (P1) 0.125
+ASSERT_CELL       A:A2  12.5%
+
+# /FS to xlsx.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m10_xlsx_format_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+
+# /FR the same file — formats should return intact.
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/m10_xlsx_format_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+
+# Currency and percent tags + rendered cell text both survive round-trip.
+ASSERT_POINTER    A:A1
+ASSERT_PANEL_L1   A:A1: (C2) 10000
+ASSERT_CELL       A:A1  $10000.00
+DOWN
+ASSERT_PANEL_L1   A:A2: (P1) 0.125
+ASSERT_CELL       A:A2  12.5%

@@ -1,0 +1,49 @@
+# Mouse click-to-move-pointer — Phase 1 of authentic R3.4a mouse
+# support. Click a cell in READY and the cell pointer jumps there.
+# Clicks on the column header, row gutter, or non-grid areas are
+# ignored (Phase 2 adds full-row/full-column select).
+#
+# Default layout at 80×25:
+#   control panel y 0..4, grid y 4..24 (header at y=4, body y>=5),
+#   status y=24. ROW_GUTTER=5, default col width 9, so col A
+#   occupies x [5,14), col B [14,23), col C [23,32).
+
+# Start state: pointer at A1, mode READY.
+ASSERT_POINTER A:A1
+ASSERT_MODE READY
+
+# Click inside column B, body row 3 (y = 5 + 2 = 7).
+MOUSE_CLICK 16 7
+ASSERT_POINTER A:B3
+ASSERT_MODE READY
+
+# Click inside column C, body row 1.
+MOUSE_CLICK 25 5
+ASSERT_POINTER A:C1
+
+# Clicking the column-header row (y=4) is reserved for Phase 2 and
+# must not move the pointer.
+MOUSE_CLICK 16 4
+ASSERT_POINTER A:C1
+
+# Clicking inside the row-number gutter (x in [0,5)) is reserved
+# for Phase 2 and must not move the pointer.
+MOUSE_CLICK 2 7
+ASSERT_POINTER A:C1
+
+# Clicking on the bottom status line must not move the pointer.
+MOUSE_CLICK 10 24
+ASSERT_POINTER A:C1
+
+# A click outside READY (while in MENU) must not move the pointer.
+KEY /
+ASSERT_MODE MENU
+MOUSE_CLICK 16 7
+ASSERT_POINTER A:C1
+ASSERT_MODE MENU
+
+# Escape back to READY; click now takes effect again.
+ESC
+ASSERT_MODE READY
+MOUSE_CLICK 7 5
+ASSERT_POINTER A:A1

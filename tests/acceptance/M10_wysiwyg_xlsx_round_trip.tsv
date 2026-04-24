@@ -1,0 +1,57 @@
+# WYSIWYG text styles survive /File Save → /File Retrieve.
+#
+# Bold + italic on A1, underline on A2.  Write to xlsx, reopen, and
+# verify both cells still carry their styles and that the `{…}` marker
+# is back on line 1 for the re-pointered cell.
+
+SIZE 200 25
+RM_FILE $TMPDIR/m10_wysiwyg_xlsx_round_trip.xlsx
+
+# Seed A1 = 'hi bold + italic.
+KEYS hi
+ENTER
+KEY :
+KEY F
+KEY B
+KEY S
+ENTER
+KEY :
+KEY F
+KEY I
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold Italic
+ASSERT_PANEL_L1   {Bold Italic}
+
+# Seed A2 = 'bye underlined.
+DOWN
+KEYS bye
+ENTER
+KEY :
+KEY F
+KEY U
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A2  Underline
+
+# /FS to xlsx.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m10_wysiwyg_xlsx_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+
+# /FR the same file — styles should return intact.
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/m10_wysiwyg_xlsx_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL_STYLE A:A1  Bold Italic
+ASSERT_CELL_STYLE A:A2  Underline
+
+# Pointer is at A1 after retrieve — line 1 should show the marker again.
+ASSERT_POINTER    A:A1
+ASSERT_PANEL_L1   {Bold Italic}

@@ -50,6 +50,10 @@ pub struct Config {
     pub organization: Setting,
     pub log_file: Setting,
     pub log_filter: Setting,
+    /// Whether the error-beep (terminal bell on edge collisions,
+    /// invalid input, etc.) is active. Stored as a canonical
+    /// `"true"`/`"false"` string — see [`Config::error_beep_enabled`].
+    pub error_beep: Setting,
     /// Path that was searched for the config file (always reported,
     /// even if the file doesn't exist).
     pub file_path: Option<PathBuf>,
@@ -84,6 +88,11 @@ pub const KEYS: &[KeyInfo] = &[
         key: "log_filter",
         env_var: Some("RUST_LOG"),
         description: "tracing EnvFilter directive (e.g. `l123=debug`).",
+    },
+    KeyInfo {
+        key: "error_beep",
+        env_var: Some("L123_BEEP"),
+        description: "Soft terminal bell on edge collisions (true/false).",
     },
 ];
 
@@ -167,15 +176,23 @@ impl Config {
         );
         let log_file = pick(src, "L123_LOG", file.log_file.as_deref(), "");
         let log_filter = pick(src, "RUST_LOG", file.log_filter.as_deref(), "");
+        let error_beep = pick_bool(src, "L123_BEEP", file.error_beep, true);
 
         Config {
             user,
             organization,
             log_file,
             log_filter,
+            error_beep,
             file_path,
             file_found,
         }
+    }
+
+    /// Effective value for `error_beep`. Default is `true` — match the
+    /// behavior of 1-2-3 R3, which always beeped on edge collisions.
+    pub fn error_beep_enabled(&self) -> bool {
+        parse_bool(&self.error_beep.value).unwrap_or(true)
     }
 
     /// Effective value for `log_file`, or `None` when unset.
@@ -223,6 +240,7 @@ impl Config {
             "organization" => Some(&self.organization),
             "log_file" => Some(&self.log_file),
             "log_filter" => Some(&self.log_filter),
+            "error_beep" => Some(&self.error_beep),
             _ => None,
         }
     }
@@ -244,6 +262,51 @@ fn pick(src: &dyn ConfigSource, env_var: &str, file: Option<&str>, default: &str
     Setting {
         value: default.to_string(),
         source: Source::Default,
+    }
+}
+
+/// Like `pick`, but the value is typed as a boolean. Accepts
+/// `true/false`, `on/off`, `yes/no`, `1/0` (case-insensitive); any
+/// other string is treated as unset and falls through. The resolved
+/// [`Setting::value`] is always the canonical `"true"`/`"false"`
+/// string so downstream formatters don't have to normalize.
+fn pick_bool(src: &dyn ConfigSource, env_var: &str, file: Option<bool>, default: bool) -> Setting {
+    if let Some(raw) = src.var(env_var).filter(|s| !s.is_empty()) {
+        if let Some(v) = parse_bool(&raw) {
+            return Setting {
+                value: canonical_bool(v),
+                source: Source::Env,
+            };
+        }
+    }
+    if let Some(v) = file {
+        return Setting {
+            value: canonical_bool(v),
+            source: Source::File,
+        };
+    }
+    Setting {
+        value: canonical_bool(default),
+        source: Source::Default,
+    }
+}
+
+fn canonical_bool(v: bool) -> String {
+    if v {
+        "true".into()
+    } else {
+        "false".into()
+    }
+}
+
+/// Parse a boolean literal. `None` when the text doesn't match any
+/// recognized form — callers decide what to do (usually: keep the
+/// previous tier's value).
+pub fn parse_bool(s: &str) -> Option<bool> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "true" | "on" | "yes" | "1" => Some(true),
+        "false" | "off" | "no" | "0" => Some(false),
+        _ => None,
     }
 }
 
@@ -291,6 +354,9 @@ pub struct ConfigFile {
     pub organization: Option<String>,
     pub log_file: Option<String>,
     pub log_filter: Option<String>,
+    /// `Some(true|false)` when the user wrote a recognized boolean;
+    /// `None` when the key was absent or the value couldn't be parsed.
+    pub error_beep: Option<bool>,
 }
 
 /// Parse `key = value` lines. Accepts `"..."`, `'...'`, or bare values.
@@ -316,6 +382,7 @@ pub fn parse_config_body(body: &str) -> ConfigFile {
             "org" | "organization" => out.organization = Some(value),
             "log_file" | "log" => out.log_file = Some(value),
             "log_filter" | "rust_log" => out.log_filter = Some(value),
+            "error_beep" | "beep" => out.error_beep = parse_bool(&value),
             _ => {}
         }
     }
@@ -346,6 +413,12 @@ pub const SAMPLE_CNF: &str = "\
 # tracing EnvFilter directive, e.g. `l123=debug,ironcalc=info`.
 # Defaults to `info` when log_file is set. Env: RUST_LOG.
 # log_filter = \"info\"
+
+# Soft terminal bell when the pointer hits an edge of the sheet
+# (up from row 1, left from column A, etc.), matching the 1-2-3 R3
+# behavior. Accepts true/false, on/off, yes/no, 1/0. Default: true.
+# Env: L123_BEEP. (alias: beep)
+# error_beep = true
 ";
 
 #[cfg(test)]
@@ -563,6 +636,66 @@ mod tests {
         let cfg = Config::resolve_with(&src);
         assert_eq!(cfg.log_file.value, "");
         assert_eq!(cfg.log_file.source, Source::Default);
+    }
+
+    #[test]
+    fn error_beep_defaults_to_true() {
+        let src = MockSource::new();
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.error_beep.value, "true");
+        assert_eq!(cfg.error_beep.source, Source::Default);
+        assert!(cfg.error_beep_enabled());
+    }
+
+    #[test]
+    fn error_beep_from_file_false() {
+        let src = MockSource::new().with_file("error_beep = false\n");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.error_beep.value, "false");
+        assert_eq!(cfg.error_beep.source, Source::File);
+        assert!(!cfg.error_beep_enabled());
+    }
+
+    #[test]
+    fn error_beep_file_alias_beep_accepts_on_off() {
+        let src = MockSource::new().with_file("beep = off\n");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.error_beep.value, "false");
+        assert!(!cfg.error_beep_enabled());
+    }
+
+    #[test]
+    fn error_beep_env_beats_file() {
+        let src = MockSource::new()
+            .with_file("error_beep = false\n")
+            .with_var("L123_BEEP", "true");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.error_beep.value, "true");
+        assert_eq!(cfg.error_beep.source, Source::Env);
+        assert!(cfg.error_beep_enabled());
+    }
+
+    #[test]
+    fn error_beep_unparseable_env_falls_through_to_file() {
+        let src = MockSource::new()
+            .with_file("error_beep = false\n")
+            .with_var("L123_BEEP", "maybe");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.error_beep.value, "false");
+        assert_eq!(cfg.error_beep.source, Source::File);
+    }
+
+    #[test]
+    fn parse_bool_recognizes_common_forms() {
+        for s in ["true", "TRUE", "on", "Yes", "1"] {
+            assert_eq!(parse_bool(s), Some(true), "input: {s}");
+        }
+        for s in ["false", "FALSE", "off", "No", "0"] {
+            assert_eq!(parse_bool(s), Some(false), "input: {s}");
+        }
+        for s in ["", "maybe", "2", "y"] {
+            assert_eq!(parse_bool(s), None, "input: {s}");
+        }
     }
 
     #[test]

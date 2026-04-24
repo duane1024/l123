@@ -1,0 +1,51 @@
+# Edge-collision beep — matches the original 1-2-3 R3 behavior of
+# emitting a terminal bell when the pointer can't move further in the
+# requested direction. Counter is bumped once per clamped arrow press;
+# a successful move does not bump. /Worksheet Global Default Other Beep
+# Disable turns the beeper off, /Enable turns it back on.
+
+ASSERT_POINTER      A:A1
+ASSERT_BEEP_COUNT   0
+
+# Top edge: up from row 1 clamps + beeps.
+UP
+ASSERT_POINTER      A:A1
+ASSERT_BEEP_COUNT   1
+
+# Left edge: left from column A clamps + beeps.
+LEFT
+ASSERT_POINTER      A:A1
+ASSERT_BEEP_COUNT   2
+
+# Successful moves don't beep.
+DOWN
+ASSERT_POINTER      A:A2
+ASSERT_BEEP_COUNT   2
+
+RIGHT
+ASSERT_POINTER      A:B2
+ASSERT_BEEP_COUNT   2
+
+# Back to A1 for the disable path.
+UP
+LEFT
+ASSERT_POINTER      A:A1
+ASSERT_BEEP_COUNT   2
+
+# Disable via menu: /Worksheet Global Default Other Beep Disable.
+KEYS  /wgdobd
+ASSERT_MODE         READY
+
+# Edge presses with beep disabled don't bump the counter.
+UP
+LEFT
+UP
+ASSERT_POINTER      A:A1
+ASSERT_BEEP_COUNT   2
+
+# Re-enable, confirm it wakes up again.
+KEYS  /wgdobe
+ASSERT_MODE         READY
+
+UP
+ASSERT_BEEP_COUNT   3

@@ -29,23 +29,57 @@ pub enum SpillSlot<'a> {
 /// * values, formula results, and non-empty neighbors hard-stop the
 ///   spill, and the label truncates at its own column boundary.
 ///
-/// Returns a `Vec` the same length as `slots`; entry `i` is exactly
-/// `widths[i]` chars wide. Callers paint each slot with its own
-/// styling (e.g. per-column highlight) — spill does not fold slot
-/// boundaries into a single style run.
-pub fn plan_row_spill(slots: &[SpillSlot<'_>], widths: &[usize]) -> Vec<String> {
+/// Returns a `Vec` the same length as `slots`; `entry.text` is exactly
+/// `widths[i]` chars wide.  `entry.owner` is the slot index whose cell
+/// the painted text belongs to — equal to `i` for a slot's own content
+/// (including plain `Empty` spacers), and the spilling label's index
+/// for spill-overflow slots.  Callers use `owner` to pick the correct
+/// per-cell styling (WYSIWYG text style, highlight, …) so that spill
+/// renders in the owner's style, not the destination cell's.
+#[derive(Debug, Clone)]
+pub struct PaintedSlot {
+    pub text: String,
+    pub owner: usize,
+}
+
+/// `PaintedSlot == "literal"` compares just the text.  Lets existing
+/// text-only assertions in tests stay terse; new tests probe `owner`
+/// explicitly.
+impl PartialEq<&str> for PaintedSlot {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<PaintedSlot> for &str {
+    fn eq(&self, other: &PaintedSlot) -> bool {
+        other.text == *self
+    }
+}
+
+pub fn plan_row_spill(slots: &[SpillSlot<'_>], widths: &[usize]) -> Vec<PaintedSlot> {
     assert_eq!(
         slots.len(),
         widths.len(),
         "plan_row_spill: slots/widths length mismatch"
     );
-    let mut out: Vec<String> = widths.iter().map(|w| " ".repeat(*w)).collect();
+    let mut out: Vec<PaintedSlot> = widths
+        .iter()
+        .enumerate()
+        .map(|(i, w)| PaintedSlot {
+            text: " ".repeat(*w),
+            owner: i,
+        })
+        .collect();
     let mut claimed: Vec<bool> = vec![false; slots.len()];
 
     for i in 0..slots.len() {
         match &slots[i] {
             SpillSlot::Rendered(s) => {
-                out[i] = s.clone();
+                out[i] = PaintedSlot {
+                    text: s.clone(),
+                    owner: i,
+                };
                 claimed[i] = true;
             }
             SpillSlot::Empty => {}
@@ -53,7 +87,10 @@ pub fn plan_row_spill(slots: &[SpillSlot<'_>], widths: &[usize]) -> Vec<String> 
                 let own_w = widths[i];
                 let text_len = text.chars().count();
                 if *prefix == LabelPrefix::Backslash || text_len <= own_w {
-                    out[i] = render_label(*prefix, text, own_w);
+                    out[i] = PaintedSlot {
+                        text: render_label(*prefix, text, own_w),
+                        owner: i,
+                    };
                     claimed[i] = true;
                     continue;
                 }
@@ -71,7 +108,10 @@ pub fn plan_row_spill(slots: &[SpillSlot<'_>], widths: &[usize]) -> Vec<String> 
                     let w = widths[k];
                     let slice: String = chars.iter().skip(idx).take(w).collect();
                     idx += w;
-                    out[k] = slice;
+                    out[k] = PaintedSlot {
+                        text: slice,
+                        owner: i,
+                    };
                     claimed[k] = true;
                 }
             }
@@ -344,6 +384,59 @@ mod tests {
         let got = plan_row_spill(&slots, &[9, 9]);
         assert_eq!(got[0], "---------");
         assert_eq!(got[1], "         ");
+    }
+
+    #[test]
+    fn apostrophe_spill_carries_owner_index_into_spilled_slots() {
+        let slots = [
+            label(LabelPrefix::Apostrophe, "INCOME SUMMARY 1991"),
+            SpillSlot::Empty,
+            SpillSlot::Empty,
+        ];
+        let got = plan_row_spill(&slots, &[9, 9, 9]);
+        // The spilling label lives at slot 0; every slot it overflows
+        // into carries `owner = 0` so the UI can apply slot 0's style
+        // to the spillover characters.
+        assert_eq!(got[0].owner, 0);
+        assert_eq!(got[1].owner, 0);
+        assert_eq!(got[2].owner, 0);
+    }
+
+    #[test]
+    fn non_spilled_slots_own_themselves() {
+        let slots = [
+            label(LabelPrefix::Apostrophe, "short"),
+            SpillSlot::Empty,
+            rendered("    1234 "),
+        ];
+        let got = plan_row_spill(&slots, &[9, 9, 9]);
+        assert_eq!(got[0].owner, 0); // the label
+        assert_eq!(got[1].owner, 1); // an untouched Empty
+        assert_eq!(got[2].owner, 2); // the rendered value
+    }
+
+    #[test]
+    fn quote_spill_carries_owner_leftward() {
+        let slots = [
+            SpillSlot::Empty,
+            label(LabelPrefix::Quote, "right-align spill"),
+        ];
+        let got = plan_row_spill(&slots, &[9, 9]);
+        assert_eq!(got[0].owner, 1);
+        assert_eq!(got[1].owner, 1);
+    }
+
+    #[test]
+    fn caret_spill_carries_owner_both_sides() {
+        let slots = [
+            SpillSlot::Empty,
+            label(LabelPrefix::Caret, "centered text"),
+            SpillSlot::Empty,
+        ];
+        let got = plan_row_spill(&slots, &[9, 9, 9]);
+        assert_eq!(got[0].owner, 1);
+        assert_eq!(got[1].owner, 1);
+        assert_eq!(got[2].owner, 1);
     }
 
     #[test]

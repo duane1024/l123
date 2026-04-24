@@ -39,6 +39,8 @@ and its argument (separated by tabs or spaces). `#` starts a comment.
 | `ASSERT_STATUS <substr>` | Assert status line contains `<substr>` |
 | `ASSERT_SCREEN <substr>` | Assert some row of the rendered buffer contains `<substr>` (useful for overlays like `/File List`) |
 | `ASSERT_RUNNING <true\|false>` | Assert app running state |
+| `ASSERT_CELL_STYLE <addr> <marker\|plain>` | Assert the cell's WYSIWYG text style. Marker is the space-joined form used on line 1 (`Bold`, `Bold Italic`, `Bold Italic Underline`). Use `plain` or an empty trailer for cells with no style override. |
+| `ASSERT_BEEP_COUNT <n>` | Assert the cumulative error-beep count (bumped once per edge-collision or equivalent invalid move; unaffected while beep is disabled). |
 
 ### Misc
 
@@ -48,6 +50,9 @@ and its argument (separated by tabs or spaces). `#` starts a comment.
 | `RM_FILE <path>` | Delete a file on disk (ignored if missing). Use at the top of a transcript to start from a known state. |
 | `ASSERT_FILE_CONTAINS <path>  <substr>` | Assert the named file's text contents contain `<substr>`. Supports `\n`, `\t`, `\f`, `\\` escapes in the substring. |
 | `ASSERT_FILE_NOT_CONTAINS <path>  <substr>` | Negation of the above. |
+| `HOVER_ICON <panel> <slot>` | Pin the icon-bar hover state as if the mouse were over `(panel, slot)`, where panel is `1..=7` and slot is `0..=16`. Drives control-panel line 3's hover-description tooltip. Transcripts use this instead of synthetic mouse-move events because the headless render buffer doesn't materialize a real icon panel to hit-test against. |
+| `HOVER_CLEAR` | Clear the hover state set by a prior `HOVER_ICON`. |
+| `MOUSE_CLICK <col> <row>` | Synthesize a left-button mouse-down at the given terminal coordinates. Drives grid click-to-move-pointer (READY mode) and — if you pre-stash the icon panel rect elsewhere — icon panel clicks. The directive renders a frame first so `last_grid_area` is populated, mirroring what the real event loop does between frames. |
 
 ### Filesystem sandbox
 

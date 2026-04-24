@@ -1,0 +1,25 @@
+# Control-panel line 1: the `{Style}` marker sits after the numeric
+# format tag `(…)` and before the cell contents.  Plain cells show
+# no marker at all.
+
+# Type a number so the cell picks up a (G) format tag.
+KEYS 12345
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 12345
+
+# Plain: no `{` on the panel line.
+ASSERT_CELL_STYLE A:A1  plain
+
+# Apply bold via `:FBS~`.
+KEY :
+KEY F
+KEY B
+KEY S
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL_STYLE A:A1  Bold
+
+# Format tag stays; style marker appears between it and the contents.
+ASSERT_PANEL_L1   (G) {Bold}
+ASSERT_PANEL_L1   {Bold} 12345

@@ -1,0 +1,47 @@
+# Icon-bar hover tooltips — SPEC §20 #11 "mouse activation" +
+# authentic R3.4a behavior of showing icon descriptions on hover.
+# The description is routed to control-panel line 3 (the same slot
+# used for menu-item help text; see SPEC §4).
+#
+# Transcripts poke App::set_hovered_icon directly via the
+# HOVER_ICON / HOVER_CLEAR directives — the headless render buffer
+# has no real icon panel to hit-test against, so we test the
+# render contract here and leave the mouse-coord plumbing to
+# unit tests.
+
+# Fresh READY: line 3 is blank.
+ASSERT_MODE READY
+ASSERT_PANEL_L3
+
+# Panel 1 slot 0 is the Save icon (icon id #5).
+HOVER_ICON 1 0
+ASSERT_PANEL_L3 Saves the current worksheet file
+
+# Clearing the hover returns line 3 to blank.
+HOVER_CLEAR
+ASSERT_PANEL_L3
+
+# Panel 1 slot 11 is :Format Bold Set.
+HOVER_ICON 1 11
+ASSERT_PANEL_L3 bold
+
+# Switching panels: panel 3 slot 5 is :Format Color-Background
+# (icon 17 = "currency" — panel 3 is Format & WYSIWYG; slot 5
+# resolves to icon 17 per Panel::Three::icon_ids).
+HOVER_ICON 3 5
+ASSERT_PANEL_L3 currency
+
+# Hover during LABEL entry must not steal line 3 — the entry
+# buffer owns line 2, and line 3 stays blank (not the hover
+# description), so the user's in-progress work is never masked.
+HOVER_CLEAR
+KEYS hello
+ASSERT_MODE LABEL
+HOVER_ICON 1 0
+ASSERT_PANEL_L2 hello
+ASSERT_PANEL_L3
+
+# Escape back to READY, then confirm the hover text reappears.
+ESC
+ASSERT_MODE READY
+ASSERT_PANEL_L3 Saves the current worksheet file

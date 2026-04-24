@@ -23,7 +23,7 @@ use crossterm::{
 use l123_core::{
     address::col_to_letters, label::is_value_starter, plan_row_spill, render_value_in_cell,
     Address, CellContents, ErrKind, Format, FormatKind, LabelPrefix, Mode, Range, SheetId,
-    SpillSlot, Value,
+    SpillSlot, TextStyle, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
@@ -45,6 +45,16 @@ use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
 const PANEL_HEIGHT: u16 = 4; // 3 content lines + 1 bottom border
+
+/// Emit a single BEL character to stdout and flush. The terminal's
+/// own preferences decide whether that rings, flashes, or is ignored —
+/// matching the soft, user-configurable behavior the user asked for.
+fn emit_bell() {
+    use std::io::Write;
+    let mut out = io::stdout();
+    let _ = out.write_all(b"\x07");
+    let _ = out.flush();
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum EntryKind {
@@ -110,6 +120,10 @@ struct Workbook {
     engine: IronCalcEngine,
     cells: HashMap<Address, CellContents>,
     cell_formats: HashMap<Address, Format>,
+    /// Per-cell text-style overrides (bold / italic / underline) set
+    /// by the WYSIWYG `:Format Bold|Italic|Underline Set|Clear`
+    /// commands.  Empty style = no entry.
+    cell_text_styles: HashMap<Address, TextStyle>,
     col_widths: HashMap<(SheetId, u16), u8>,
     /// Workbook-wide default column width (1..240). Applied to any
     /// column without a `col_widths` entry. Set by `/Worksheet Global
@@ -145,6 +159,7 @@ impl Workbook {
             engine: IronCalcEngine::new().expect("IronCalc engine init"),
             cells: HashMap::new(),
             cell_formats: HashMap::new(),
+            cell_text_styles: HashMap::new(),
             col_widths: HashMap::new(),
             default_col_width: 9,
             hidden_cols: HashSet::new(),
@@ -267,6 +282,11 @@ pub struct App {
     /// clicks can hit-test against it without recomputing the layout.
     /// Cleared at the top of each frame; re-set by `render_icon_panel`.
     icon_panel_area: Cell<Option<Rect>>,
+    /// Icon slot the mouse is currently over, if any. Drives the
+    /// hover description in control-panel line 3 during READY. Slot 16
+    /// (the pager) is intentionally excluded — its function is obvious
+    /// from its rendered label.
+    hovered_icon: Option<(l123_graph::Panel, usize)>,
     /// Rect the spreadsheet grid last occupied on screen. Cursor moves
     /// happen between renders, so `scroll_into_view` reads this stale
     /// rect to decide whether the new pointer fits below/right of the
@@ -278,6 +298,20 @@ pub struct App {
     /// dispatching. Always `None` for `App::new()` so existing
     /// transcripts aren't blocked on a dismiss keystroke.
     splash: Option<SplashInfo>,
+    /// When true, the pointer-edge collision path fires a soft
+    /// terminal bell (BEL, `\x07`). Toggled at runtime by
+    /// `/Worksheet Global Default Other Beep Enable|Disable`; the
+    /// startup value is seeded from [`crate::Config::error_beep_enabled`].
+    beep_enabled: bool,
+    /// Monotonic count of beep requests observed so far. Driven by
+    /// [`App::request_beep`] and exposed for acceptance-transcript
+    /// assertions — the TUI itself never reads it.
+    beep_count: u64,
+    /// Set by [`App::request_beep`] and consumed by
+    /// [`App::take_pending_beep`] once per event-loop iteration so
+    /// the terminal bell is emitted at most once per frame no matter
+    /// how many times it was requested.
+    beep_pending: bool,
 }
 
 /// User-visible identity shown on the startup splash. The renderer
@@ -426,6 +460,7 @@ enum JournalEntry {
         at: u32,
         cells: Vec<(Address, CellContents)>,
         formats: Vec<(Address, Format)>,
+        text_styles: Vec<(Address, TextStyle)>,
     },
     /// Undo of a row insert: delete the row that was inserted.
     RowInsert { sheet: SheetId, at: u32 },
@@ -435,6 +470,7 @@ enum JournalEntry {
         at: u16,
         cells: Vec<(Address, CellContents)>,
         formats: Vec<(Address, Format)>,
+        text_styles: Vec<(Address, TextStyle)>,
     },
     /// Undo of a column insert: delete the column that was inserted.
     ColInsert { sheet: SheetId, at: u16 },
@@ -443,12 +479,18 @@ enum JournalEntry {
     RangeRestore {
         cells: Vec<(Address, CellContents)>,
         formats: Vec<(Address, Format)>,
+        text_styles: Vec<(Address, TextStyle)>,
     },
     /// Restore per-cell format overrides after `/Range Format`. Each
     /// entry's `Option<Format>` is the pre-command format (None ==
     /// no override).
     RangeFormat {
         entries: Vec<(Address, Option<Format>)>,
+    },
+    /// Restore per-cell text-style overrides after `:Format
+    /// Bold|Italic|Underline Set|Clear`.  `None` = no override before.
+    RangeTextStyle {
+        entries: Vec<(Address, Option<TextStyle>)>,
     },
     /// Restore one column's width. `prev_width = None` means the
     /// column had no override (default width).
@@ -836,6 +878,14 @@ enum PendingCommand {
     RangeFormat {
         format: Format,
     },
+    /// `:Format Bold|Italic|Underline Set|Clear`: `bits` names which
+    /// attributes the command touches; `set=true` ORs them in, `false`
+    /// clears them.  `:Format Reset` sends `{bold,italic,underline}`
+    /// with `set=false`.
+    RangeTextStyle {
+        bits: TextStyle,
+        set: bool,
+    },
     /// `pending_name` on App carries the name; on commit, define it over
     /// the selected range.
     RangeNameCreate,
@@ -887,6 +937,7 @@ impl PendingCommand {
             PendingCommand::MoveTo { .. } => "Enter range to move TO:",
             PendingCommand::RangeLabel { .. } => "Enter range for label-prefix change:",
             PendingCommand::RangeFormat { .. } => "Enter range to format:",
+            PendingCommand::RangeTextStyle { .. } => "Enter range for style:",
             PendingCommand::RangeNameCreate => "Enter range for the named range:",
             PendingCommand::FileXtractRange { .. } => "Enter range to extract:",
             PendingCommand::PrintFileRange => "Enter range to print:",
@@ -983,8 +1034,12 @@ impl App {
             icon_panel: None,
             current_panel: l123_graph::Panel::One,
             icon_panel_area: Cell::new(None),
+            hovered_icon: None,
             last_grid_area: Cell::new(None),
             splash: None,
+            beep_enabled: true,
+            beep_count: 0,
+            beep_pending: false,
         }
     }
 
@@ -1028,6 +1083,20 @@ impl App {
         self.splash = Some(SplashInfo { user, organization });
     }
 
+    /// Pin the hover state for the acceptance harness. Production
+    /// code drives this via mouse-move events in `handle_mouse`; the
+    /// harness renders into a headless buffer where no real mouse
+    /// coordinates map to the (unrendered) icon panel, so transcripts
+    /// set this directly to exercise the render contract.
+    pub fn set_hovered_icon(&mut self, panel: l123_graph::Panel, slot: usize) {
+        self.hovered_icon = Some((panel, slot));
+    }
+
+    /// Companion to [`Self::set_hovered_icon`].
+    pub fn clear_hovered_icon(&mut self) {
+        self.hovered_icon = None;
+    }
+
     /// True while the startup splash is up.
     pub fn splash_active(&self) -> bool {
         self.splash.is_some()
@@ -1067,13 +1136,12 @@ impl App {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
+        let cfg = crate::Config::resolve();
         let mut app = match path {
             Some(p) => App::new_with_file(p),
-            None => {
-                let id = crate::identity::Identity::resolve();
-                App::new_with_splash(id.user, id.organization)
-            }
+            None => App::new_with_splash(cfg.user.value.clone(), cfg.organization.value.clone()),
         };
+        app.set_beep_enabled(cfg.error_beep_enabled());
         app.probe_image_picker();
         let result = app.event_loop(&mut terminal);
 
@@ -1097,6 +1165,9 @@ impl App {
     {
         while self.running {
             terminal.draw(|f| self.render(f.area(), f.buffer_mut()))?;
+            if self.take_pending_beep() {
+                emit_bell();
+            }
             if event::poll(Duration::from_millis(100))? {
                 match event::read()? {
                     Event::Key(k) if k.kind == KeyEventKind::Press => self.handle_key(k),
@@ -1216,6 +1287,15 @@ impl App {
         Some(s)
     }
 
+    /// Read back the text-style override for a cell by address
+    /// (`"A:B5"` or `"B5"`).  Returns `None` if the cell has no
+    /// override (i.e. plain).  Used by the acceptance harness's
+    /// `ASSERT_CELL_STYLE` directive.
+    pub fn cell_text_style(&self, addr: &str) -> Option<TextStyle> {
+        let a = Address::parse(addr).ok()?;
+        self.wb().cell_text_styles.get(&a).copied()
+    }
+
     // ---------------- key handling ----------------
 
     pub fn handle_key(&mut self, k: KeyEvent) {
@@ -1329,6 +1409,7 @@ impl App {
             KeyCode::F(9) => self.do_recalc(),
             KeyCode::F(10) => self.enter_graph_view(),
             KeyCode::Char('/') => self.open_menu(),
+            KeyCode::Char(':') => self.open_wysiwyg_menu(),
             KeyCode::Char(c) => self.begin_entry(c),
             _ => {}
         }
@@ -1537,6 +1618,7 @@ impl App {
                 at,
                 cells,
                 formats,
+                text_styles,
             } => {
                 if self.wb_mut().engine.insert_rows(sheet, at, 1).is_ok() {
                     shift_cells_rows(&mut self.wb_mut().cells, sheet, at, 1);
@@ -1546,6 +1628,9 @@ impl App {
                     }
                     for (addr, fmt) in formats {
                         self.wb_mut().cell_formats.insert(addr, fmt);
+                    }
+                    for (addr, style) in text_styles {
+                        self.wb_mut().cell_text_styles.insert(addr, style);
                     }
                 }
             }
@@ -1557,6 +1642,9 @@ impl App {
                     self.wb_mut()
                         .cell_formats
                         .retain(|a, _| !(a.sheet == sheet && a.row == at));
+                    self.wb_mut()
+                        .cell_text_styles
+                        .retain(|a, _| !(a.sheet == sheet && a.row == at));
                     shift_cells_rows(&mut self.wb_mut().cells, sheet, at + 1, -1);
                 }
             }
@@ -1565,6 +1653,7 @@ impl App {
                 at,
                 cells,
                 formats,
+                text_styles,
             } => {
                 if self.wb_mut().engine.insert_cols(sheet, at, 1).is_ok() {
                     shift_cells_cols(&mut self.wb_mut().cells, sheet, at, 1);
@@ -1574,6 +1663,9 @@ impl App {
                     }
                     for (addr, fmt) in formats {
                         self.wb_mut().cell_formats.insert(addr, fmt);
+                    }
+                    for (addr, style) in text_styles {
+                        self.wb_mut().cell_text_styles.insert(addr, style);
                     }
                 }
             }
@@ -1585,16 +1677,26 @@ impl App {
                     self.wb_mut()
                         .cell_formats
                         .retain(|a, _| !(a.sheet == sheet && a.col == at));
+                    self.wb_mut()
+                        .cell_text_styles
+                        .retain(|a, _| !(a.sheet == sheet && a.col == at));
                     shift_cells_cols(&mut self.wb_mut().cells, sheet, at + 1, -1);
                 }
             }
-            JournalEntry::RangeRestore { cells, formats } => {
+            JournalEntry::RangeRestore {
+                cells,
+                formats,
+                text_styles,
+            } => {
                 for (addr, contents) in cells {
                     self.push_to_engine_at(addr, &contents);
                     self.wb_mut().cells.insert(addr, contents);
                 }
                 for (addr, fmt) in formats {
                     self.wb_mut().cell_formats.insert(addr, fmt);
+                }
+                for (addr, style) in text_styles {
+                    self.wb_mut().cell_text_styles.insert(addr, style);
                 }
             }
             JournalEntry::RangeFormat { entries } => {
@@ -1605,6 +1707,18 @@ impl App {
                         }
                         None => {
                             self.wb_mut().cell_formats.remove(&addr);
+                        }
+                    }
+                }
+            }
+            JournalEntry::RangeTextStyle { entries } => {
+                for (addr, prev) in entries {
+                    match prev {
+                        Some(s) => {
+                            self.wb_mut().cell_text_styles.insert(addr, s);
+                        }
+                        None => {
+                            self.wb_mut().cell_text_styles.remove(&addr);
                         }
                     }
                 }
@@ -1665,6 +1779,14 @@ impl App {
 
     fn open_menu(&mut self) {
         self.menu = Some(MenuState::fresh());
+        self.mode = Mode::Menu;
+    }
+
+    /// `:` in READY opens the WYSIWYG colon-menu.  Uses a secondary root
+    /// so the existing menu navigation, help, and descent machinery
+    /// applies unchanged.
+    fn open_wysiwyg_menu(&mut self) {
+        self.menu = Some(MenuState::rooted_at(menu::WYSIWYG_ROOT));
         self.mode = Mode::Menu;
     }
 
@@ -1972,6 +2094,17 @@ impl App {
                 self.undo_enabled = false;
                 self.close_menu();
             }
+            Action::WorksheetGlobalDefaultOtherBeepEnable => {
+                self.beep_enabled = true;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherBeepDisable => {
+                // Drop any pending beep so the transition is clean —
+                // the user just told us to be quiet.
+                self.beep_pending = false;
+                self.beep_enabled = false;
+                self.close_menu();
+            }
             Action::WorksheetEraseConfirm => self.execute_worksheet_erase(),
             Action::WorksheetColumnSetWidth => self.start_col_width_prompt(),
             Action::WorksheetColumnResetWidth => self.execute_col_reset_width(),
@@ -2016,6 +2149,38 @@ impl App {
             }),
             Action::RangeFormatReset => self.begin_point(PendingCommand::RangeFormat {
                 format: Format::RESET,
+            }),
+            Action::FormatBoldSet => self.begin_point(PendingCommand::RangeTextStyle {
+                bits: TextStyle::BOLD,
+                set: true,
+            }),
+            Action::FormatBoldClear => self.begin_point(PendingCommand::RangeTextStyle {
+                bits: TextStyle::BOLD,
+                set: false,
+            }),
+            Action::FormatItalicSet => self.begin_point(PendingCommand::RangeTextStyle {
+                bits: TextStyle::ITALIC,
+                set: true,
+            }),
+            Action::FormatItalicClear => self.begin_point(PendingCommand::RangeTextStyle {
+                bits: TextStyle::ITALIC,
+                set: false,
+            }),
+            Action::FormatUnderlineSet => self.begin_point(PendingCommand::RangeTextStyle {
+                bits: TextStyle::UNDERLINE,
+                set: true,
+            }),
+            Action::FormatUnderlineClear => self.begin_point(PendingCommand::RangeTextStyle {
+                bits: TextStyle::UNDERLINE,
+                set: false,
+            }),
+            Action::FormatReset => self.begin_point(PendingCommand::RangeTextStyle {
+                bits: TextStyle {
+                    bold: true,
+                    italic: true,
+                    underline: true,
+                },
+                set: false,
             }),
             Action::RangeFormatText => self.begin_point(PendingCommand::RangeFormat {
                 format: Format {
@@ -2267,6 +2432,7 @@ impl App {
     fn execute_file_new(&mut self) {
         self.wb_mut().cells.clear();
         self.wb_mut().cell_formats.clear();
+        self.wb_mut().cell_text_styles.clear();
         self.wb_mut().col_widths.clear();
         self.wb_mut().default_col_width = 9;
         self.wb_mut().hidden_cols.clear();
@@ -2528,10 +2694,19 @@ impl App {
         for (addr, w) in engine.used_column_widths() {
             col_widths.insert((addr.sheet, addr.col), w);
         }
+        let mut cell_text_styles: HashMap<Address, TextStyle> = HashMap::new();
+        for (addr, style) in engine.used_cell_text_styles() {
+            cell_text_styles.insert(addr, style);
+        }
+        let mut cell_formats: HashMap<Address, Format> = HashMap::new();
+        for (addr, fmt) in engine.used_cell_formats() {
+            cell_formats.insert(addr, fmt);
+        }
         let new_file = Workbook {
             engine,
             cells,
-            cell_formats: HashMap::new(),
+            cell_formats,
+            cell_text_styles,
             col_widths,
             default_col_width: 9,
             hidden_cols: HashSet::new(),
@@ -2721,6 +2896,7 @@ impl App {
         // Wipe UI state; the loaded engine is the new source of truth.
         self.wb_mut().cells.clear();
         self.wb_mut().cell_formats.clear();
+        self.wb_mut().cell_text_styles.clear();
         self.wb_mut().col_widths.clear();
         self.wb_mut().default_col_width = 9;
         self.wb_mut().hidden_cols.clear();
@@ -2738,6 +2914,12 @@ impl App {
         }
         for (addr, w) in self.wb_mut().engine.used_column_widths() {
             self.wb_mut().col_widths.insert((addr.sheet, addr.col), w);
+        }
+        for (addr, style) in self.wb_mut().engine.used_cell_text_styles() {
+            self.wb_mut().cell_text_styles.insert(addr, style);
+        }
+        for (addr, fmt) in self.wb_mut().engine.used_cell_formats() {
+            self.wb_mut().cell_formats.insert(addr, fmt);
         }
 
         self.wb_mut().active_path = Some(path);
@@ -2760,6 +2942,28 @@ impl App {
             self.wb().col_widths.iter().map(|(k, v)| (*k, *v)).collect();
         for ((sheet, col), w) in widths {
             let _ = self.wb_mut().engine.set_column_width(sheet, col, w);
+        }
+        // Push per-cell WYSIWYG text styles (bold / italic / underline)
+        // into the engine so they land in the xlsx font-run table.
+        let styles: Vec<(Address, TextStyle)> = self
+            .wb()
+            .cell_text_styles
+            .iter()
+            .map(|(a, s)| (*a, *s))
+            .collect();
+        for (addr, style) in styles {
+            let _ = self.wb_mut().engine.set_cell_text_style(addr, style);
+        }
+        // Push per-cell number formats so xlsx carries the num_fmt
+        // that /File Retrieve reads back.
+        let formats: Vec<(Address, Format)> = self
+            .wb()
+            .cell_formats
+            .iter()
+            .map(|(a, f)| (*a, *f))
+            .collect();
+        for (addr, fmt) in formats {
+            let _ = self.wb_mut().engine.set_cell_format(addr, fmt);
         }
         if self.wb_mut().engine.save_xlsx(&path).is_ok() {
             self.wb_mut().active_path = Some(path);
@@ -2880,6 +3084,13 @@ impl App {
                 .filter(|(a, _)| a.sheet == sheet && a.row >= at && a.row < at + n)
                 .map(|(a, f)| (*a, *f))
                 .collect();
+            let captured_text_styles: Vec<(Address, TextStyle)> = self
+                .wb_mut()
+                .cell_text_styles
+                .iter()
+                .filter(|(a, _)| a.sheet == sheet && a.row >= at && a.row < at + n)
+                .map(|(a, s)| (*a, *s))
+                .collect();
             if self.wb_mut().engine.delete_rows(sheet, at, n).is_ok() {
                 self.wb_mut()
                     .cells
@@ -2887,12 +3098,16 @@ impl App {
                 self.wb_mut()
                     .cell_formats
                     .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
+                self.wb_mut()
+                    .cell_text_styles
+                    .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
                 shift_cells_rows(&mut self.wb_mut().cells, sheet, at + n, -(n as i64));
                 batch.push(JournalEntry::RowDelete {
                     sheet,
                     at,
                     cells: captured_cells,
                     formats: captured_formats,
+                    text_styles: captured_text_styles,
                 });
             }
         }
@@ -2931,6 +3146,7 @@ impl App {
             shift_sheets_from(
                 &mut wb.cells,
                 &mut wb.cell_formats,
+                &mut wb.cell_text_styles,
                 &mut wb.col_widths,
                 at,
                 1,
@@ -2952,6 +3168,7 @@ impl App {
             shift_sheets_from(
                 &mut wb.cells,
                 &mut wb.cell_formats,
+                &mut wb.cell_text_styles,
                 &mut wb.col_widths,
                 at,
                 1,
@@ -3122,6 +3339,10 @@ impl App {
             }
             PendingCommand::RangeFormat { format } => {
                 self.execute_range_format(range, format);
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::RangeTextStyle { bits, set } => {
+                self.execute_range_text_style(range, bits, set);
                 self.mode = Mode::Ready;
             }
             PendingCommand::RangeNameCreate => {
@@ -3812,6 +4033,43 @@ impl App {
         // No recalc needed — format is presentation only.
     }
 
+    fn execute_range_text_style(&mut self, range: Range, bits: TextStyle, set: bool) {
+        let r = range.normalized();
+        // GROUP mode broadcasts the style change to every sheet, matching
+        // the existing `/Range Format` behavior.
+        let sheets: Vec<SheetId> = if self.group_mode {
+            (0..self.wb().engine.sheet_count()).map(SheetId).collect()
+        } else {
+            vec![r.start.sheet]
+        };
+        let mut prior: Vec<(Address, Option<TextStyle>)> = Vec::new();
+        for sheet in &sheets {
+            for row in r.start.row..=r.end.row {
+                for col in r.start.col..=r.end.col {
+                    let addr = Address::new(*sheet, col, row);
+                    let prev = self.wb().cell_text_styles.get(&addr).copied();
+                    prior.push((addr, prev));
+                    let current = prev.unwrap_or_default();
+                    let next = if set {
+                        current.merge(bits)
+                    } else {
+                        current.without(bits)
+                    };
+                    if next.is_empty() {
+                        self.wb_mut().cell_text_styles.remove(&addr);
+                    } else {
+                        self.wb_mut().cell_text_styles.insert(addr, next);
+                    }
+                }
+            }
+        }
+        if self.undo_enabled && !prior.is_empty() {
+            self.wb_mut()
+                .journal
+                .push(JournalEntry::RangeTextStyle { entries: prior });
+        }
+    }
+
     fn execute_range_label(&mut self, range: Range, new_prefix: LabelPrefix) {
         let r = range.normalized();
         for row in r.start.row..=r.end.row {
@@ -3941,6 +4199,7 @@ impl App {
         // Capture prior cell contents and format overrides for undo.
         let mut cells: Vec<(Address, CellContents)> = Vec::new();
         let mut formats: Vec<(Address, Format)> = Vec::new();
+        let mut text_styles: Vec<(Address, TextStyle)> = Vec::new();
         for row in r.start.row..=r.end.row {
             for col in r.start.col..=r.end.col {
                 let addr = Address::new(sheet, col, row);
@@ -3950,15 +4209,23 @@ impl App {
                 if let Some(f) = self.wb().cell_formats.get(&addr) {
                     formats.push((addr, *f));
                 }
+                if let Some(s) = self.wb().cell_text_styles.get(&addr) {
+                    text_styles.push((addr, *s));
+                }
                 self.wb_mut().cells.remove(&addr);
                 self.wb_mut().cell_formats.remove(&addr);
+                self.wb_mut().cell_text_styles.remove(&addr);
                 let _ = self.wb_mut().engine.clear_cell(addr);
             }
         }
-        if self.undo_enabled && (!cells.is_empty() || !formats.is_empty()) {
-            self.wb_mut()
-                .journal
-                .push(JournalEntry::RangeRestore { cells, formats });
+        if self.undo_enabled
+            && (!cells.is_empty() || !formats.is_empty() || !text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells,
+                formats,
+                text_styles,
+            });
         }
         self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
@@ -3982,12 +4249,22 @@ impl App {
                 .filter(|(a, _)| a.sheet == sheet && a.col >= at && a.col < at + n)
                 .map(|(a, f)| (*a, *f))
                 .collect();
+            let captured_text_styles: Vec<(Address, TextStyle)> = self
+                .wb()
+                .cell_text_styles
+                .iter()
+                .filter(|(a, _)| a.sheet == sheet && a.col >= at && a.col < at + n)
+                .map(|(a, s)| (*a, *s))
+                .collect();
             if self.wb_mut().engine.delete_cols(sheet, at, n).is_ok() {
                 self.wb_mut()
                     .cells
                     .retain(|a, _| !(a.sheet == sheet && a.col >= at && a.col < at + n));
                 self.wb_mut()
                     .cell_formats
+                    .retain(|a, _| !(a.sheet == sheet && a.col >= at && a.col < at + n));
+                self.wb_mut()
+                    .cell_text_styles
                     .retain(|a, _| !(a.sheet == sheet && a.col >= at && a.col < at + n));
                 shift_cells_cols(&mut self.wb_mut().cells, sheet, at + n, -(n as i32));
                 // One ColDelete per deleted column so undo restores in
@@ -4004,11 +4281,17 @@ impl App {
                         .filter(|(a, _)| a.col == col_k)
                         .cloned()
                         .collect();
+                    let text_styles_k: Vec<_> = captured_text_styles
+                        .iter()
+                        .filter(|(a, _)| a.col == col_k)
+                        .cloned()
+                        .collect();
                     batch.push(JournalEntry::ColDelete {
                         sheet,
                         at: col_k,
                         cells: cells_k,
                         formats: formats_k,
+                        text_styles: text_styles_k,
                     });
                 }
             }
@@ -4094,7 +4377,48 @@ impl App {
         if let Some(next) = self.wb_mut().pointer.shifted(d_col, d_row) {
             self.wb_mut().pointer = next;
             self.scroll_into_view();
+        } else {
+            self.request_beep();
         }
+    }
+
+    /// Record an error-beep request. No-op when beep is disabled, so
+    /// `beep_count` / `beep_pending` remain dormant and downstream
+    /// emission is skipped. Internal use only — UI code chooses *when*
+    /// to beep; the config choice gates whether we actually do.
+    fn request_beep(&mut self) {
+        if !self.beep_enabled {
+            return;
+        }
+        self.beep_count = self.beep_count.saturating_add(1);
+        self.beep_pending = true;
+    }
+
+    /// Monotonic count of beeps observed since the app was created.
+    /// Acceptance transcripts use this; production code never reads it.
+    pub fn beep_count(&self) -> u64 {
+        self.beep_count
+    }
+
+    /// Whether the error-beep is currently active. Mirrors the config
+    /// at startup; `/Worksheet Global Default Other Beep Enable|Disable`
+    /// flips it at runtime.
+    pub fn beep_enabled(&self) -> bool {
+        self.beep_enabled
+    }
+
+    /// Seed the beep setting — called once at startup from the binary
+    /// after resolving `Config`. Safe to call later too (tests use it).
+    pub fn set_beep_enabled(&mut self, enabled: bool) {
+        self.beep_enabled = enabled;
+    }
+
+    /// Returns true if a beep has been requested since the last call,
+    /// and clears the pending flag. The event loop reads this once per
+    /// iteration to emit a single BEL no matter how many requests piled
+    /// up inside a single keystroke handler.
+    pub fn take_pending_beep(&mut self) -> bool {
+        std::mem::take(&mut self.beep_pending)
     }
 
     fn scroll_into_view(&mut self) {
@@ -4371,37 +4695,110 @@ impl App {
         }
     }
 
-    /// Mouse handler. For now, only the icon panel is clickable.
+    /// Mouse handler. Icon-panel clicks dispatch the slot's action;
+    /// grid clicks in READY move the pointer to the clicked cell.
+    /// Move events update `hovered_icon` so control-panel line 3 can
+    /// show the authentic R3.4a icon description.
     pub fn handle_mouse(&mut self, m: MouseEvent) {
-        let MouseEventKind::Down(MouseButton::Left) = m.kind else {
-            return;
-        };
-        let Some(area) = self.icon_panel_area.get() else {
-            return;
-        };
-        if m.column < area.x
-            || m.column >= area.x + area.width
-            || m.row < area.y
-            || m.row >= area.y + area.height
-        {
-            return;
+        let icon_area = self.icon_panel_area.get();
+        let inside_icon = icon_area.is_some_and(|a| {
+            m.column >= a.x && m.column < a.x + a.width && m.row >= a.y && m.row < a.y + a.height
+        });
+
+        match m.kind {
+            MouseEventKind::Moved => {
+                // Slot 16 (pager) is excluded from hover tooltip —
+                // its function is rendered on the slot itself.
+                self.hovered_icon = match (inside_icon, icon_area) {
+                    (true, Some(a)) => match Self::hit_test_slot(a, m.row) {
+                        Some(slot) if slot < 16 => Some((self.current_panel, slot)),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Icon panel wins over the grid when both would hit —
+                // it sits on top visually.
+                if let (true, Some(a)) = (inside_icon, icon_area) {
+                    self.dispatch_icon_click(a, m.column, m.row);
+                } else if matches!(self.mode, Mode::Ready | Mode::Point) {
+                    // In POINT, the anchor is untouched by
+                    // move_pointer_to, so an anchored range extends
+                    // (or shrinks) to the clicked cell naturally;
+                    // unanchored POINT just moves the pointer.
+                    if let Some(addr) = self.cell_at_screen(m.column, m.row) {
+                        self.move_pointer_to(addr);
+                    }
+                }
+            }
+            _ => {}
         }
-        self.dispatch_icon_click(area, m.column, m.row);
+    }
+
+    /// Jump the cell pointer to `addr`, scrolling the viewport only
+    /// if needed. Used by mouse click-to-move; keyboard `/RG` (F5)
+    /// has its own prompt-driven path.
+    fn move_pointer_to(&mut self, addr: Address) {
+        self.wb_mut().pointer = addr;
+        self.scroll_into_view();
+    }
+
+    /// Map a screen coordinate to the cell address it sits on, or
+    /// `None` for clicks on the column header, row-number gutter, or
+    /// outside the grid. Requires that a grid has already rendered
+    /// this session so `last_grid_area` is populated.
+    fn cell_at_screen(&self, col: u16, row: u16) -> Option<Address> {
+        let area = self.last_grid_area.get()?;
+        if area.width <= ROW_GUTTER || area.height < 2 {
+            return None;
+        }
+        // Reject: outside rect, on column header row, on row gutter.
+        if col < area.x + ROW_GUTTER
+            || col >= area.x + area.width
+            || row <= area.y
+            || row >= area.y + area.height
+        {
+            return None;
+        }
+
+        let local_x = col - area.x - ROW_GUTTER;
+        let local_y = row - area.y - 1;
+        let content_width = area.width - ROW_GUTTER;
+
+        let col_idx = self
+            .visible_column_layout(content_width)
+            .into_iter()
+            .find(|(_, x_off, w)| local_x >= *x_off && local_x < *x_off + *w)
+            .map(|(c, _, _)| c)?;
+
+        let sheet = self.wb().pointer.sheet;
+        let row_idx = self.wb().viewport_row_offset.saturating_add(local_y as u32);
+        Some(Address::new(sheet, col_idx, row_idx))
+    }
+
+    /// Map a row within the icon panel to a slot index `0..=16`.
+    /// Slot 16 is the panel navigator. Returns `None` only when the
+    /// area geometry is malformed (zero-height, row above origin,
+    /// per-slot height of zero).
+    fn hit_test_slot(area: Rect, row: u16) -> Option<usize> {
+        if area.height == 0 || row < area.y {
+            return None;
+        }
+        let per_slot = (area.height as usize).max(1) / 17;
+        if per_slot == 0 {
+            return None;
+        }
+        Some((((row - area.y) as usize) / per_slot).min(16))
     }
 
     /// Map a mouse click on the icon panel to a slot and fire that
     /// slot's action. Slot 16 is the panel navigator; clicks on its
     /// left half go to the previous panel, right half to the next.
     fn dispatch_icon_click(&mut self, area: Rect, column: u16, row: u16) {
-        if area.height == 0 || row < area.y {
+        let Some(slot) = Self::hit_test_slot(area, row) else {
             return;
-        }
-        let local_row = row - area.y;
-        let per_slot = (area.height as usize).max(1) / 17;
-        if per_slot == 0 {
-            return;
-        }
-        let slot = ((local_row as usize) / per_slot).min(16);
+        };
 
         if slot == 16 {
             // Pager: left half → previous panel, right half → next.
@@ -4419,6 +4816,7 @@ impl App {
         let id = ids[slot];
         match l123_graph::icon_action(id) {
             l123_graph::IconAction::MenuPath(path) => self.dispatch_menu_path(path),
+            l123_graph::IconAction::WysiwygMenuPath(path) => self.dispatch_wysiwyg_menu_path(path),
             l123_graph::IconAction::SysKey(act) => self.dispatch_sys_action(act),
             l123_graph::IconAction::PageNav => {} // reached only via slot 16
             l123_graph::IconAction::Noop => {}
@@ -4429,6 +4827,15 @@ impl App {
     /// letters — equivalent to the user typing "/" then each char.
     fn dispatch_menu_path(&mut self, path: &str) {
         self.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        for c in path.chars() {
+            self.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    /// Open the WYSIWYG colon menu and descend via the given accelerator
+    /// letters — equivalent to the user typing `:` then each char.
+    fn dispatch_wysiwyg_menu_path(&mut self, path: &str) {
+        self.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
         for c in path.chars() {
             self.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
@@ -4606,16 +5013,23 @@ impl App {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // Line 1: "<addr>: [(fmt) [Wn]] <readout>" left; mode indicator right.
+        // Line 1: "<addr>: [(fmt) [Wn] {Style}] <readout>" left; mode
+        // indicator right.  The `{Style}` marker comes after numeric
+        // format/width tags so readers scan parens → brackets → braces
+        // in a consistent order.
         let readout = self.cell_readout_for_line1();
         let format_tag = self.format_tag_for_line1();
         let width_tag = self.width_tag_for_line1();
+        let style_marker = self.text_style_marker_for_line1();
         let mut tags: Vec<&str> = Vec::new();
         if !format_tag.is_empty() {
             tags.push(&format_tag);
         }
         if !width_tag.is_empty() {
             tags.push(&width_tag);
+        }
+        if !style_marker.is_empty() {
+            tags.push(&style_marker);
         }
         let left = if readout.is_empty() && tags.is_empty() {
             format!(" {}: ", self.wb().pointer.display_full())
@@ -4671,7 +5085,17 @@ impl App {
                         Some(e) => Line::from(format!(" {}", e.buffer)),
                         None => Line::from(""),
                     };
-                    (l2, Line::from(""))
+                    // Icon-hover description — gated on entry being
+                    // idle so an in-progress value/label/edit never
+                    // has its canonical line-3 space (formula preview)
+                    // clobbered by a stray mouse-over.
+                    let l3 = match (self.entry.as_ref(), self.hovered_icon) {
+                        (None, Some((panel, slot))) => {
+                            Line::from(format!(" {}", l123_graph::slot_description(panel, slot)))
+                        }
+                        _ => Line::from(""),
+                    };
+                    (l2, l3)
                 }
             }
         };
@@ -4877,6 +5301,17 @@ impl App {
         }
     }
 
+    /// Brace-wrapped WYSIWYG attribute marker (e.g. `{Bold}`,
+    /// `{Bold Italic}`) for the current cell.  Empty when no text-style
+    /// override is set — which is common, so callers should treat the
+    /// empty string as "omit the marker from line 1".
+    fn text_style_marker_for_line1(&self) -> String {
+        match self.wb().cell_text_styles.get(&self.wb().pointer) {
+            Some(style) => style.to_string(),
+            None => String::new(),
+        }
+    }
+
     /// Resolve the format for a given cell — the per-cell override if set,
     /// else General.
     fn format_for_cell(&self, addr: Address) -> Format {
@@ -5020,17 +5455,26 @@ impl App {
                 .collect();
             let painted = plan_row_spill(&slots, &widths);
 
-            for (&(col_idx, x_off, w), text) in layout.iter().zip(painted.iter()) {
+            for (&(col_idx, x_off, w), slot) in layout.iter().zip(painted.iter()) {
                 let x = area.x + ROW_GUTTER + x_off;
                 let addr = Address::new(sheet, col_idx, row_idx);
                 let highlighted = highlight.contains(addr);
-                let cell_style = if highlighted {
+                // Pointer highlight is per-physical-cell; WYSIWYG text
+                // style follows the owning cell so label spillover
+                // into empty neighbors carries the owner's bold /
+                // italic / underline.
+                let owner_col = layout[slot.owner].0;
+                let style_addr = Address::new(sheet, owner_col, row_idx);
+                let mut cell_style = if highlighted {
                     Style::default().add_modifier(Modifier::REVERSED)
                 } else {
                     Style::default()
                 };
+                if let Some(style) = self.wb().cell_text_styles.get(&style_addr).copied() {
+                    cell_style = cell_style.add_modifier(text_style_modifier(style));
+                }
                 let mut printed = 0u16;
-                for ch in text.chars().take(w as usize) {
+                for ch in slot.text.chars().take(w as usize) {
                     buf[(x + printed, y)].set_char(ch).set_style(cell_style);
                     printed += 1;
                 }
@@ -5091,6 +5535,23 @@ impl Default for App {
 /// Shift cells within `sheet` whose row is `>= at` by `delta` rows.
 /// Positive delta shifts down (for insert); negative shifts up (for delete,
 /// after the deleted rows have already been removed).
+/// Map a per-cell [`TextStyle`] into the ratatui [`Modifier`] bits that
+/// render it: bold → `BOLD`, italic → `ITALIC`, underline → `UNDERLINED`.
+/// Empty style yields `Modifier::empty()` and adds no visible attributes.
+fn text_style_modifier(style: TextStyle) -> Modifier {
+    let mut m = Modifier::empty();
+    if style.bold {
+        m |= Modifier::BOLD;
+    }
+    if style.italic {
+        m |= Modifier::ITALIC;
+    }
+    if style.underline {
+        m |= Modifier::UNDERLINED;
+    }
+    m
+}
+
 fn shift_cells_rows(
     cells: &mut HashMap<Address, CellContents>,
     sheet: SheetId,
@@ -5124,6 +5585,7 @@ fn shift_cells_rows(
 fn shift_sheets_from(
     cells: &mut HashMap<Address, CellContents>,
     cell_formats: &mut HashMap<Address, Format>,
+    cell_text_styles: &mut HashMap<Address, TextStyle>,
     col_widths: &mut HashMap<(SheetId, u16), u8>,
     at: u16,
     delta: u16,
@@ -5153,6 +5615,16 @@ fn shift_sheets_from(
     for addr in fmt_affected {
         let f = cell_formats.remove(&addr).expect("present");
         cell_formats.insert(shift_addr(addr), f);
+    }
+    let mut style_affected: Vec<Address> = cell_text_styles
+        .keys()
+        .filter(|a| a.sheet.0 >= at)
+        .copied()
+        .collect();
+    style_affected.sort_by_key(|a| std::cmp::Reverse(a.sheet.0));
+    for addr in style_affected {
+        let s = cell_text_styles.remove(&addr).expect("present");
+        cell_text_styles.insert(shift_addr(addr), s);
     }
     let mut cw_affected: Vec<(SheetId, u16)> = col_widths
         .keys()
@@ -6446,10 +6918,43 @@ mod tests {
     }
 
     #[test]
-    fn icon_click_bold_is_safe_noop() {
+    fn icon_click_bold_enters_point_for_wysiwyg_bold_set() {
+        // Panel 1 slot 11 = icon id 12 = :Format Bold Set.  The click
+        // should drop the user into POINT mode auto-anchored at the
+        // pointer; pressing Enter commits and applies bold.
         let mut app = App::new();
         click_slot(&mut app, 11);
+        assert_eq!(app.mode, Mode::Point);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Ready);
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::BOLD),
+        );
+    }
+
+    #[test]
+    fn icon_click_italic_applies_italic_on_commit() {
+        // Panel 1 slot 12 = icon id 13 = :Format Italic Set.
+        let mut app = App::new();
+        click_slot(&mut app, 12);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::ITALIC),
+        );
+    }
+
+    #[test]
+    fn icon_click_underline_applies_underline_on_commit() {
+        // Panel 1 slot 13 = icon id 15 = :Format Underline Set.
+        let mut app = App::new();
+        click_slot(&mut app, 13);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::UNDERLINE),
+        );
     }
 
     #[test]
@@ -6513,6 +7018,270 @@ mod tests {
             click(&mut app, TEST_PANEL, mid_col + 1, TEST_PANEL.y + 49);
         }
         assert_eq!(app.current_panel, l123_graph::Panel::One);
+    }
+
+    /// Simulate a mouse-move at `(col, row)` by stashing a fake panel
+    /// area (same fixture as click tests) and routing through
+    /// [`App::handle_mouse`].
+    fn hover(app: &mut App, area: Rect, col: u16, row: u16) {
+        app.icon_panel_area.set(Some(area));
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    fn hover_slot(app: &mut App, slot: u16) {
+        hover(
+            app,
+            TEST_PANEL,
+            TEST_PANEL.x + 1,
+            TEST_PANEL.y + slot * 3 + 1,
+        );
+    }
+
+    #[test]
+    fn mouse_move_over_slot_sets_hovered_icon() {
+        let mut app = App::new();
+        hover_slot(&mut app, 0);
+        assert_eq!(app.hovered_icon, Some((l123_graph::Panel::One, 0)));
+        hover_slot(&mut app, 7);
+        assert_eq!(app.hovered_icon, Some((l123_graph::Panel::One, 7)));
+    }
+
+    #[test]
+    fn mouse_move_outside_panel_clears_hovered_icon() {
+        let mut app = App::new();
+        hover_slot(&mut app, 0);
+        assert!(app.hovered_icon.is_some());
+        hover(&mut app, TEST_PANEL, 10, 10);
+        assert_eq!(app.hovered_icon, None);
+    }
+
+    #[test]
+    fn mouse_move_over_pager_slot_does_not_set_hovered_icon() {
+        // Slot 16 is the panel navigator; we deliberately exclude it
+        // from hover-tooltip since its function is already rendered on
+        // the slot itself ("Panel N of 7").
+        let mut app = App::new();
+        hover_slot(&mut app, 16);
+        assert_eq!(app.hovered_icon, None);
+    }
+
+    #[test]
+    fn mouse_move_without_cached_panel_clears_hovered_icon() {
+        let mut app = App::new();
+        hover_slot(&mut app, 3);
+        assert!(app.hovered_icon.is_some());
+        app.icon_panel_area.set(None);
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 82,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.hovered_icon, None);
+    }
+
+    #[test]
+    fn mouse_move_on_different_panel_tracks_current_panel() {
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Three;
+        hover_slot(&mut app, 2);
+        assert_eq!(app.hovered_icon, Some((l123_graph::Panel::Three, 2)));
+    }
+
+    // ---- Grid click-to-move (Phase 1: READY only) ----
+
+    /// Synthesize a left-click at the given screen position. Unlike
+    /// [`click`], this doesn't stash a fake icon-panel rect — the
+    /// headless render path already populates `last_grid_area` when
+    /// `render_to_buffer` is called, which is what grid-click uses.
+    fn click_at(app: &mut App, col: u16, row: u16) {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    // Default layout (80×25): control panel = 4 lines (y 0..4), grid
+    // = 20 lines (y 4..24), status = 1 line (y 24). Column-header row
+    // sits at area.y = 4; body rows start at y = 5. ROW_GUTTER = 5
+    // columns; default col width = 9, so col A spans x [5, 14), col B
+    // spans x [14, 23).
+    const HEADER_Y: u16 = 4;
+    const BODY_TOP_Y: u16 = 5;
+    const COL_A_X: u16 = 7; // anywhere in [5, 14)
+    const COL_B_X: u16 = 16; // anywhere in [14, 23)
+
+    #[test]
+    fn mouse_click_on_cell_moves_pointer() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_B_X, BODY_TOP_Y + 2);
+        assert_eq!(app.pointer().display_full(), "A:B3");
+    }
+
+    #[test]
+    fn mouse_click_on_column_header_does_not_move_pointer() {
+        // Column-letter row sits at the top of the grid area; clicking
+        // it is reserved for Phase 2 (full-column select).
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_B_X, HEADER_Y);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+    }
+
+    #[test]
+    fn mouse_click_on_row_gutter_does_not_move_pointer() {
+        // x in [0, ROW_GUTTER) is the row-number gutter; reserved for
+        // Phase 2 (full-row select).
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, 2, BODY_TOP_Y + 2);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+    }
+
+    #[test]
+    fn mouse_click_below_grid_does_not_move_pointer() {
+        // Status line row; clicks there are not bound to anything.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_A_X, 24);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+    }
+
+    #[test]
+    fn mouse_click_without_rendered_grid_is_ignored() {
+        // No render happened yet, so last_grid_area is None — the
+        // hit-test must bail cleanly rather than guessing geometry.
+        let mut app = App::new();
+        click_at(&mut app, COL_A_X, BODY_TOP_Y);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+    }
+
+    #[test]
+    fn mouse_click_in_menu_mode_does_not_move_pointer() {
+        // Phase 1 restricts click-to-move to READY. In MENU (and
+        // entry modes) we leave the pointer alone; Phase 2 will
+        // add context-appropriate behavior.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Menu);
+        click_at(&mut app, COL_B_X, BODY_TOP_Y + 2);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+        assert_eq!(app.mode, Mode::Menu);
+    }
+
+    #[test]
+    fn mouse_click_respects_scroll_offset() {
+        // With the viewport scrolled down, clicking the top body row
+        // lands on the first visible row, not row 1.
+        let mut app = App::new();
+        app.wb_mut().viewport_row_offset = 10;
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_A_X, BODY_TOP_Y);
+        assert_eq!(app.pointer().display_full(), "A:A11");
+    }
+
+    #[test]
+    fn mouse_click_respects_custom_column_width() {
+        // After widening column A to 15, col B's body shifts right.
+        // Clicking the new B region must still resolve to B, not A.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        drive_set_col_width(&mut app, 15);
+        let _ = app.render_to_buffer(80, 25);
+        // ROW_GUTTER(5) + 15 = 20 → col B starts at x=20.
+        click_at(&mut app, 22, BODY_TOP_Y);
+        assert_eq!(app.pointer().display_full(), "A:B1");
+    }
+
+    // ---- Phase 2: POINT-mode click-to-extend ----
+
+    // Body cell fixtures for POINT-mode tests. Default col width 9,
+    // ROW_GUTTER 5 → col C at x [23,32), col D at x [32,41).
+    const COL_C_X: u16 = 25; // anywhere in [23, 32)
+    const COL_D_X: u16 = 35; // anywhere in [32, 41)
+
+    /// Enter POINT via `/RE` (Range Erase) — the shortest path into
+    /// auto-anchored POINT. The prompt expects a range; auto-anchor
+    /// fires at the current pointer.
+    fn enter_point_via_range_erase(app: &mut App) {
+        for c in ['/', 'R', 'E'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    #[test]
+    fn mouse_click_in_anchored_point_extends_range() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_point_via_range_erase(&mut app);
+        assert_eq!(app.mode, Mode::Point);
+        // Anchor is set at A1 (the pointer when POINT entered).
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), Some(Address::A1));
+
+        // Click at C3 — range should become A1..C3. Anchor stays at A1.
+        click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Point);
+        assert_eq!(app.pointer().display_full(), "A:C3");
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), Some(Address::A1));
+    }
+
+    #[test]
+    fn mouse_click_in_anchored_point_can_shrink_range() {
+        // After extending to C3, clicking back at B2 must shrink the
+        // range (anchor still A1, pointer now B2).
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_point_via_range_erase(&mut app);
+        click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        click_at(&mut app, COL_B_X, BODY_TOP_Y + 1);
+        assert_eq!(app.pointer().display_full(), "A:B2");
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), Some(Address::A1));
+    }
+
+    #[test]
+    fn mouse_click_in_unanchored_point_moves_pointer_without_reanchoring() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_point_via_range_erase(&mut app);
+        // First Esc unanchors.
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Point);
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), None);
+
+        click_at(&mut app, COL_D_X, BODY_TOP_Y + 3);
+        assert_eq!(app.mode, Mode::Point);
+        assert_eq!(app.pointer().display_full(), "A:D4");
+        // Still unanchored after click.
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), None);
+    }
+
+    #[test]
+    fn mouse_click_on_gutter_in_point_is_noop() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_point_via_range_erase(&mut app);
+        click_at(&mut app, 2, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Point);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), Some(Address::A1));
+    }
+
+    #[test]
+    fn mouse_click_in_point_does_not_exit_mode() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_point_via_range_erase(&mut app);
+        click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Point, "click must not drop out of POINT");
     }
 
     /// Drive the `/Worksheet Column Set-Width` menu path, typing `width`
@@ -6595,5 +7364,513 @@ mod tests {
         assert!(!is_iterm2_compatible_env(Some("xterm-kitty"), None));
         assert!(!is_iterm2_compatible_env(None, None));
         assert!(!is_iterm2_compatible_env(None, Some("")));
+    }
+
+    // --- :Format Bold/Italic/Underline Set|Clear (step 2 of the
+    //     text-style slice: core storage, command execution, journaled
+    //     undo). Menu wiring and rendering land in later steps.
+
+    fn one_cell_range(addr: Address) -> Range {
+        Range {
+            start: addr,
+            end: addr,
+        }
+    }
+
+    #[test]
+    fn range_text_style_set_bold_records_override() {
+        let mut app = App::new();
+        app.execute_range_text_style(one_cell_range(Address::A1), TextStyle::BOLD, true);
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::BOLD),
+        );
+    }
+
+    #[test]
+    fn range_text_style_set_then_undo_restores_plain() {
+        let mut app = App::new();
+        app.execute_range_text_style(one_cell_range(Address::A1), TextStyle::BOLD, true);
+        app.undo();
+        assert!(
+            !app.wb().cell_text_styles.contains_key(&Address::A1),
+            "bold should be gone after Alt-F4"
+        );
+    }
+
+    #[test]
+    fn range_text_style_bold_then_italic_composes_bits() {
+        let mut app = App::new();
+        let r = one_cell_range(Address::A1);
+        app.execute_range_text_style(r, TextStyle::BOLD, true);
+        app.execute_range_text_style(r, TextStyle::ITALIC, true);
+        let s = app.wb().cell_text_styles.get(&Address::A1).copied();
+        assert_eq!(
+            s,
+            Some(TextStyle {
+                bold: true,
+                italic: true,
+                underline: false
+            }),
+        );
+    }
+
+    #[test]
+    fn range_text_style_clear_drops_only_named_bits() {
+        let mut app = App::new();
+        let r = one_cell_range(Address::A1);
+        app.execute_range_text_style(r, TextStyle::BOLD.merge(TextStyle::ITALIC), true);
+        app.execute_range_text_style(r, TextStyle::BOLD, false);
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::ITALIC),
+        );
+    }
+
+    #[test]
+    fn range_text_style_clearing_last_bit_removes_entry() {
+        let mut app = App::new();
+        let r = one_cell_range(Address::A1);
+        app.execute_range_text_style(r, TextStyle::BOLD, true);
+        app.execute_range_text_style(r, TextStyle::BOLD, false);
+        assert!(
+            !app.wb().cell_text_styles.contains_key(&Address::A1),
+            "plain style should not leave an empty entry in the map"
+        );
+    }
+
+    #[test]
+    fn range_text_style_reset_clears_all_attributes() {
+        let mut app = App::new();
+        let r = one_cell_range(Address::A1);
+        let all = TextStyle {
+            bold: true,
+            italic: true,
+            underline: true,
+        };
+        app.execute_range_text_style(r, all, true);
+        app.execute_range_text_style(r, all, false);
+        assert!(!app.wb().cell_text_styles.contains_key(&Address::A1));
+    }
+
+    #[test]
+    fn range_text_style_undo_restores_partial_prior_state() {
+        let mut app = App::new();
+        let r = one_cell_range(Address::A1);
+        // Start: bold on A1 (the prior state we should restore to).
+        app.execute_range_text_style(r, TextStyle::BOLD, true);
+        // Clear the journal so we're only testing the next undo.
+        app.wb_mut().journal.clear();
+        // Now apply italic.
+        app.execute_range_text_style(r, TextStyle::ITALIC, true);
+        app.undo();
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::BOLD),
+            "undoing the italic-set should leave the prior bold-only state"
+        );
+    }
+
+    #[test]
+    fn text_style_modifier_maps_bits_to_ratatui_modifier() {
+        assert_eq!(text_style_modifier(TextStyle::PLAIN), Modifier::empty());
+        assert_eq!(text_style_modifier(TextStyle::BOLD), Modifier::BOLD);
+        assert_eq!(text_style_modifier(TextStyle::ITALIC), Modifier::ITALIC);
+        assert_eq!(
+            text_style_modifier(TextStyle::UNDERLINE),
+            Modifier::UNDERLINED,
+        );
+        let all = TextStyle {
+            bold: true,
+            italic: true,
+            underline: true,
+        };
+        assert_eq!(
+            text_style_modifier(all),
+            Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED,
+        );
+    }
+
+    /// Read back the ratatui `Modifier` bits on the first cell of an
+    /// address in the rendered buffer. Uses the same visible-column
+    /// layout math as [`App::cell_rendered_text`].
+    fn cell_modifier_at(app: &App, buf: &Buffer, addr: Address) -> Modifier {
+        let dr = (addr.row - app.wb().viewport_row_offset) as u16;
+        let y = PANEL_HEIGHT + 1 + dr;
+        let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
+        let layout = app.visible_column_layout(content_width);
+        let (_, x_off, _) = *layout.iter().find(|(c, _, _)| *c == addr.col).unwrap();
+        let x = ROW_GUTTER + x_off;
+        buf[(x, y)].style().add_modifier
+    }
+
+    #[test]
+    fn bold_style_renders_with_ratatui_bold_modifier() {
+        let mut app = App::new();
+        // Put a label at B5 so there's a character to style.
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        for c in "hello".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let target = Address::new(SheetId::A, 1, 4); // B5
+        app.execute_range_text_style(one_cell_range(target), TextStyle::BOLD, true);
+
+        let buf = app.render_to_buffer(80, 25);
+        let modifier = cell_modifier_at(&app, &buf, target);
+        assert!(
+            modifier.contains(Modifier::BOLD),
+            "expected BOLD in buffer cell's modifier, got {modifier:?}"
+        );
+    }
+
+    #[test]
+    fn compound_style_renders_with_all_three_modifiers() {
+        let mut app = App::new();
+        let target = Address::A1;
+        let all = TextStyle {
+            bold: true,
+            italic: true,
+            underline: true,
+        };
+        app.execute_range_text_style(one_cell_range(target), all, true);
+        let buf = app.render_to_buffer(80, 25);
+        let modifier = cell_modifier_at(&app, &buf, target);
+        assert!(modifier.contains(Modifier::BOLD));
+        assert!(modifier.contains(Modifier::ITALIC));
+        assert!(modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn plain_cells_have_no_text_style_modifier() {
+        let app = App::new();
+        let buf = app.render_to_buffer(80, 25);
+        let modifier = cell_modifier_at(&app, &buf, Address::new(SheetId::A, 2, 2));
+        assert!(!modifier.contains(Modifier::BOLD));
+        assert!(!modifier.contains(Modifier::ITALIC));
+        assert!(!modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn text_style_follows_label_spill_into_adjacent_columns() {
+        // Long italic label at A1 spills across B/C/D/E.  The
+        // overflow characters should render italic too, not plain.
+        let mut app = App::new();
+        for c in "INCOME SUMMARY 1991: Sloane Camera and Video".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        keys(&mut app, ":FIS~");
+
+        let buf = app.render_to_buffer(100, 25);
+
+        // A1 itself is italic (its home column).
+        assert!(
+            cell_modifier_at(&app, &buf, Address::A1).contains(Modifier::ITALIC),
+            "A1 (owner) should be italic"
+        );
+        // B1, C1, D1 are empty neighbors the label overflowed into —
+        // they must pick up the owner's italic attribute.
+        for col in 1..=3u16 {
+            let addr = Address::new(SheetId::A, col, 0);
+            let m = cell_modifier_at(&app, &buf, addr);
+            assert!(
+                m.contains(Modifier::ITALIC),
+                "spill into column {col} should be italic, got {m:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_style_does_not_leak_past_spill_extent() {
+        // Italic label at A1 long enough to fill B1 exactly; C1 must
+        // remain plain (the label doesn't reach it).
+        let mut app = App::new();
+        // A1 + B1 default widths = 9 + 9 = 18.  "123456789abcdefgh" is
+        // 17 chars — fits inside A1..B1 with no leftover for C1.
+        for c in "123456789abcdefgh".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        keys(&mut app, ":FIS~");
+
+        let buf = app.render_to_buffer(100, 25);
+        // C1 is never touched by the spill, so it should stay plain.
+        let c1 = Address::new(SheetId::A, 2, 0);
+        let m = cell_modifier_at(&app, &buf, c1);
+        assert!(
+            !m.contains(Modifier::ITALIC),
+            "C1 beyond spill extent should be plain, got {m:?}"
+        );
+    }
+
+    #[test]
+    fn bold_on_highlighted_cell_keeps_both_reversed_and_bold() {
+        let mut app = App::new();
+        // Pointer starts at A1, which is the highlighted cell in READY.
+        app.execute_range_text_style(one_cell_range(Address::A1), TextStyle::BOLD, true);
+        let buf = app.render_to_buffer(80, 25);
+        let modifier = cell_modifier_at(&app, &buf, Address::A1);
+        assert!(
+            modifier.contains(Modifier::REVERSED),
+            "pointer reverse-video"
+        );
+        assert!(modifier.contains(Modifier::BOLD), "bold overlay");
+    }
+
+    /// Replay a string of characters as individual READY-mode key
+    /// presses, just like a transcript.  `~` stands for Enter, matching
+    /// the acceptance-transcript convention.
+    fn keys(app: &mut App, s: &str) {
+        for c in s.chars() {
+            match c {
+                '~' => app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                ch => app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+            }
+        }
+    }
+
+    #[test]
+    fn colon_enters_wysiwyg_menu_mode() {
+        let mut app = App::new();
+        app.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Menu);
+        let state = app.menu.as_ref().expect("menu state");
+        // First item under WYSIWYG_ROOT is "Worksheet".
+        let first = state.level().first().expect("items visible");
+        assert_eq!(first.name, "Worksheet");
+    }
+
+    #[test]
+    fn colon_f_b_s_bolds_the_selected_range() {
+        let mut app = App::new();
+        keys(&mut app, ":FBS~");
+        // After ~ commits POINT with default single-cell range at A1.
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::BOLD),
+        );
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    #[test]
+    fn colon_f_i_s_italicizes_range() {
+        let mut app = App::new();
+        keys(&mut app, ":FIS~");
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::ITALIC),
+        );
+    }
+
+    #[test]
+    fn colon_f_u_s_underlines_range() {
+        let mut app = App::new();
+        keys(&mut app, ":FUS~");
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::UNDERLINE),
+        );
+    }
+
+    #[test]
+    fn colon_f_b_c_clears_bold_left_other_bits_alone() {
+        let mut app = App::new();
+        keys(&mut app, ":FBS~");
+        keys(&mut app, ":FIS~");
+        keys(&mut app, ":FBC~");
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::ITALIC),
+        );
+    }
+
+    #[test]
+    fn colon_f_r_resets_all_attributes() {
+        let mut app = App::new();
+        keys(&mut app, ":FBS~");
+        keys(&mut app, ":FIS~");
+        keys(&mut app, ":FUS~");
+        keys(&mut app, ":FR~");
+        assert!(!app.wb().cell_text_styles.contains_key(&Address::A1));
+    }
+
+    #[test]
+    fn line1_shows_bold_marker_on_labeled_cell() {
+        let mut app = App::new();
+        for c in "hello".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        keys(&mut app, ":FBS~");
+        let buf = app.render_to_buffer(80, 25);
+        let line1 = App::line_text(&buf, 0);
+        assert!(
+            line1.contains("{Bold}"),
+            "expected {{Bold}} in line 1, got {line1:?}"
+        );
+    }
+
+    #[test]
+    fn line1_shows_compound_marker_with_space_separator() {
+        let mut app = App::new();
+        keys(&mut app, ":FBS~");
+        keys(&mut app, ":FIS~");
+        keys(&mut app, ":FUS~");
+        let buf = app.render_to_buffer(80, 25);
+        let line1 = App::line_text(&buf, 0);
+        assert!(
+            line1.contains("{Bold Italic Underline}"),
+            "expected {{Bold Italic Underline}} in line 1, got {line1:?}"
+        );
+    }
+
+    #[test]
+    fn line1_has_no_style_marker_on_plain_cell() {
+        let app = App::new();
+        let buf = app.render_to_buffer(80, 25);
+        let line1 = App::line_text(&buf, 0);
+        assert!(
+            !line1.contains('{'),
+            "plain cell should not show a style marker, got {line1:?}"
+        );
+    }
+
+    #[test]
+    fn line1_marker_follows_format_tag_on_numeric_cell() {
+        let mut app = App::new();
+        // Type a number so the cell gets a (G) format tag.
+        for c in "42".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        // Go back up to the just-entered cell before applying style.
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        keys(&mut app, ":FBS~");
+        let buf = app.render_to_buffer(80, 25);
+        let line1 = App::line_text(&buf, 0);
+        let tag_pos = line1.find("(G)").expect("format tag present");
+        let marker_pos = line1.find("{Bold}").expect("style marker present");
+        assert!(
+            tag_pos < marker_pos,
+            "format tag should precede style marker: {line1:?}"
+        );
+    }
+
+    #[test]
+    fn line1_marker_disappears_after_clearing_last_style_bit() {
+        let mut app = App::new();
+        keys(&mut app, ":FBS~");
+        keys(&mut app, ":FBC~");
+        let buf = app.render_to_buffer(80, 25);
+        let line1 = App::line_text(&buf, 0);
+        assert!(
+            !line1.contains('{'),
+            "marker should be gone after clear, got {line1:?}"
+        );
+    }
+
+    #[test]
+    fn text_style_survives_xlsx_save_and_retrieve() {
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir =
+            std::env::temp_dir().join(format!("l123_ui_style_rt_{}_{}", process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("style.xlsx");
+
+        let mut app = App::new();
+        // A1: label "hi" with bold + italic.
+        for c in "hi".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        // Enter commits in place (SPEC §8) — pointer still at A1.
+        keys(&mut app, ":FBS~");
+        keys(&mut app, ":FIS~");
+        // A2: label "bye" with underline.
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        for c in "bye".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        keys(&mut app, ":FUS~");
+
+        // Probe the in-memory map right before save.
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::BOLD.merge(TextStyle::ITALIC)),
+        );
+        assert_eq!(
+            app.wb()
+                .cell_text_styles
+                .get(&Address::new(SheetId::A, 0, 1))
+                .copied(),
+            Some(TextStyle::UNDERLINE),
+        );
+
+        app.save_workbook_to(path.clone());
+
+        let mut reopened = App::new();
+        reopened.load_workbook_from(path.clone());
+
+        assert_eq!(
+            reopened.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle {
+                bold: true,
+                italic: true,
+                underline: false
+            }),
+            "A1 should round-trip bold + italic"
+        );
+        assert_eq!(
+            reopened
+                .wb()
+                .cell_text_styles
+                .get(&Address::new(SheetId::A, 0, 1))
+                .copied(),
+            Some(TextStyle::UNDERLINE),
+            "A2 should round-trip underline"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn colon_q_closes_wysiwyg_menu() {
+        let mut app = App::new();
+        app.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(app.menu.is_none());
+    }
+
+    #[test]
+    fn range_text_style_applies_across_multi_cell_range() {
+        let mut app = App::new();
+        let r = Range {
+            start: Address::new(SheetId::A, 0, 0),
+            end: Address::new(SheetId::A, 1, 1),
+        };
+        app.execute_range_text_style(r, TextStyle::BOLD, true);
+        for col in 0..=1 {
+            for row in 0..=1 {
+                let a = Address::new(SheetId::A, col, row);
+                assert_eq!(
+                    app.wb().cell_text_styles.get(&a).copied(),
+                    Some(TextStyle::BOLD),
+                    "cell ({col},{row}) should be bold"
+                );
+            }
+        }
     }
 }

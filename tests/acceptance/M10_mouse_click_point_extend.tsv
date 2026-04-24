@@ -1,0 +1,79 @@
+# Phase 2 mouse support: POINT-mode range extend on click.
+# When a command has opened an auto-anchored range prompt,
+# clicking a cell must drop the free end of the range on that
+# cell (anchor stays). After ESC unanchors, click just moves the
+# pointer without re-anchoring.
+#
+# Layout (80×25): col A x [5,14), col B [14,23), col C [23,32),
+# col D [32,41); body rows start at y=5.
+
+# Seed a few cells so /RE has something to clear at commit time.
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+DOWN
+KEYS 30
+ENTER
+DOWN
+KEYS 40
+ENTER
+HOME
+ASSERT_POINTER A:A1
+
+# /Range Erase — auto-anchored at A1, range reads A1..A1.
+KEY /
+KEY R
+KEY E
+ASSERT_MODE POINT
+ASSERT_PANEL_L3 A:A1..A:A1
+
+# Click C3 — range extends to A1..C3.
+MOUSE_CLICK 25 7
+ASSERT_MODE POINT
+ASSERT_POINTER A:C3
+ASSERT_PANEL_L3 A:A1..A:C3
+
+# Click B2 — range shrinks to A1..B2 (anchor unchanged).
+MOUSE_CLICK 16 6
+ASSERT_POINTER A:B2
+ASSERT_PANEL_L3 A:A1..A:B2
+
+# Enter commits: the A1..B2 range is erased, back to READY.
+ENTER
+ASSERT_MODE READY
+ASSERT_CELL A:A1
+ASSERT_CELL A:A2
+ASSERT_CELL A:B1
+ASSERT_CELL A:B2
+# Cells outside the committed range survive.
+ASSERT_CELL A:A3  30
+ASSERT_CELL A:A4  40
+
+# Second /RE from a fresh pointer, then unanchor via ESC and
+# verify that a click only moves the pointer.
+HOME
+KEYS 99
+ENTER
+HOME
+KEY /
+KEY R
+KEY E
+ASSERT_MODE POINT
+ASSERT_PANEL_L3 A:A1..A:A1
+ESC
+# After first ESC the range collapses but POINT persists.
+ASSERT_MODE POINT
+
+# Click D4 — pointer jumps; anchor stays cleared so the range
+# stays collapsed at the new pointer.
+MOUSE_CLICK 35 8
+ASSERT_MODE POINT
+ASSERT_POINTER A:D4
+ASSERT_PANEL_L3 A:D4..A:D4
+
+# Second ESC cancels — the 99 we seeded at A1 is untouched.
+ESC
+ASSERT_MODE READY
+ASSERT_CELL A:A1  99

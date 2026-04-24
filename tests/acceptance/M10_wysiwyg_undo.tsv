@@ -1,0 +1,37 @@
+# Alt-F4 reverses the last `:Format ... Set` operation — the prior
+# style (plain or partial) is restored.
+
+KEYS undo me
+ENTER
+HOME
+ASSERT_CELL_STYLE A:A1  plain
+
+# Apply bold, then undo.
+KEY :
+KEY F
+KEY B
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold
+
+ALT_F 4
+ASSERT_CELL_STYLE A:A1  plain
+
+# Partial-state undo: bold baseline, then italic, then undo.
+# Undo should leave the cell bold (its pre-italic state), not plain.
+KEY :
+KEY F
+KEY B
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold
+
+KEY :
+KEY F
+KEY I
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold Italic
+
+ALT_F 4
+ASSERT_CELL_STYLE A:A1  Bold

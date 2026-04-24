@@ -54,7 +54,7 @@ Printer  Dir  Status  Update  Other  Autoexec  Ext  Graph  Temp  Quit
 - **Dir** (default directory)
 - **Status** (display STAT screen)
 - **Update** (write `123R31.CNF`; L123 writes `~/.config/l123/l123.toml`)
-- **Other** → International (Punctuation A-H, Currency Prefix/Suffix, Date A-D, Time A-D, Negative, Release-2 LICS/LMBCS, File-Translation, Quit) | Help Instant/Removable | Clock Standard/International/None/Filename | **Undo Enable/Disable** **[MVP-critical]** | Beep | Add-In | Expanded-Memory
+- **Other** → International (Punctuation A-H, Currency Prefix/Suffix, Date A-D, Time A-D, Negative, Release-2 LICS/LMBCS, File-Translation, Quit) | Help Instant/Removable | Clock Standard/International/None/Filename | **Undo Enable/Disable** **[MVP-critical]** | **Beep Enable/Disable** (soft terminal bell on edge collisions; also `error_beep` in L123.CNF) | Add-In | Expanded-Memory
 - **Autoexec** → Yes | No    (run `\0` macro on retrieve)
 - **Ext** → Save (default ext) | List (filter for /File List/Retrieve)
 - **Graph** → Columnwise/Rowwise auto-graph; CGM | PIC default type
@@ -289,6 +289,44 @@ No   Yes
 ```
 
 Exit with confirmation.
+
+---
+
+## : — WYSIWYG colon-menu (R3.4a)
+
+R3.4a promoted the WYSIWYG add-in to an always-on feature.  Its
+commands live under the `:` prefix, parallel to the classic `/` menu.
+Entered by pressing `:` in READY.  Letter accelerators work the same
+way as `/` — first letter descends without Enter.
+
+```
+: Worksheet  Format  Graph  Named-Style  Print  Display  Special  Text  Quit
+  W          F       G      N            P      D        S        T     Q
+```
+
+All top-level items display the muscle-memory path.  Only `:Format`
+has live leaves today; every other top-level descends into
+"Not implemented yet".
+
+### :Format  (F)
+
+```
+Bold  Italic  Underline  Font  Lines  Color  Alignment  Reset  Quit
+```
+
+- **Bold** → Set | Clear   **[MVP]**
+- **Italic** → Set | Clear   **[MVP]**
+- **Underline** → Set | Clear   **[MVP]**
+- **Font**   **[STR]**
+- **Lines**   **[STR]**
+- **Color**   **[STR]**
+- **Alignment**   **[STR]**
+- **Reset** — clear bold + italic + underline on the selected range   **[MVP]**
+- **Quit** — return to READY
+
+Each of Bold / Italic / Underline takes a POINT range:
+`:FBS` applies bold, `:FBC` removes it.  Multiple attributes compose
+on a single cell (so `:FBS` then `:FIS` produces `{Bold Italic}`).
 
 ---
 

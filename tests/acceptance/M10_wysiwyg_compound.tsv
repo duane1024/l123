@@ -1,0 +1,32 @@
+# Compose multiple WYSIWYG attributes on a single cell.  Bold, then
+# Italic, then Underline — all three coexist and render as
+# `{Bold Italic Underline}` on line 1 in canonical order.
+
+KEYS world
+ENTER
+HOME
+
+# :FBS — bold
+KEY :
+KEY F
+KEY B
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold
+
+# :FIS — italic composed onto the bold cell
+KEY :
+KEY F
+KEY I
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold Italic
+
+# :FUS — add underline
+KEY :
+KEY F
+KEY U
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold Italic Underline
+ASSERT_PANEL_L1   {Bold Italic Underline}

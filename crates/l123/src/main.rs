@@ -54,6 +54,8 @@ ENVIRONMENT:
                 this file; when unset, no logging is performed.
     RUST_LOG    Standard tracing env filter (e.g. `l123=debug`).
                 Defaults to `info` when L123_LOG is set.
+    L123_BEEP   Soft terminal bell on edge collisions (true/false).
+                Default: true.
 
 CONFIG FILE:
     ~/.l123/L123.CNF    Optional. Run `l123 config --init` to create

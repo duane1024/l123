@@ -1,0 +1,32 @@
+# WYSIWYG `:Format Bold Set` on a labeled cell.
+# Entered via the colon-menu (R3.4a WYSIWYG), POINT-committed on A1.
+
+KEYS hello
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: 'hello
+ASSERT_CELL_STYLE A:A1  plain
+
+# `:` enters WYSIWYG menu mode, `F` descends to :Format,
+# `B` to :Format Bold, `S` to :Format Bold Set.  Line-3 preview
+# should surface the current leaf as we descend.
+KEY :
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Worksheet
+
+KEY F
+ASSERT_PANEL_L2   Bold
+
+KEY B
+ASSERT_PANEL_L2   Set
+
+KEY S
+# Drops into POINT waiting for a range.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   style
+
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL_STYLE A:A1  Bold
+ASSERT_PANEL_L1   {Bold}
+ASSERT_PANEL_L1   'hello

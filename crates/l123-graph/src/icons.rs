@@ -111,6 +111,9 @@ pub enum IconAction {
     /// Open the slash menu and descend via these chars as if the user
     /// typed "/" followed by each character in turn (case-insensitive).
     MenuPath(&'static str),
+    /// Like [`IconAction::MenuPath`] but opens the WYSIWYG `:` colon
+    /// menu instead of the classic `/` menu.
+    WysiwygMenuPath(&'static str),
     /// Fire a non-menu key.
     SysKey(SysAction),
     /// Dynamic panel navigator. Slot 16 uses this; the UI decides
@@ -156,19 +159,22 @@ pub fn icon_action(id: u8) -> IconAction {
         7 => MenuPath("PF"), // Print file
         10 => SysKey(GraphView),
         11 => SysKey(Undo),
-        14 => MenuPath("RFR"), // Clear formats → Range Format Reset
-        17 => MenuPath("RFC"), // Currency
-        19 => MenuPath("RFP"), // Percent
-        26 => MenuPath("C"),   // Copy
-        27 => MenuPath("M"),   // Move
-        28 => MenuPath("RLL"), // Label Left
-        29 => MenuPath("RLC"), // Label Center
-        30 => MenuPath("RLR"), // Label Right
-        33 => MenuPath("RE"),  // Range Erase
-        34 => MenuPath("WIR"), // Insert row
-        35 => MenuPath("WIC"), // Insert column
-        36 => MenuPath("WDR"), // Delete row
-        37 => MenuPath("WDC"), // Delete column
+        12 => WysiwygMenuPath("FBS"), // Bold (set) via :Format Bold Set
+        13 => WysiwygMenuPath("FIS"), // Italic (set) via :Format Italic Set
+        14 => MenuPath("RFR"),        // Clear formats → Range Format Reset
+        15 => WysiwygMenuPath("FUS"), // Underline (set) via :Format Underline Set
+        17 => MenuPath("RFC"),        // Currency
+        19 => MenuPath("RFP"),        // Percent
+        26 => MenuPath("C"),          // Copy
+        27 => MenuPath("M"),          // Move
+        28 => MenuPath("RLL"),        // Label Left
+        29 => MenuPath("RLC"),        // Label Center
+        30 => MenuPath("RLR"),        // Label Right
+        33 => MenuPath("RE"),         // Range Erase
+        34 => MenuPath("WIR"),        // Insert row
+        35 => MenuPath("WIC"),        // Insert column
+        36 => MenuPath("WDR"),        // Delete row
+        37 => MenuPath("WDC"),        // Delete column
         38 => SysKey(Home),
         44 => SysKey(Recalc),
         49 => SysKey(Goto),
@@ -307,38 +313,38 @@ pub fn render_panel_png(panel: Panel) -> Vec<u8> {
                     // grey bg, black outline, EGA yellow/blue/cyan/
                     // red/magenta/green accents). No category tint —
                     // the real icons have enough distinctness.
-                        paint_color_bitmap(cell, &ICON_COLOR_BITMAPS[id as usize]);
-                    } else {
-                        // Fall back to the category-tinted mono renderer
-                        // for any icon whose RLE record didn't decode.
-                        let cat = icon_category(id);
-                        let _ = cell.draw(&Rectangle::new(
-                            [(1, 1), ((cw as i32) - 2, (ch as i32) - 2)],
-                            cat.tint().filled(),
-                        ));
-                        paint_bitmap(cell, &ICON_BITMAPS[id as usize], &cat.ink());
-                    }
+                    paint_color_bitmap(cell, &ICON_COLOR_BITMAPS[id as usize]);
                 } else {
-                    draw_pager(cell, panel);
+                    // Fall back to the category-tinted mono renderer
+                    // for any icon whose RLE record didn't decode.
+                    let cat = icon_category(id);
+                    let _ = cell.draw(&Rectangle::new(
+                        [(1, 1), ((cw as i32) - 2, (ch as i32) - 2)],
+                        cat.tint().filled(),
+                    ));
+                    paint_bitmap(cell, &ICON_BITMAPS[id as usize], &cat.ink());
                 }
-                // Frame drawn last so the tint never leaks over the border.
-                let _ = cell.draw(&Rectangle::new(
-                    [(0, 0), ((cw as i32) - 1, (ch as i32) - 1)],
-                    INK.stroke_width(1),
-                ));
+            } else {
+                draw_pager(cell, panel);
             }
-            let _ = root.present();
+            // Frame drawn last so the tint never leaks over the border.
+            let _ = cell.draw(&Rectangle::new(
+                [(0, 0), ((cw as i32) - 1, (ch as i32) - 1)],
+                INK.stroke_width(1),
+            ));
         }
-        let img = match image::RgbImage::from_raw(w, h, rgb) {
-            Some(i) => i,
-            None => return Vec::new(),
-        };
-        let mut out = Cursor::new(Vec::new());
-        match img.write_to(&mut out, image::ImageFormat::Png) {
-            Ok(_) => out.into_inner(),
-            Err(_) => Vec::new(),
-        }
+        let _ = root.present();
     }
+    let img = match image::RgbImage::from_raw(w, h, rgb) {
+        Some(i) => i,
+        None => return Vec::new(),
+    };
+    let mut out = Cursor::new(Vec::new());
+    match img.write_to(&mut out, image::ImageFormat::Png) {
+        Ok(_) => out.into_inner(),
+        Err(_) => Vec::new(),
+    }
+}
 
 /// Paint a 24×24 palette-indexed colour bitmap into `cell` using the
 /// canonical Lotus WYSIWYG palette ([`LOTUS_PALETTE_RGB`]). Row 23 is
@@ -531,8 +537,15 @@ mod tests {
     #[test]
     fn icon_action_unmapped_ids_are_noop() {
         assert_eq!(icon_action(4), IconAction::Noop); // help
-        assert_eq!(icon_action(12), IconAction::Noop); // bold (wysiwyg)
+        assert_eq!(icon_action(16), IconAction::Noop); // double-underline (wysiwyg)
         assert_eq!(icon_action(93), IconAction::Noop);
+    }
+
+    #[test]
+    fn icon_action_wires_wysiwyg_bold_italic_underline() {
+        assert_eq!(icon_action(12), IconAction::WysiwygMenuPath("FBS"));
+        assert_eq!(icon_action(13), IconAction::WysiwygMenuPath("FIS"));
+        assert_eq!(icon_action(15), IconAction::WysiwygMenuPath("FUS"));
     }
 
     #[test]

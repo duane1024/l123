@@ -12,9 +12,10 @@ use ironcalc::base::{expressions::utils::number_to_column, types::Cell, Model};
 use ironcalc::export::save_to_xlsx;
 use ironcalc::import::load_from_xlsx;
 
-use l123_core::{address::col_to_letters, Address, Range, SheetId, Value};
+use l123_core::{address::col_to_letters, Address, Format, Range, SheetId, TextStyle, Value};
 
 use crate::engine::{CellView, Engine, EngineError, Result};
+use crate::num_fmt;
 
 pub struct IronCalcEngine {
     model: Model<'static>,
@@ -240,6 +241,41 @@ impl Engine for IronCalcEngine {
             .map_err(EngineError::Backend)
     }
 
+    fn set_cell_text_style(&mut self, addr: Address, style: TextStyle) -> Result<()> {
+        self.extend_sheets_to(addr.sheet)?;
+        let sheet = self.sheet_index(addr.sheet);
+        let row = Self::row_1based(addr);
+        let col = Self::col_1based(addr);
+        // Start from the cell's effective style so we preserve any
+        // numeric format, fill, or borders the engine already knows
+        // about. We only touch the three font bits that L123 models.
+        let mut s = self
+            .model
+            .get_style_for_cell(sheet, row, col)
+            .map_err(EngineError::Backend)?;
+        s.font.b = style.bold;
+        s.font.i = style.italic;
+        s.font.u = style.underline;
+        self.model
+            .set_cell_style(sheet, row, col, &s)
+            .map_err(EngineError::Backend)
+    }
+
+    fn set_cell_format(&mut self, addr: Address, format: Format) -> Result<()> {
+        self.extend_sheets_to(addr.sheet)?;
+        let sheet = self.sheet_index(addr.sheet);
+        let row = Self::row_1based(addr);
+        let col = Self::col_1based(addr);
+        let mut s = self
+            .model
+            .get_style_for_cell(sheet, row, col)
+            .map_err(EngineError::Backend)?;
+        s.num_fmt = num_fmt::to_num_fmt(format);
+        self.model
+            .set_cell_style(sheet, row, col, &s)
+            .map_err(EngineError::Backend)
+    }
+
     fn get_column_width(&self, sheet: SheetId, col: u16) -> Result<Option<u8>> {
         let idx = self.sheet_index(sheet) as usize;
         let Some(ws) = self.model.workbook.worksheets.get(idx) else {
@@ -290,6 +326,81 @@ impl IronCalcEngine {
                     // Address's row field is unused here; we key by
                     // (sheet, col) in the UI — supply row 0 for shape.
                     out.push((Address::new(sheet, col_0b, 0), chars));
+                }
+            }
+        }
+        out
+    }
+
+    /// Enumerate every cell that carries a non-plain text style
+    /// (bold / italic / underline). Used after `load_xlsx` to
+    /// repopulate the UI's `cell_text_styles` cache.  Cells whose
+    /// style the engine considers "plain" are skipped so we don't
+    /// flood the UI map with empty entries.
+    pub fn used_cell_text_styles(&self) -> Vec<(Address, TextStyle)> {
+        let mut out = Vec::new();
+        for (sheet_idx, ws) in self.model.workbook.worksheets.iter().enumerate() {
+            let sheet = SheetId(sheet_idx as u16);
+            for (&row_1b, row_cells) in &ws.sheet_data {
+                if row_1b < 1 {
+                    continue;
+                }
+                let row_0b = (row_1b - 1) as u32;
+                for &col_1b in row_cells.keys() {
+                    if col_1b < 1 {
+                        continue;
+                    }
+                    let col_0b = (col_1b - 1) as u16;
+                    let addr = Address::new(sheet, col_0b, row_0b);
+                    let Ok(style) = self
+                        .model
+                        .get_style_for_cell(sheet_idx as u32, row_1b, col_1b)
+                    else {
+                        continue;
+                    };
+                    let ts = TextStyle {
+                        bold: style.font.b,
+                        italic: style.font.i,
+                        underline: style.font.u,
+                    };
+                    if !ts.is_empty() {
+                        out.push((addr, ts));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Enumerate every cell whose style carries a non-General number
+    /// format. Used after `load_xlsx` to repopulate the UI's
+    /// `cell_formats` map so xlsx files authored in Excel (and in l123
+    /// itself across /FS → /FR) keep their Currency / Percent / etc.
+    /// tags.
+    pub fn used_cell_formats(&self) -> Vec<(Address, Format)> {
+        let mut out = Vec::new();
+        for (sheet_idx, ws) in self.model.workbook.worksheets.iter().enumerate() {
+            let sheet = SheetId(sheet_idx as u16);
+            for (&row_1b, row_cells) in &ws.sheet_data {
+                if row_1b < 1 {
+                    continue;
+                }
+                let row_0b = (row_1b - 1) as u32;
+                for &col_1b in row_cells.keys() {
+                    if col_1b < 1 {
+                        continue;
+                    }
+                    let col_0b = (col_1b - 1) as u16;
+                    let addr = Address::new(sheet, col_0b, row_0b);
+                    let Ok(style) = self
+                        .model
+                        .get_style_for_cell(sheet_idx as u32, row_1b, col_1b)
+                    else {
+                        continue;
+                    };
+                    if let Some(fmt) = num_fmt::parse(&style.num_fmt) {
+                        out.push((addr, fmt));
+                    }
                 }
             }
         }
@@ -549,6 +660,171 @@ mod tests {
         assert_eq!(e2.get_column_width(SheetId::A, 0).unwrap(), Some(15));
         // Untouched column reads as None (i.e. default).
         assert_eq!(e2.get_column_width(SheetId::A, 1).unwrap(), None);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn cell_text_style_round_trips_with_values_set_first() {
+        // Mirrors the UI's save order: values written via `set_user_input`
+        // first, then text styles applied via `set_cell_text_style`.
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "l123_engine_style_rt_v_{}_{}",
+            process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("style_vrt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "'hi")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "'bye")
+            .unwrap();
+        e.recalc();
+        let bold_italic = TextStyle {
+            bold: true,
+            italic: true,
+            underline: false,
+        };
+        e.set_cell_text_style(Address::new(SheetId::A, 0, 0), bold_italic)
+            .unwrap();
+        e.set_cell_text_style(Address::new(SheetId::A, 0, 1), TextStyle::UNDERLINE)
+            .unwrap();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        let styles: std::collections::HashMap<Address, TextStyle> =
+            e2.used_cell_text_styles().into_iter().collect();
+        assert_eq!(
+            styles.get(&Address::new(SheetId::A, 0, 0)).copied(),
+            Some(bold_italic),
+            "A1 should not pick up A2's underline"
+        );
+        assert_eq!(
+            styles.get(&Address::new(SheetId::A, 0, 1)).copied(),
+            Some(TextStyle::UNDERLINE),
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn cell_text_style_round_trips_through_xlsx() {
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir =
+            std::env::temp_dir().join(format!("l123_engine_style_rt_{}_{}", process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("style_rt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        // Three cells with distinct style combinations.
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "'bold")
+            .unwrap();
+        e.set_cell_text_style(Address::new(SheetId::A, 0, 0), TextStyle::BOLD)
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 1, 0), "'italic")
+            .unwrap();
+        e.set_cell_text_style(Address::new(SheetId::A, 1, 0), TextStyle::ITALIC)
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 2, 0), "'all")
+            .unwrap();
+        e.set_cell_text_style(
+            Address::new(SheetId::A, 2, 0),
+            TextStyle {
+                bold: true,
+                italic: true,
+                underline: true,
+            },
+        )
+        .unwrap();
+        e.recalc();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        let styles: std::collections::HashMap<Address, TextStyle> =
+            e2.used_cell_text_styles().into_iter().collect();
+        assert_eq!(
+            styles.get(&Address::new(SheetId::A, 0, 0)).copied(),
+            Some(TextStyle::BOLD)
+        );
+        assert_eq!(
+            styles.get(&Address::new(SheetId::A, 1, 0)).copied(),
+            Some(TextStyle::ITALIC)
+        );
+        assert_eq!(
+            styles.get(&Address::new(SheetId::A, 2, 0)).copied(),
+            Some(TextStyle {
+                bold: true,
+                italic: true,
+                underline: true
+            })
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn cell_format_round_trips_through_xlsx() {
+        use l123_core::Format;
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir =
+            std::env::temp_dir().join(format!("l123_engine_fmt_rt_{}_{}", process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fmt_rt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "10000")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "0.125")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 2), "42")
+            .unwrap();
+        e.recalc();
+        e.set_cell_format(Address::new(SheetId::A, 0, 0), Format::currency(2))
+            .unwrap();
+        e.set_cell_format(Address::new(SheetId::A, 0, 1), Format::percent(1))
+            .unwrap();
+        // A3 left on General — should NOT appear in used_cell_formats.
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        let fmts: std::collections::HashMap<Address, Format> =
+            e2.used_cell_formats().into_iter().collect();
+        assert_eq!(
+            fmts.get(&Address::new(SheetId::A, 0, 0)).copied(),
+            Some(Format::currency(2))
+        );
+        assert_eq!(
+            fmts.get(&Address::new(SheetId::A, 0, 1)).copied(),
+            Some(Format::percent(1))
+        );
+        assert!(
+            !fmts.contains_key(&Address::new(SheetId::A, 0, 2)),
+            "General-format cell should not surface in used_cell_formats"
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);

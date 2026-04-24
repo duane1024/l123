@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use l123_core::{Address, Range, SheetId, Value};
+use l123_core::{Address, Format, Range, SheetId, TextStyle, Value};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -123,5 +123,22 @@ pub trait Engine {
     /// Returns `None` when the column inherits the backend default.
     fn get_column_width(&self, _sheet: SheetId, _col: u16) -> Result<Option<u8>> {
         Err(EngineError::Unsupported("get_column_width"))
+    }
+
+    /// Set the text-style bits (bold / italic / underline) on a cell.
+    /// Passing [`TextStyle::PLAIN`] clears the override.  Used by the
+    /// xlsx round-trip: the UI pushes its per-cell `cell_text_styles`
+    /// map into the engine before save.
+    fn set_cell_text_style(&mut self, _addr: Address, _style: TextStyle) -> Result<()> {
+        Err(EngineError::Unsupported("set_cell_text_style"))
+    }
+
+    /// Attach a number format to a cell. Translated to an Excel
+    /// `num_fmt` string on the underlying IronCalc style; the xlsx
+    /// round-trip reads it back via the adapter's `used_cell_formats`.
+    /// Passing [`Format::GENERAL`] / [`Format::RESET`] clears the
+    /// override.
+    fn set_cell_format(&mut self, _addr: Address, _format: Format) -> Result<()> {
+        Err(EngineError::Unsupported("set_cell_format"))
     }
 }

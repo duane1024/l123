@@ -1,0 +1,35 @@
+# :Format Bold Clear removes just the bold bit; other attributes stay.
+# :Format Reset drops all three.
+
+KEYS row1
+ENTER
+HOME
+
+# Apply bold + italic to A1.
+KEY :
+KEY F
+KEY B
+KEY S
+ENTER
+KEY :
+KEY F
+KEY I
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold Italic
+
+# :FBC — clear bold only.  Italic survives.
+KEY :
+KEY F
+KEY B
+KEY C
+ENTER
+ASSERT_CELL_STYLE A:A1  Italic
+ASSERT_PANEL_L1   {Italic}
+
+# :FR — reset all attributes; no marker on line 1.
+KEY :
+KEY F
+KEY R
+ENTER
+ASSERT_CELL_STYLE A:A1  plain

@@ -121,6 +121,23 @@ when `log_file` is set.
 - **Aliases in file:** `rust_log`
 - **Default:** `info` (when `log_file` is set)
 
+### `error_beep`
+
+Soft terminal bell (the ASCII BEL character, `\x07`) fired when the
+pointer hits an edge of the sheet — going up from row 1, left from
+column A, and the equivalent on the trailing edges. Terminal
+preferences decide whether that rings, flashes, or is silently
+ignored, so "soft" here just means we defer to the user's terminal.
+
+Toggle at runtime with `/Worksheet Global Default Other Beep
+Enable|Disable`.
+
+- **Env:** `L123_BEEP`
+- **Aliases in file:** `beep`
+- **Accepted values:** `true/false`, `on/off`, `yes/no`, `1/0`
+  (case-insensitive)
+- **Default:** `true`
+
 Examples:
 
 - `info` — everything at info level and above

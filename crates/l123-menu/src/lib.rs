@@ -86,6 +86,12 @@ pub enum Action {
     WorksheetGlobalGroupDisable,
     WorksheetGlobalDefaultOtherUndoEnable,
     WorksheetGlobalDefaultOtherUndoDisable,
+    /// `/Worksheet Global Default Other Beep Enable` — turn on the
+    /// soft terminal bell that fires when the pointer hits an edge
+    /// of the sheet or an equivalent invalid operation is attempted.
+    WorksheetGlobalDefaultOtherBeepEnable,
+    /// `/Worksheet Global Default Other Beep Disable`.
+    WorksheetGlobalDefaultOtherBeepDisable,
     RangeErase,
     RangeLabelLeft,
     RangeLabelRight,
@@ -171,6 +177,22 @@ pub enum Action {
     GraphSave,
     /// `/Graph Quit` — close the `/Graph` menu back to READY.
     GraphQuit,
+
+    // ---- WYSIWYG (`:`) colon-menu commands -----------------------------
+    /// `:Format Bold Set` — apply bold to a range.
+    FormatBoldSet,
+    /// `:Format Bold Clear` — remove bold from a range.
+    FormatBoldClear,
+    /// `:Format Italic Set`.
+    FormatItalicSet,
+    /// `:Format Italic Clear`.
+    FormatItalicClear,
+    /// `:Format Underline Set`.
+    FormatUnderlineSet,
+    /// `:Format Underline Clear`.
+    FormatUnderlineClear,
+    /// `:Format Reset` — clear bold + italic + underline on a range.
+    FormatReset,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -454,6 +476,21 @@ const WG_DEFAULT_OTHER_UNDO_MENU: &[MenuItem] = &[
     },
 ];
 
+const WG_DEFAULT_OTHER_BEEP_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Enable",
+        help: "Enable the soft terminal bell on edge collisions",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherBeepEnable),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Disable",
+        help: "Disable the soft terminal bell on edge collisions",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherBeepDisable),
+    },
+];
+
 const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'I',
@@ -482,8 +519,8 @@ const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'B',
         name: "Beep",
-        help: "Enable/disable error beep",
-        body: MenuBody::NotImplemented("wgdo-beep"),
+        help: "Enable/disable the soft error beep on edge collisions",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_BEEP_MENU),
     },
     MenuItem {
         letter: 'A',
@@ -1625,6 +1662,174 @@ const ADDIN_MENU: &[MenuItem] = &[
     },
 ];
 
+// --------------------------------------------------------------------------
+// WYSIWYG `:` colon-menu tree. R3.4a promoted WYSIWYG to an always-on
+// feature; its commands live under the colon prefix to coexist with the
+// classic `/` menu. Only `:Format` has live leaves today — the rest of
+// the top level renders the muscle-memory path but surfaces
+// "Not implemented yet" on commit.
+// --------------------------------------------------------------------------
+
+const WYSIWYG_FORMAT_BOLD_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'S',
+        name: "Set",
+        help: "Apply bold to a range",
+        body: MenuBody::Action(Action::FormatBoldSet),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Clear",
+        help: "Remove bold from a range",
+        body: MenuBody::Action(Action::FormatBoldClear),
+    },
+];
+
+const WYSIWYG_FORMAT_ITALIC_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'S',
+        name: "Set",
+        help: "Apply italic to a range",
+        body: MenuBody::Action(Action::FormatItalicSet),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Clear",
+        help: "Remove italic from a range",
+        body: MenuBody::Action(Action::FormatItalicClear),
+    },
+];
+
+const WYSIWYG_FORMAT_UNDERLINE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'S',
+        name: "Set",
+        help: "Apply underline to a range",
+        body: MenuBody::Action(Action::FormatUnderlineSet),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Clear",
+        help: "Remove underline from a range",
+        body: MenuBody::Action(Action::FormatUnderlineClear),
+    },
+];
+
+const WYSIWYG_FORMAT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Bold",
+        help: "Set or clear the bold attribute on a range",
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_BOLD_MENU),
+    },
+    MenuItem {
+        letter: 'I',
+        name: "Italic",
+        help: "Set or clear the italic attribute on a range",
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_ITALIC_MENU),
+    },
+    MenuItem {
+        letter: 'U',
+        name: "Underline",
+        help: "Set or clear the underline attribute on a range",
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_UNDERLINE_MENU),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Font",
+        help: "Change font on a range",
+        body: MenuBody::NotImplemented("wysiwyg-format-font"),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Lines",
+        help: "Draw lines around a range",
+        body: MenuBody::NotImplemented("wysiwyg-format-lines"),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Color",
+        help: "Change text or background color",
+        body: MenuBody::NotImplemented("wysiwyg-format-color"),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Alignment",
+        help: "Change alignment",
+        body: MenuBody::NotImplemented("wysiwyg-format-alignment"),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Clear bold, italic and underline on a range",
+        body: MenuBody::Action(Action::FormatReset),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
+/// Top-level WYSIWYG colon-menu.  Entered by pressing `:` in READY.
+pub const WYSIWYG_ROOT: &[MenuItem] = &[
+    MenuItem {
+        letter: 'W',
+        name: "Worksheet",
+        help: "WYSIWYG worksheet display settings",
+        body: MenuBody::NotImplemented("wysiwyg-worksheet"),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Format",
+        help: "Bold, italic, underline, font, color, alignment...",
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_MENU),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Graph",
+        help: "Embed a graph at the current cell",
+        body: MenuBody::NotImplemented("wysiwyg-graph"),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Named-Style",
+        help: "Named cell formatting style",
+        body: MenuBody::NotImplemented("wysiwyg-named-style"),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Print",
+        help: "WYSIWYG print controls",
+        body: MenuBody::NotImplemented("wysiwyg-print"),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Display",
+        help: "Screen display settings",
+        body: MenuBody::NotImplemented("wysiwyg-display"),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Special",
+        help: "Copy / move / import formatting",
+        body: MenuBody::NotImplemented("wysiwyg-special"),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Text",
+        help: "Text editing and justification",
+        body: MenuBody::NotImplemented("wysiwyg-text"),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
 /// Top-level slash menu.
 pub const ROOT: &[MenuItem] = &[
     MenuItem {
@@ -1786,6 +1991,20 @@ mod tests {
     }
 
     #[test]
+    fn resolve_wgdo_beep_enable_and_disable() {
+        let e = resolve(&['W', 'G', 'D', 'O', 'B', 'E']).unwrap();
+        assert!(matches!(
+            e.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherBeepEnable)
+        ));
+        let d = resolve(&['W', 'G', 'D', 'O', 'B', 'D']).unwrap();
+        assert!(matches!(
+            d.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherBeepDisable)
+        ));
+    }
+
+    #[test]
     fn resolve_file_open_before_and_after() {
         let b = resolve(&['F', 'O', 'B']).unwrap();
         assert!(matches!(b.body, MenuBody::Action(Action::FileOpenBefore)));
@@ -1854,5 +2073,66 @@ mod tests {
             let c = m.name.chars().next().unwrap();
             assert!(c.is_ascii_uppercase(), "{}", m.name);
         }
+    }
+
+    #[test]
+    fn wysiwyg_letters_are_unique_at_every_level() {
+        assert_unique_letters(WYSIWYG_ROOT, ":");
+    }
+
+    #[test]
+    fn wysiwyg_top_level_names() {
+        let names: Vec<&str> = WYSIWYG_ROOT.iter().map(|m| m.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Worksheet",
+                "Format",
+                "Graph",
+                "Named-Style",
+                "Print",
+                "Display",
+                "Special",
+                "Text",
+                "Quit",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_wysiwyg_format_bold_set_and_clear() {
+        let s = resolve_within(WYSIWYG_ROOT, &['F', 'B', 'S']).unwrap();
+        assert!(matches!(s.body, MenuBody::Action(Action::FormatBoldSet)));
+        let c = resolve_within(WYSIWYG_ROOT, &['F', 'B', 'C']).unwrap();
+        assert!(matches!(c.body, MenuBody::Action(Action::FormatBoldClear)));
+    }
+
+    #[test]
+    fn resolve_wysiwyg_format_italic_and_underline() {
+        let i = resolve_within(WYSIWYG_ROOT, &['F', 'I', 'S']).unwrap();
+        assert!(matches!(i.body, MenuBody::Action(Action::FormatItalicSet)));
+        let u = resolve_within(WYSIWYG_ROOT, &['F', 'U', 'C']).unwrap();
+        assert!(matches!(
+            u.body,
+            MenuBody::Action(Action::FormatUnderlineClear)
+        ));
+    }
+
+    #[test]
+    fn resolve_wysiwyg_format_reset() {
+        let r = resolve_within(WYSIWYG_ROOT, &['F', 'R']).unwrap();
+        assert!(matches!(r.body, MenuBody::Action(Action::FormatReset)));
+    }
+
+    #[test]
+    fn wysiwyg_format_font_is_not_implemented() {
+        let f = resolve_within(WYSIWYG_ROOT, &['F', 'F']).unwrap();
+        assert!(matches!(f.body, MenuBody::NotImplemented(_)));
+    }
+
+    #[test]
+    fn wysiwyg_quit_maps_to_cancel() {
+        let q = resolve_within(WYSIWYG_ROOT, &['Q']).unwrap();
+        assert!(matches!(q.body, MenuBody::Action(Action::Cancel)));
     }
 }

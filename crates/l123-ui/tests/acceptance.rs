@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use l123_ui::App;
 
 /// Transcripts share process CWD (set per transcript) and write to
@@ -190,6 +190,35 @@ fn run_transcript(path: &Path) {
                     path.display()
                 );
             }
+            // "ASSERT_CELL_STYLE A:A1  Bold Italic" — assert the cell's
+            // WYSIWYG text-style override. Use the literal word `plain`
+            // (or an empty trailer) when the cell should have no style
+            // entry at all.  Non-plain expectations use the marker
+            // names exactly as they appear on control-panel line 1
+            // (`Bold`, `Italic`, `Underline`, space-joined in that order).
+            "ASSERT_CELL_STYLE" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let addr = parts.next().unwrap_or("");
+                let want_raw = parts.next().unwrap_or("").trim();
+                let got = app.cell_text_style(addr);
+                if want_raw.is_empty() || want_raw.eq_ignore_ascii_case("plain") {
+                    assert!(
+                        got.is_none(),
+                        "{}:{line_no}: cell {addr} expected plain, got {got:?}",
+                        path.display()
+                    );
+                } else {
+                    let got_marker = got
+                        .and_then(|s| s.marker())
+                        .unwrap_or_else(|| "plain".to_string());
+                    assert_eq!(
+                        got_marker,
+                        want_raw,
+                        "{}:{line_no}: cell {addr} style expected {want_raw:?} got {got_marker:?}",
+                        path.display()
+                    );
+                }
+            }
             // Current (unnamed) graph's type. Use an ASCII all-caps
             // token: LINE | BAR | XY | STACK | PIE | HLCO | MIXED.
             "ASSERT_GRAPH_TYPE" => {
@@ -218,6 +247,21 @@ fn run_transcript(path: &Path) {
                     got,
                     want,
                     "{}:{line_no}: graph series {slot} expected {want:?} got {got:?}",
+                    path.display()
+                );
+            }
+            "ASSERT_BEEP_COUNT" => {
+                let want: u64 = rest.parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: ASSERT_BEEP_COUNT expects an integer, got {rest:?}",
+                        path.display()
+                    )
+                });
+                let got = app.beep_count();
+                assert_eq!(
+                    got,
+                    want,
+                    "{}:{line_no}: beep count expected {want} got {got}",
                     path.display()
                 );
             }
@@ -256,6 +300,70 @@ fn run_transcript(path: &Path) {
             // known state. Errors (e.g. not-present) are ignored.
             "RM_FILE" => {
                 let _ = std::fs::remove_file(rest);
+            }
+            // "HOVER_ICON <panel> <slot>" — pin the icon-hover state
+            // as if the mouse were over (`panel`, `slot`). The headless
+            // render buffer has no real icon panel to hit-test against,
+            // so transcripts short-circuit the mouse path and poke the
+            // App's hover state directly.
+            "HOVER_ICON" => {
+                let mut parts = rest.split_ascii_whitespace();
+                let panel_n: u8 = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: HOVER_ICON expects `<panel 1..7> <slot 0..16>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                let slot: usize = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: HOVER_ICON expects `<panel 1..7> <slot 0..16>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                let panel = l123_graph::Panel::ORDER
+                    .get(panel_n.saturating_sub(1) as usize)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{}:{line_no}: HOVER_ICON panel number must be 1..=7, got {panel_n}",
+                            path.display()
+                        )
+                    });
+                app.set_hovered_icon(panel, slot);
+            }
+            // Clear the hover state set by a prior `HOVER_ICON`.
+            "HOVER_CLEAR" => {
+                app.clear_hovered_icon();
+            }
+            // "MOUSE_CLICK <col> <row>" — synthesize a left-button
+            // mouse-down at the given terminal coordinates. Grid-click
+            // hit-testing needs the last_grid_area cache, which is set
+            // by the preceding render pass — so a transcript must have
+            // produced at least one ASSERT_* (which triggers a render)
+            // before clicking, or the click will be a no-op.
+            "MOUSE_CLICK" => {
+                let mut parts = rest.split_ascii_whitespace();
+                let col: u16 = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: MOUSE_CLICK expects `<col> <row>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                let row: u16 = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: MOUSE_CLICK expects `<col> <row>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                // Prime the grid-area cache by rendering first — this
+                // mirrors what the real event loop does between frames.
+                let _ = app.render_to_buffer(width, height);
+                app.handle_mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: col,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                });
             }
             // "ASSERT_FILE_CONTAINS <path>  <substr>" — split on the
             // first whitespace run. The remainder is matched as a
@@ -454,6 +562,7 @@ transcripts! {
     m3_wg_col_width    => "M3_wg_col_width.tsv",
     m3_wg_label        => "M3_wg_label.tsv",
     m3_range_name      => "M3_range_name.tsv",
+    m3_beep_edge       => "M3_beep_edge.tsv",
     m4_file_save       => "M4_file_save.tsv",
     m4_file_save_replace => "M4_file_save_replace.tsv",
     m4_file_retrieve   => "M4_file_retrieve.tsv",
@@ -493,4 +602,14 @@ transcripts! {
     m10_status_line_filename => "M10_status_line_filename.tsv",
     m10_worksheet_status     => "M10_worksheet_status.tsv",
     m10_label_spill          => "M10_label_spill.tsv",
+    m10_wysiwyg_bold         => "M10_wysiwyg_bold.tsv",
+    m10_wysiwyg_compound     => "M10_wysiwyg_compound.tsv",
+    m10_wysiwyg_clear        => "M10_wysiwyg_clear.tsv",
+    m10_wysiwyg_undo         => "M10_wysiwyg_undo.tsv",
+    m10_wysiwyg_panel_marker => "M10_wysiwyg_panel_marker.tsv",
+    m10_wysiwyg_xlsx_round_trip => "M10_wysiwyg_xlsx_round_trip.tsv",
+    m10_xlsx_format_round_trip  => "M10_xlsx_format_round_trip.tsv",
+    m10_icon_hover              => "M10_icon_hover.tsv",
+    m10_mouse_click_cell        => "M10_mouse_click_cell.tsv",
+    m10_mouse_click_point_extend => "M10_mouse_click_point_extend.tsv",
 }
