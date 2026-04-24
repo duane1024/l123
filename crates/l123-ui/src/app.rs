@@ -3,7 +3,7 @@
 //! Scope as of M1 cycle 2:
 //! - READY / LABEL / VALUE modes with first-character dispatch (LABEL only
 //!   implemented this cycle; VALUE lands in cycle 3).
-//! - `'` auto-prefixed labels. Enter commits; Ctrl-C quits.
+//! - `'` auto-prefixed labels. Enter commits; `/QY` quits.
 //! - Three-line control panel, mode indicator, cell readout.
 
 use std::cell::Cell;
@@ -1199,11 +1199,6 @@ impl App {
     // ---------------- key handling ----------------
 
     pub fn handle_key(&mut self, k: KeyEvent) {
-        // Ctrl-C (Ctrl-Break alias) always exits.
-        if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
-            self.running = false;
-            return;
-        }
         // Startup splash consumes the first keystroke and drops to
         // READY without dispatching — matches the 1-2-3 R3.4a behavior
         // where any key clears the welcome screen.
@@ -4241,8 +4236,7 @@ impl App {
                 Span::styled(info.organization.clone(), value_style),
             ]),
         ];
-        Paragraph::new(rows.to_vec())
-            .render(Rect::new(block_x, licensing_y + 2, block_w, 2), buf);
+        Paragraph::new(rows.to_vec()).render(Rect::new(block_x, licensing_y + 2, block_w, 2), buf);
 
         // Bottom legal notice, in black on teal to match the 1-2-3
         // R3.4a welcome screen. Rendered only when there is room
@@ -4937,7 +4931,6 @@ impl App {
             None => crate::clock::format_ddmmmyyyy_hhmm(crate::clock::local_now()),
         };
         let left = format!(" {left_text}");
-        let hint = "Ctrl-C to quit";
         // Active status indicators, in the order 1-2-3 displays them.
         // For M2 we emit CALC only; the others arrive with their features.
         let mut indicators = Vec::new();
@@ -4953,12 +4946,7 @@ impl App {
         if self.recalc_pending {
             indicators.push("CALC");
         }
-        let indicator_str = indicators.join(" ");
-        let right_chunk = if indicator_str.is_empty() {
-            hint.to_string()
-        } else {
-            format!("{indicator_str}  {hint}")
-        };
+        let right_chunk = indicators.join(" ");
         let pad = (area.width as usize).saturating_sub(left.len() + right_chunk.len() + 1);
         let line = format!("{left}{}{right_chunk} ", " ".repeat(pad));
         for (i, ch) in line.chars().enumerate().take(area.width as usize) {
@@ -5253,10 +5241,11 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_quits() {
+    fn ctrl_c_does_not_quit() {
+        // SPEC §7 Δ: 1-2-3 uses /QY to quit; Ctrl-C is unused.
         let mut app = App::new();
         app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        assert!(!app.running);
+        assert!(app.running);
     }
 
     #[test]

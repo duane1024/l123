@@ -10,7 +10,6 @@ KEYS A1*2
 ENTER
 HOME
 ASSERT_CELL       A:B1  20
-ASSERT_STATUS     Ctrl-C to quit
 
 # /WGRM → switch to Manual
 KEY /
@@ -34,4 +33,3 @@ KEY G
 KEY R
 KEY A
 ASSERT_CELL       A:B1  200
-ASSERT_STATUS     Ctrl-C to quit

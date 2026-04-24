@@ -10,8 +10,7 @@ KEY @
 KEYS SUM(A1..A2)
 ENTER
 ASSERT_CELL     A:A3  30
-ASSERT_STATUS   Ctrl-C to quit
-# CALC indicator absent (status right-hand chunk contains only the quit hint).
+# CALC indicator absent (status right-hand chunk is empty in Automatic mode).
 
 F 9
 ASSERT_CELL     A:A3  30

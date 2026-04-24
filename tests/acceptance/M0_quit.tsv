@@ -1,5 +1,7 @@
-# Authenticity Contract — Ctrl-C (Ctrl-Break alias) quits from READY.
+# Authenticity Contract — Ctrl-C is unused in 1-2-3 R3.4a; /QY is the
+# only quit path. M3_quit.tsv covers the /QY path; this transcript
+# guards against a regression that re-introduces a Ctrl-C exit shim.
 
 ASSERT_RUNNING   true
 CTRL c
-ASSERT_RUNNING   false
+ASSERT_RUNNING   true

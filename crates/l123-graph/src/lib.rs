@@ -13,9 +13,11 @@ use std::collections::BTreeMap;
 use l123_core::Range;
 
 pub mod icon_data;
+pub mod icon_rle;
 pub mod icons;
 pub mod raster;
 pub mod render;
+pub use icon_rle::{decode_color_bitmap, ColorBitmap, RleError, ICON_DIM, ICON_PIXELS};
 pub use icons::{icon_action, render_panel_png, IconAction, Panel, SysAction};
 pub use raster::{render_png, render_png_sized, render_svg, render_svg_sized};
 pub use render::{render as render_unicode, GraphValues};

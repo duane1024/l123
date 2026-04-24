@@ -9,3 +9,4 @@ l123-core = { workspace = true }
 ratatui = { workspace = true }
 plotters = { workspace = true }
 image = { workspace = true }
+thiserror = { workspace = true }

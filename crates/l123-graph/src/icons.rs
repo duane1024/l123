@@ -13,7 +13,10 @@ use std::io::Cursor;
 
 use plotters::prelude::*;
 
-use crate::icon_data::{BITMAP_DIM, ICON_BITMAPS, ICON_DESCRIPTIONS};
+use crate::icon_data::{
+    BITMAP_DIM, ICON_BITMAPS, ICON_COLOR_AVAILABLE, ICON_COLOR_BITMAPS, ICON_DESCRIPTIONS,
+};
+use crate::icon_rle::PALETTE_INTENSITY;
 
 /// Logical pixel size of one icon cell in the generated PNG. Ratatui-
 /// image downscales this to fit the terminal area.
@@ -296,7 +299,16 @@ pub fn render_panel_png(panel: Panel) -> Vec<u8> {
                     [(1, 1), ((cw as i32) - 2, (ch as i32) - 2)],
                     cat.tint().filled(),
                 ));
-                paint_bitmap(cell, &ICON_BITMAPS[id as usize], &cat.ink());
+                if ICON_COLOR_AVAILABLE[id as usize] {
+                    paint_color_bitmap(
+                        cell,
+                        &ICON_COLOR_BITMAPS[id as usize],
+                        &cat.ink(),
+                        &cat.tint(),
+                    );
+                } else {
+                    paint_bitmap(cell, &ICON_BITMAPS[id as usize], &cat.ink());
+                }
             } else {
                 draw_pager(cell, panel);
             }
@@ -316,6 +328,50 @@ pub fn render_panel_png(panel: Panel) -> Vec<u8> {
     match img.write_to(&mut out, image::ImageFormat::Png) {
         Ok(_) => out.into_inner(),
         Err(_) => Vec::new(),
+    }
+}
+
+/// Paint a 24×24 palette-indexed colour bitmap into `cell`. Colour 0
+/// is left as the cell tint (no draw), colour 1 becomes the category
+/// ink, and colours 2..=7 blend toward ink by [`PALETTE_INTENSITY`].
+/// Row 23 is the catalog's separator; it's cropped here just like the
+/// mono path.
+fn paint_color_bitmap<DB>(
+    cell: &DrawingArea<DB, plotters::coord::Shift>,
+    pixels: &[u8; 576],
+    ink: &RGBColor,
+    tint: &RGBColor,
+) where
+    DB: DrawingBackend,
+    DB::ErrorType: 'static,
+{
+    let (cw, ch) = cell.dim_in_pixel();
+    let (cw, ch) = (cw as i32, ch as i32);
+    let pad = 4;
+    let usable_w = cw - 2 * pad;
+    let usable_h = ch - 2 * pad;
+    let rows_used: i32 = (BITMAP_DIM as i32) - 1;
+    let cols_used: i32 = BITMAP_DIM as i32;
+    let scale = (usable_w / cols_used).min(usable_h / rows_used).max(1);
+    let draw_w = cols_used * scale;
+    let draw_h = rows_used * scale;
+    let off_x = pad + (usable_w - draw_w) / 2;
+    let off_y = pad + (usable_h - draw_h) / 2;
+    for y in 0..rows_used {
+        for x in 0..cols_used {
+            let color = pixels[(y as usize) * 24 + (x as usize)] as usize;
+            let weight = PALETTE_INTENSITY[color.min(7)];
+            if weight == 0.0 {
+                continue;
+            }
+            let px = blend(ink, tint, weight);
+            let x0 = off_x + x * scale;
+            let y0 = off_y + y * scale;
+            let _ = cell.draw(&Rectangle::new(
+                [(x0, y0), (x0 + scale - 1, y0 + scale - 1)],
+                px.filled(),
+            ));
+        }
     }
 }
 
@@ -533,5 +589,53 @@ mod tests {
             d.contains('3'),
             "pager description should mention number: {d}"
         );
+    }
+
+    #[test]
+    fn every_catalog_icon_has_color_data() {
+        // Every Section-4 record should decode at generator time. If
+        // this starts failing the mono path still renders the panel,
+        // but the list gives us a quick signal the RLE decoder needs
+        // follow-up.
+        let missing: Vec<usize> = ICON_COLOR_AVAILABLE
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &ok)| (!ok).then_some(i))
+            .collect();
+        assert!(missing.is_empty(), "icons missing colour data: {missing:?}");
+    }
+
+    #[test]
+    fn color_bitmap_uses_only_palette_0_through_7() {
+        for (id, bm) in ICON_COLOR_BITMAPS.iter().enumerate() {
+            for (i, &c) in bm.iter().enumerate() {
+                assert!(c < 8, "icon {id} pixel {i}: palette index {c} out of range");
+            }
+        }
+    }
+
+    #[test]
+    fn icon_0_color_bitmap_matches_mono_exactly() {
+        // Icon 0 is the reference case that let us land the RLE
+        // decoder: its colour bitmap uses only palette 0/1 and is
+        // positioned the same as the mono version. This pins down
+        // that decode round-trips into the right 24×24 slot — without
+        // it, future refactors could silently shift every icon by a
+        // row. (Other icons can legitimately diverge from their mono
+        // twin because the RLE is the higher-quality source.)
+        let bm = &ICON_COLOR_BITMAPS[0];
+        let mono = &ICON_BITMAPS[0];
+        assert!(ICON_COLOR_AVAILABLE[0]);
+        for y in 0..24 {
+            for x in 0..24 {
+                let color = bm[y * 24 + x];
+                let mono_bit = (mono[y * 3 + x / 8] >> (7 - (x % 8))) & 1;
+                let expected = if color == 0 { 1 } else { 0 };
+                assert_eq!(
+                    mono_bit, expected,
+                    "icon 0 mismatch at ({y},{x}): color={color}, mono_bit={mono_bit}"
+                );
+            }
+        }
     }
 }

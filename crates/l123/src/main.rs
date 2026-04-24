@@ -36,7 +36,7 @@ Inside the program:
     /         Open the 1-2-3 slash menu
     F1        Help
     F10       Graph view
-    Ctrl-C    Quit
+    /QY       Quit
 ";
 
 fn main() -> ExitCode {

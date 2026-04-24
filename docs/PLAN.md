@@ -65,8 +65,8 @@ Each milestone ends with a shippable state and an acceptance test set.
 - Status line renders with a fixed `READY` and a clock
 - `Session`, `Address`, `Range`, `Mode` enums from SPEC §16 compile
 
-**Acceptance:** `cargo run` opens a screen, arrows move the pointer, Ctrl-C
-quits (MVP quit shim; real `/QY` follows).
+**Acceptance:** `cargo run` opens a screen, arrows move the pointer, `/QY`
+quits.
 
 ### M1 — Control panel, modes, first-char input (week 2-3)
 
@@ -307,7 +307,7 @@ multi-keystroke sequences to Unicode.
 | IronCalc row/col insertion breaks references across sheets | Med | High | Regression suite of multi-sheet formulas before/after every move/insert/delete op. Fall back to Formualizer if broken. |
 | ratatui diffing drops frames on rapid cursor movement | Low | Med | Use crossterm synchronized output escape; profile at ~30 Hz key-repeat. |
 | Kitty keyboard protocol unavailable in user's terminal | Med | Low | Detect at startup; degrade gracefully (F11/F12 combos, document limitation). |
-| 1-2-3 menu accelerators clash with terminal keybindings (Ctrl-C, Ctrl-S) | Med | Med | Raw mode captures them all; status line notes Ctrl-Break as primary abort; document the Ctrl-C behavior (Ctrl-Break alias). |
+| 1-2-3 menu accelerators clash with terminal keybindings (Ctrl-C, Ctrl-S) | Med | Med | Raw mode captures them all; Ctrl-C is intentionally inert (per SPEC §7 Δ — `/QY` is the only quit path); document Ctrl-Break for abort once implemented. |
 | `.wk3` format underdocumented for writing | High | Low | Stretch goal; values-only read is the MVP-plus target; write deferred. |
 | Author (you) burns out on completeness | Med | High | MVP is sufficient as a real product. Complete / Stretch tiers are separable releases. |
 

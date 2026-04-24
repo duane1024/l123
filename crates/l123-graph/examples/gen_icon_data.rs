@@ -6,16 +6,20 @@
 //!     <path-to-ICONS3.DAT> <output-rs>
 //!
 //! Run once to (re)produce the committed `icon_data.rs`. The output
-//! contains 105 × 72-byte monochrome bitmaps and their descriptions
-//! as `pub const` arrays — used by `icons.rs` at render time so the
+//! contains 105 × 72-byte monochrome bitmaps (Section 3), 105 × 576-
+//! byte palette-index bitmaps decoded from Section 4, and the hover-
+//! help descriptions — used by `icons.rs` at render time so the
 //! v3.4 panels look pixel-identical to the original.
 
 use std::env;
 use std::fs;
 use std::io::Write;
 
+use l123_graph::decode_color_bitmap;
+
 const ICON_COUNT: usize = 105;
 const BITMAP_BYTES: usize = 72;
+const COLOR_BITMAP_PIXELS: usize = 24 * 24;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -28,8 +32,10 @@ fn main() {
 
     let ptr_strings_end = u16::from_le_bytes([data[0x04], data[0x05]]) as usize;
     let ptr_mono = u16::from_le_bytes([data[0x08], data[0x09]]) as usize;
+    let ptr_rle = u16::from_le_bytes([data[0x0a], data[0x0b]]) as usize;
+    let ptr_eof = u16::from_le_bytes([data[0x0c], data[0x0d]]) as usize;
 
-    // Bitmaps.
+    // Monochrome bitmaps (Section 3).
     let mut bitmaps: Vec<[u8; BITMAP_BYTES]> = Vec::with_capacity(ICON_COUNT);
     for i in 0..ICON_COUNT {
         let rel = u16::from_le_bytes([data[ptr_mono + i * 2], data[ptr_mono + i * 2 + 1]]) as usize;
@@ -37,6 +43,46 @@ fn main() {
         let mut buf = [0u8; BITMAP_BYTES];
         buf.copy_from_slice(&data[off..off + BITMAP_BYTES]);
         bitmaps.push(buf);
+    }
+
+    // Section-4 RLE colour bitmaps. The offset table lives at the
+    // section start; each entry is a u16 offset relative to `ptr_rle`.
+    // Record `i` runs from offsets[i] to offsets[i+1] (or `ptr_eof` for
+    // the last).
+    let mut rle_offsets: Vec<usize> = (0..ICON_COUNT)
+        .map(|i| u16::from_le_bytes([data[ptr_rle + i * 2], data[ptr_rle + i * 2 + 1]]) as usize)
+        .collect();
+    rle_offsets.push(ptr_eof - ptr_rle);
+
+    let mut color_bitmaps: Vec<[u8; COLOR_BITMAP_PIXELS]> = Vec::with_capacity(ICON_COUNT);
+    let mut color_available: Vec<bool> = Vec::with_capacity(ICON_COUNT);
+    let mut rle_failed: Vec<(usize, String)> = Vec::new();
+    for i in 0..ICON_COUNT {
+        let start = ptr_rle + rle_offsets[i];
+        let end = ptr_rle + rle_offsets[i + 1];
+        let rec = &data[start..end];
+        match decode_color_bitmap(rec) {
+            Ok(bm) => {
+                color_bitmaps.push(bm.pixels);
+                color_available.push(true);
+            }
+            Err(e) => {
+                // Leave colour bitmap empty so the renderer falls back
+                // to the mono + category-tint path for this icon.
+                color_bitmaps.push([0u8; COLOR_BITMAP_PIXELS]);
+                color_available.push(false);
+                rle_failed.push((i, format!("{e}")));
+            }
+        }
+    }
+    if !rle_failed.is_empty() {
+        eprintln!(
+            "warning: {} RLE records failed to decode:",
+            rle_failed.len()
+        );
+        for (i, msg) in &rle_failed {
+            eprintln!("  icon {i}: {msg}");
+        }
     }
 
     // Descriptions: null-terminated strings starting at 0xB6 (just
@@ -93,7 +139,7 @@ fn main() {
     writeln!(f).unwrap();
     writeln!(
         f,
-        "/// 105 monochrome 24×24 icon bitmaps, indexed by icon ID."
+        "/// 105 monochrome 24×24 icon bitmaps from Section 3 of ICONS3.DAT, indexed by icon ID."
     )
     .unwrap();
     writeln!(
@@ -116,6 +162,83 @@ fn main() {
     }
     writeln!(f, "];").unwrap();
     writeln!(f).unwrap();
+    writeln!(
+        f,
+        "/// Pixels per colour bitmap (24 × 24, one byte per palette index 0..=7)."
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "pub const COLOR_BITMAP_PIXELS: usize = {COLOR_BITMAP_PIXELS};"
+    )
+    .unwrap();
+    writeln!(f).unwrap();
+    writeln!(
+        f,
+        "/// 105 palette-indexed 24×24 bitmaps decoded from Section 4 of ICONS3.DAT."
+    )
+    .unwrap();
+    writeln!(f, "///").unwrap();
+    writeln!(
+        f,
+        "/// Each byte is a palette index 0..=7: 0 = panel background, 1 = outline/ink,"
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "/// 2..=7 = intermediate shades. See `icon_rle::PALETTE_INTENSITY` for the"
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "/// weights the renderer uses to blend these back into each category's tint."
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "pub static ICON_COLOR_BITMAPS: [[u8; COLOR_BITMAP_PIXELS]; ICON_COUNT] = ["
+    )
+    .unwrap();
+    for (i, bm) in color_bitmaps.iter().enumerate() {
+        write!(f, "    [").unwrap();
+        for (j, b) in bm.iter().enumerate() {
+            if j > 0 && j % 24 == 0 {
+                write!(f, "\n     ").unwrap();
+            }
+            write!(f, "{b},").unwrap();
+            if j % 24 != 23 && j != bm.len() - 1 {
+                write!(f, " ").unwrap();
+            }
+        }
+        writeln!(f, "], // {i}").unwrap();
+    }
+    writeln!(f, "];").unwrap();
+    writeln!(f).unwrap();
+    writeln!(
+        f,
+        "/// Per-icon flag: true when the Section-4 RLE record decoded cleanly."
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "/// Renderers should fall back to `ICON_BITMAPS` + category tint when this"
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "/// is false; the colour bitmap for such icons is all-zero."
+    )
+    .unwrap();
+    writeln!(f, "pub const ICON_COLOR_AVAILABLE: [bool; ICON_COUNT] = [").unwrap();
+    for chunk in color_available.chunks(12) {
+        write!(f, "    ").unwrap();
+        for v in chunk {
+            write!(f, "{v}, ").unwrap();
+        }
+        writeln!(f).unwrap();
+    }
+    writeln!(f, "];").unwrap();
+    writeln!(f).unwrap();
     writeln!(f, "/// One-line help description per icon ID. Mirrors the").unwrap();
     writeln!(f, "/// strings 1-2-3 shows in its hover help.").unwrap();
     writeln!(f, "pub const ICON_DESCRIPTIONS: [&str; ICON_COUNT] = [").unwrap();
@@ -128,7 +251,8 @@ fn main() {
     writeln!(f, "];").unwrap();
 
     println!(
-        "wrote {} bitmaps + descriptions to {out_path}",
-        bitmaps.len()
+        "wrote {} mono + {} colour bitmaps + descriptions to {out_path}",
+        bitmaps.len(),
+        color_bitmaps.len(),
     );
 }

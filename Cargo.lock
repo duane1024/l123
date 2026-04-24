@@ -1426,6 +1426,7 @@ dependencies = [
  "l123-core",
  "plotters",
  "ratatui",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
