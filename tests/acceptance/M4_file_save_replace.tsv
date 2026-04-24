@@ -5,9 +5,11 @@
 # path that already exists on disk opens the Cancel/Replace/Backup
 # submenu.  This transcript covers the Replace path end-to-end.
 
+SIZE 200 25
+
 # Start from a clean slate — earlier runs may have left the target.
-RM_FILE target/m4_file_save_replace.xlsx
-RM_FILE target/m4_file_save_replace.BAK
+RM_FILE $TMPDIR/m4_file_save_replace.xlsx
+RM_FILE $TMPDIR/m4_file_save_replace.BAK
 
 # Seed A1 and do the first save.
 KEYS 42
@@ -15,7 +17,7 @@ ENTER
 KEY /
 KEY F
 KEY S
-KEYS target/m4_file_save_replace.xlsx
+KEYS $TMPDIR/m4_file_save_replace.xlsx
 ENTER
 ASSERT_MODE      READY
 
@@ -30,7 +32,7 @@ KEY /
 KEY F
 KEY S
 ASSERT_MODE      MENU
-ASSERT_PANEL_L2  target/m4_file_save_replace.xlsx
+ASSERT_PANEL_L2  $TMPDIR/m4_file_save_replace.xlsx
 
 # Enter commits the filename. File already exists → confirm submenu.
 ENTER

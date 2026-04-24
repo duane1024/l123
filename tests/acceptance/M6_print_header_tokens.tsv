@@ -1,0 +1,48 @@
+# Header/footer token substitution:
+#   `#` → current page number
+#   `@` → today's date (DD-MMM-YY)
+# Pg-length 1 gives us two distinct pages so we can see `#` advance.
+
+RM_FILE $TMPDIR/m6_print_tokens.prn
+
+KEYS 'row1
+ENTER
+DOWN
+KEYS 'row2
+ENTER
+HOME
+
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_print_tokens.prn
+ENTER
+KEY R
+DOWN
+ENTER
+
+# Header = "P#@" so we can see both tokens substitute without
+# depending on exact date formatting.
+KEY O
+KEY H
+KEYS P#@
+ENTER
+
+# Pg-Length = 1 so each row gets its own page.
+KEY P
+KEYS 1
+ENTER
+# /Q, /G
+KEY Q
+KEY G
+KEY Q
+ASSERT_MODE       READY
+
+# Pages 1 and 2 each have the page-numbered header.
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_print_tokens.prn  P1
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_print_tokens.prn  P2
+
+# Literal tokens must be gone after substitution.
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_print_tokens.prn  P#
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_print_tokens.prn  P1@
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_print_tokens.prn  P2@

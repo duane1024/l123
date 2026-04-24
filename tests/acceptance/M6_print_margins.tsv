@@ -1,0 +1,63 @@
+# /Print File Options Margins + Pg-Length.
+#
+# Honors:
+#   - Left margin: N spaces prefixed to every content line.
+#   - Top margin: N blank lines above the first output line.
+# Right / Bottom / Pg-Length accept and store their values but don't
+# yet shape output — they exist as menu entries so the muscle memory
+# is right.
+
+RM_FILE $TMPDIR/m6_print_margins.prn
+
+# A1 = 'X.
+KEYS 'X
+ENTER
+HOME
+
+# /PF to target.
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_print_margins.prn
+ENTER
+
+# Single-cell range A1.
+KEY R
+ENTER
+
+# /O → Options → /M → Margins submenu.
+KEY O
+ASSERT_PANEL_L2   Margins
+KEY M
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Left
+ASSERT_PANEL_L2   Right
+ASSERT_PANEL_L2   Top
+ASSERT_PANEL_L2   Bottom
+
+# /L → numeric prompt.
+KEY L
+ASSERT_PANEL_L3   Enter left margin
+KEYS 3
+ENTER
+# After commit we're back in the Margins submenu.
+ASSERT_PANEL_L2   Left
+
+# /T → Top margin = 2.
+KEY T
+ASSERT_PANEL_L3   Enter top margin
+KEYS 2
+ENTER
+# After the prompt commits we are back in the Margins submenu.
+ASSERT_PANEL_L2   Left
+ASSERT_PANEL_L2   Bottom
+
+# /Q → back to Options, /Q → back to /PF, /G.
+KEY Q
+KEY Q
+KEY G
+KEY Q
+ASSERT_MODE       READY
+
+# Top margin = 2 blank lines at the top, then a 3-space indent on X.
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_margins.prn  \n\n   X

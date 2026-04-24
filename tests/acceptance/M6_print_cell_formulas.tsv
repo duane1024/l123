@@ -1,0 +1,57 @@
+# /Print File Options Other Cell-Formulas dumps formula sources
+# instead of their computed values.
+
+RM_FILE $TMPDIR/m6_print_formulas.prn
+
+# Seed A1 = @SUM(B1..B3); B1..B3 = 1,2,3 so A1 would display 6.
+KEYS @SUM(B1..B3)
+ENTER
+RIGHT
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+DOWN
+KEYS 3
+ENTER
+HOME
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1  6
+
+# /PF → filename.
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_print_formulas.prn
+ENTER
+
+# /R → select A1..B3.
+KEY R
+RIGHT
+DOWN
+DOWN
+ENTER
+
+# /O → Options → /O Other → /C Cell-Formulas.
+KEY O
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Other
+KEY O
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Cell-Formulas
+ASSERT_PANEL_L2   As-Displayed
+KEY C
+# Returns to Options after setting.
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Other
+
+# /Q back to /PF, then /G.
+KEY Q
+KEY G
+KEY Q
+ASSERT_MODE       READY
+
+# The file should contain the formula text, not the computed value.
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_print_formulas.prn  @SUM(B1..B3)
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_print_formulas.prn  6

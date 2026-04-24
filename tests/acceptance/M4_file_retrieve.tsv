@@ -4,7 +4,7 @@
 # and verify A1 reads 42 again — proving the retrieve actually pulled
 # the saved copy, not what was in-memory.
 
-RM_FILE target/m4_file_retrieve.xlsx
+RM_FILE $TMPDIR/m4_file_retrieve.xlsx
 
 # Seed A1=42 and save.
 KEYS 42
@@ -12,7 +12,7 @@ ENTER
 KEY /
 KEY F
 KEY S
-KEYS target/m4_file_retrieve.xlsx
+KEYS $TMPDIR/m4_file_retrieve.xlsx
 ENTER
 ASSERT_MODE      READY
 
@@ -28,7 +28,7 @@ KEY F
 KEY R
 ASSERT_MODE      MENU
 ASSERT_PANEL_L3  Enter file to retrieve
-KEYS target/m4_file_retrieve.xlsx
+KEYS $TMPDIR/m4_file_retrieve.xlsx
 
 # Commit → load replaces memory → A1 is the saved 42 again.
 ENTER

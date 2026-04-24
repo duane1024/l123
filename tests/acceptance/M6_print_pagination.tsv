@@ -1,0 +1,72 @@
+# /Print File pagination: Pg-Length chunks content rows into pages
+# with form-feed between them. Bottom margin pads each page before
+# the form feed. Right margin truncates content lines (after the
+# left margin is prepended).
+
+RM_FILE $TMPDIR/m6_print_pg.prn
+
+# Two labels in col A that would overflow the 9-char col when
+# combined with col B to test right-margin truncation: we'll include
+# B1/B2 so a row spans 18 cols. Right margin of 9 cuts the B cell.
+KEYS 'AA
+ENTER
+RIGHT
+KEYS 'BB
+ENTER
+DOWN
+LEFT
+KEYS 'CC
+ENTER
+RIGHT
+KEYS 'DD
+ENTER
+HOME
+
+# /PF
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_print_pg.prn
+ENTER
+
+# Range A1..B2 (two rows across two cols).
+KEY R
+RIGHT
+DOWN
+ENTER
+
+# /OM (margins) → /R right=9 → /B bottom=1 → /Q
+KEY O
+KEY M
+KEY R
+KEYS 9
+ENTER
+KEY B
+KEYS 1
+ENTER
+KEY Q
+# /P pg-length = 1 (one content row per page)
+KEY P
+KEYS 1
+ENTER
+# /Q back to PF, /G
+KEY Q
+KEY G
+KEY Q
+ASSERT_MODE       READY
+
+# Both rows present.
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_pg.prn  AA
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_pg.prn  CC
+
+# Right margin=9 on an 18-char row truncates col B off:
+# row 1 becomes "AA       " → rtrim → "AA"; "BB" is gone.
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_print_pg.prn  BB
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_print_pg.prn  DD
+
+# Form feed appears between the two pages.
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_pg.prn  \f
+
+# Specifically: AA on page 1, blank(s) from bottom margin, then \f,
+# then CC on page 2.
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_pg.prn  AA\n\n\fCC

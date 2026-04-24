@@ -1,0 +1,65 @@
+# /Print File Options Header + Footer.
+#
+# In the /PF submenu, descending into /O opens the Options sub-sub-menu.
+# /H prompts for a header string, /F for a footer. Both use |-split
+# L|C|R text for three-part alignment. /Q returns to the /PF menu.
+# /G then writes the range with the header/footer surrounding it.
+
+RM_FILE $TMPDIR/m6_print_hdr.prn
+
+KEYS 'Hello
+ENTER
+RIGHT
+KEYS 42
+ENTER
+HOME
+
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_print_hdr.prn
+ENTER
+
+# /R sets range A1..B1.
+KEY R
+RIGHT
+ENTER
+ASSERT_PANEL_L2   Options
+
+# /O descends into Options.
+KEY O
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Header
+ASSERT_PANEL_L2   Footer
+
+# /H prompts for header text.
+KEY H
+ASSERT_PANEL_L3   Enter print header
+KEYS Top|Center|Right
+ENTER
+ASSERT_PANEL_L2   Header
+
+# /F prompts for footer text.
+KEY F
+ASSERT_PANEL_L3   Enter print footer
+KEYS LL|MM|RR
+ENTER
+ASSERT_PANEL_L2   Footer
+
+# /Q at Options level returns to the /PF submenu (not READY).
+KEY Q
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Range
+ASSERT_PANEL_L2   Go
+
+# /G writes the file.
+KEY G
+KEY Q
+ASSERT_MODE       READY
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_hdr.prn  Top
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_hdr.prn  Center
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_hdr.prn  Right
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_hdr.prn  LL
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_hdr.prn  MM
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_hdr.prn  RR
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_hdr.prn  Hello

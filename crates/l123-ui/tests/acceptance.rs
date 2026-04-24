@@ -37,6 +37,21 @@ fn run_transcript(path: &Path) {
     // concurrent writes correct.
     let _ = std::env::set_current_dir(workspace_root());
 
+    // Per-transcript scratch dir under std::env::temp_dir(). Tests
+    // that need to write files use the `$TMPDIR` placeholder, which
+    // the harness substitutes into directive arguments (filenames,
+    // ASSERT_FILE_* paths). Avoids leaving artifacts under `target/`
+    // on every run.
+    let test_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("transcript");
+    let tmp = std::env::temp_dir().join(format!("l123_accept_{test_name}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp)
+        .unwrap_or_else(|e| panic!("mkdir {}: {e}", tmp.display()));
+    let tmp_str = tmp.to_string_lossy().into_owned();
+
     let body = fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
@@ -46,7 +61,9 @@ fn run_transcript(path: &Path) {
 
     for (ln, raw) in body.lines().enumerate() {
         let line_no = ln + 1;
-        let line = raw.split('#').next().unwrap().trim();
+        let stripped = strip_comment(raw);
+        let expanded: String = stripped.replace("$TMPDIR", &tmp_str);
+        let line = expanded.trim();
         if line.is_empty() {
             continue;
         }
@@ -186,6 +203,39 @@ fn run_transcript(path: &Path) {
             "RM_FILE" => {
                 let _ = std::fs::remove_file(rest);
             }
+            // "ASSERT_FILE_CONTAINS <path>  <substr>" — split on the
+            // first whitespace run. The remainder is matched as a
+            // substring inside the file's text contents. `\n`, `\t`,
+            // and `\\` in the substring are unescaped so transcripts
+            // can express specific whitespace layouts.
+            "ASSERT_FILE_CONTAINS" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let fpath = parts.next().unwrap_or("");
+                let raw = parts.next().unwrap_or("").trim();
+                let want = unescape(raw);
+                let body = std::fs::read_to_string(fpath).unwrap_or_else(|e| {
+                    panic!("{}:{line_no}: read {fpath}: {e}", path.display())
+                });
+                assert!(
+                    body.contains(&want),
+                    "{}:{line_no}: file {fpath:?} does not contain {want:?}; got {body:?}",
+                    path.display()
+                );
+            }
+            "ASSERT_FILE_NOT_CONTAINS" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let fpath = parts.next().unwrap_or("");
+                let raw = parts.next().unwrap_or("").trim();
+                let want = unescape(raw);
+                let body = std::fs::read_to_string(fpath).unwrap_or_else(|e| {
+                    panic!("{}:{line_no}: read {fpath}: {e}", path.display())
+                });
+                assert!(
+                    !body.contains(&want),
+                    "{}:{line_no}: file {fpath:?} unexpectedly contains {want:?}; got {body:?}",
+                    path.display()
+                );
+            }
             other => {
                 panic!(
                     "{}:{line_no}: unknown directive {other:?}",
@@ -194,6 +244,52 @@ fn run_transcript(path: &Path) {
             }
         }
     }
+
+    // Clean up the per-transcript temp dir on successful completion.
+    // A panic will skip this; the OS reaps temp dirs eventually.
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Interpret `\n`, `\t`, and `\\` escape sequences inside a directive
+/// argument. Used by the `ASSERT_FILE_*` directives to match specific
+/// whitespace layouts.
+/// Strip a trailing `#`-comment from a transcript line. A `#` is a
+/// comment only when it's at the very start of the line or preceded
+/// by whitespace — this lets data-bearing directives (KEYS, ASSERT_*)
+/// carry literal `#` characters through.
+fn strip_comment(raw: &str) -> &str {
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'#' && (i == 0 || bytes[i - 1].is_ascii_whitespace()) {
+            return &raw[..i];
+        }
+        i += 1;
+    }
+    raw
+}
+
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('f') => out.push('\x0c'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn split_directive(line: &str) -> (&str, &str) {
@@ -294,4 +390,14 @@ transcripts! {
     m5_undo            => "M5_undo.tsv",
     m5_undo_toggle     => "M5_undo_toggle.tsv",
     m5_undo_coverage   => "M5_undo_coverage.tsv",
+    m6_print_file      => "M6_print_file.tsv",
+    m6_print_options_header => "M6_print_options_header.tsv",
+    m6_print_pipe_row  => "M6_print_pipe_row.tsv",
+    m6_range_search_replace => "M6_range_search_replace.tsv",
+    m6_print_cell_formulas  => "M6_print_cell_formulas.tsv",
+    m6_print_margins        => "M6_print_margins.tsv",
+    m6_print_pagination     => "M6_print_pagination.tsv",
+    m6_print_header_tokens  => "M6_print_header_tokens.tsv",
+    m6_print_align_clear    => "M6_print_align_clear.tsv",
+    m6_range_search_find    => "M6_range_search_find.tsv",
 }

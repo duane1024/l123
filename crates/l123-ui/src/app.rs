@@ -135,6 +135,153 @@ pub struct App {
     /// indicator lights and Ctrl-PgUp/PgDn cycle between active files
     /// instead of between sheets.
     file_nav_pending: bool,
+    /// In-flight `/Print File` session. Set when the filename prompt
+    /// commits; cleared on Go-and-done or explicit Quit.
+    print: Option<PrintSession>,
+    /// In-flight `/Range Search` session between the search string
+    /// commit and the Find/Replace leaf.
+    search: Option<SearchSession>,
+}
+
+/// Which cell kinds `/Range Search` walks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchScope {
+    Formulas,
+    Labels,
+    Both,
+}
+
+/// Live state of a `/Range Search` session between scope selection
+/// and the final Find or Replace leaf.
+#[derive(Debug, Clone)]
+struct SearchSession {
+    scope: SearchScope,
+    range: Range,
+    search: String,
+    /// Cached matches, populated when the user picks Find. Replace
+    /// recomputes its own match set just before applying.
+    matches: Vec<Address>,
+    /// Index of the current highlighted match within `matches`.
+    cursor: usize,
+}
+
+/// Live state of a `/Print File` session between filename commit and
+/// final Go. Holds the destination path, the chosen range, and the
+/// current page-decoration settings.
+#[derive(Debug, Clone)]
+struct PrintSession {
+    path: PathBuf,
+    range: Option<Range>,
+    /// Three-part header string (`L|C|R`). Empty means no header.
+    header: String,
+    /// Three-part footer string (`L|C|R`). Empty means no footer.
+    footer: String,
+    /// As-Displayed (default) or Cell-Formulas.
+    content_mode: PrintContentMode,
+    /// Formatted (default — emits header/footer) or Unformatted
+    /// (range content only).
+    format_mode: PrintFormatMode,
+    /// Left margin: N spaces prepended to every output line.
+    margin_left: u16,
+    /// Right margin — accepted but not yet honored (no wrapping
+    /// implemented). Storing it keeps the menu muscle memory intact.
+    margin_right: u16,
+    /// Top margin: N blank lines above the first output line.
+    margin_top: u16,
+    /// Bottom margin — accepted but not yet honored (no pagination
+    /// yet).
+    margin_bottom: u16,
+    /// Lines per page. 0 = no pagination.
+    pg_length: u16,
+    /// Next page number to print at the start of Go. Persists across
+    /// successive Gos in the same session so headers using `#` count
+    /// up; `/PF Align` resets it to 1.
+    next_page: u32,
+}
+
+impl PrintSession {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            range: None,
+            header: String::new(),
+            footer: String::new(),
+            content_mode: PrintContentMode::AsDisplayed,
+            format_mode: PrintFormatMode::Formatted,
+            margin_left: 0,
+            margin_right: 0,
+            margin_top: 0,
+            margin_bottom: 0,
+            pg_length: 0,
+            next_page: 1,
+        }
+    }
+
+    /// /PF Clear All: reset every per-session knob but keep the
+    /// destination path, the chosen range, and the page counter —
+    /// those are session identity, not settings.
+    fn clear_all(&mut self) {
+        self.header.clear();
+        self.footer.clear();
+        self.content_mode = PrintContentMode::AsDisplayed;
+        self.format_mode = PrintFormatMode::Formatted;
+        self.margin_left = 0;
+        self.margin_right = 0;
+        self.margin_top = 0;
+        self.margin_bottom = 0;
+        self.pg_length = 0;
+    }
+}
+
+/// How cell contents are rendered into the print file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrintContentMode {
+    /// Default — render each cell as it appears on the screen.
+    AsDisplayed,
+    /// Render formula cells as their source expression; labels and
+    /// constants unchanged.
+    CellFormulas,
+}
+
+/// Whether page decorations (headers, footers, …) wrap the output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrintFormatMode {
+    Formatted,
+    Unformatted,
+}
+
+/// Pre-resolved snapshot of the [`PrintSession`] fields the renderer
+/// needs. Built at Go-time so the render helper doesn't re-borrow
+/// `self.print`.
+struct PrintSettings {
+    header: String,
+    footer: String,
+    content_mode: PrintContentMode,
+    format_mode: PrintFormatMode,
+    margin_left: u16,
+    margin_right: u16,
+    margin_top: u16,
+    margin_bottom: u16,
+    pg_length: u16,
+    /// Starting page number for the first page of this Go.
+    start_page: u32,
+}
+
+impl Default for PrintSettings {
+    fn default() -> Self {
+        Self {
+            header: String::new(),
+            footer: String::new(),
+            content_mode: PrintContentMode::AsDisplayed,
+            format_mode: PrintFormatMode::Formatted,
+            margin_left: 0,
+            margin_right: 0,
+            margin_top: 0,
+            margin_bottom: 0,
+            pg_length: 0,
+            start_page: 1,
+        }
+    }
 }
 
 /// Inverse commands recorded before each mutating operation. See SPEC
@@ -251,6 +398,27 @@ enum PromptNext {
     /// takes the current slot (and the old one is stashed ahead) or
     /// is appended after the current one.
     FileOpenFilename { before: bool },
+    /// After the user types a print destination path, start a
+    /// [`PrintSession`] and descend into the `/PF` submenu.
+    PrintFileFilename,
+    /// After the user types a header or footer string, store it on
+    /// the active [`PrintSession`] and re-enter the Options submenu.
+    PrintFileHeader,
+    PrintFileFooter,
+    /// Numeric margin prompts (0..=1000). Each stores onto the
+    /// active [`PrintSession`] and re-enters the Margins submenu.
+    PrintFileMarginLeft,
+    PrintFileMarginRight,
+    PrintFileMarginTop,
+    PrintFileMarginBottom,
+    /// Numeric page-length prompt (0..=1000). 0 means no pagination.
+    PrintFilePgLength,
+    /// After the user types the search string, open the Find|Replace
+    /// submenu. `scope` and `range` were captured earlier.
+    RangeSearchString { scope: SearchScope, range: Range },
+    /// After the user types the replacement string, apply it to all
+    /// matches in the active [`SearchSession`].
+    RangeSearchReplacement,
 }
 
 /// /File Xtract sub-command: does the extracted file keep formulas,
@@ -300,7 +468,22 @@ impl PromptNext {
             | PromptNext::FileXtractFilename { .. }
             | PromptNext::FileImportNumbersFilename
             | PromptNext::FileDirPath
-            | PromptNext::FileOpenFilename { .. } => is_path_char(c),
+            | PromptNext::FileOpenFilename { .. }
+            | PromptNext::PrintFileFilename => is_path_char(c),
+            // Header and footer are free-form text with the `|`
+            // separator carving them into L|C|R.
+            PromptNext::PrintFileHeader | PromptNext::PrintFileFooter => {
+                c != '\n' && c != '\t'
+            }
+            // Search / replacement strings are free text.
+            PromptNext::RangeSearchString { .. } | PromptNext::RangeSearchReplacement => {
+                c != '\n' && c != '\t'
+            }
+            PromptNext::PrintFileMarginLeft
+            | PromptNext::PrintFileMarginRight
+            | PromptNext::PrintFileMarginTop
+            | PromptNext::PrintFileMarginBottom
+            | PromptNext::PrintFilePgLength => c.is_ascii_digit(),
         }
     }
 }
@@ -496,6 +679,13 @@ enum PendingCommand {
     /// `pending_xtract_path` on App carries the destination path; on
     /// commit, extract the selected range into a new workbook file.
     FileXtractRange { kind: XtractKind },
+    /// The user is choosing the print range for the active
+    /// [`PrintSession`]. On commit the range is stashed and the
+    /// `/PF` submenu reopens.
+    PrintFileRange,
+    /// POINT step of `/Range Search`: on commit, prompt for the
+    /// search string.
+    RangeSearchRange { scope: SearchScope },
 }
 
 impl PendingCommand {
@@ -510,6 +700,8 @@ impl PendingCommand {
             PendingCommand::RangeFormat { .. } => "Enter range to format:",
             PendingCommand::RangeNameCreate => "Enter range for the named range:",
             PendingCommand::FileXtractRange { .. } => "Enter range to extract:",
+            PendingCommand::PrintFileRange => "Enter range to print:",
+            PendingCommand::RangeSearchRange { .. } => "Enter search range:",
         }
     }
 }
@@ -524,15 +716,34 @@ struct MenuState {
     /// Message to display on line 3 — typically the last-selected leaf's
     /// identifier when it was `NotImplemented`.
     message: Option<&'static str>,
+    /// Optional alternate root, used for nested menus (e.g. the
+    /// `/Print File` submenu). When Some, `level()` resolves `path`
+    /// against this slice instead of `l123_menu::ROOT`.
+    override_root: Option<&'static [MenuItem]>,
 }
 
 impl MenuState {
     fn fresh() -> Self {
-        Self { path: Vec::new(), highlight: 0, message: None }
+        Self { path: Vec::new(), highlight: 0, message: None, override_root: None }
+    }
+
+    /// New menu rooted at a specific submenu rather than the global
+    /// root. Used when a command (e.g. `/PF` after filename) hands
+    /// the user to a sub-tree.
+    fn rooted_at(root: &'static [MenuItem]) -> Self {
+        Self {
+            path: Vec::new(),
+            highlight: 0,
+            message: None,
+            override_root: Some(root),
+        }
     }
 
     fn level(&self) -> &'static [MenuItem] {
-        menu::current_level(&self.path)
+        match self.override_root {
+            Some(root) => menu::current_level_within(root, &self.path),
+            None => menu::current_level(&self.path),
+        }
     }
 
     fn highlighted(&self) -> Option<&'static MenuItem> {
@@ -561,6 +772,8 @@ impl App {
             active_files: vec![Workbook::new()],
             current: 0,
             file_nav_pending: false,
+            print: None,
+            search: None,
         }
     }
 
@@ -702,6 +915,7 @@ impl App {
             Mode::Label | Mode::Value | Mode::Edit => self.handle_key_entry(k),
             Mode::Menu => self.handle_key_menu(k),
             Mode::Point => self.handle_key_point(k),
+            Mode::Find => self.handle_key_find(k),
             _ => {}
         }
     }
@@ -804,7 +1018,7 @@ impl App {
         if is_value_starter(c) {
             self.entry = Some(Entry { kind: EntryKind::Value, buffer: c.to_string() });
             self.mode = Mode::Value;
-        } else if matches!(c, '\'' | '"' | '^' | '\\') {
+        } else if matches!(c, '\'' | '"' | '^' | '\\' | '|') {
             // Explicit label prefix typed first: the char becomes the
             // LabelPrefix; the buffer starts empty.
             let prefix = LabelPrefix::from_char(c).expect("matched above");
@@ -1177,6 +1391,70 @@ impl App {
             Action::FileNew => self.execute_file_new(),
             Action::FileOpenBefore => self.start_file_open_prompt(true),
             Action::FileOpenAfter => self.start_file_open_prompt(false),
+            Action::PrintFile => self.start_print_file_prompt(),
+            Action::PrintFileRange => self.begin_point(PendingCommand::PrintFileRange),
+            Action::PrintFileGo => self.execute_print_file_go(),
+            Action::PrintFileQuit => self.finish_print_session(),
+            Action::PrintFileAlign => {
+                if let Some(s) = self.print.as_mut() {
+                    s.next_page = 1;
+                }
+                self.enter_print_file_menu();
+            }
+            Action::PrintFileClear => {
+                if let Some(s) = self.print.as_mut() {
+                    s.clear_all();
+                }
+                self.enter_print_file_menu();
+            }
+            Action::PrintFileOptionsHeader => self.start_print_header_prompt(),
+            Action::PrintFileOptionsFooter => self.start_print_footer_prompt(),
+            Action::PrintFileOptionsQuit => self.enter_print_file_menu(),
+            Action::PrintFileOptionsOtherAsDisplayed => {
+                self.set_print_content_mode(PrintContentMode::AsDisplayed)
+            }
+            Action::PrintFileOptionsOtherCellFormulas => {
+                self.set_print_content_mode(PrintContentMode::CellFormulas)
+            }
+            Action::PrintFileOptionsOtherFormatted => {
+                self.set_print_format_mode(PrintFormatMode::Formatted)
+            }
+            Action::PrintFileOptionsOtherUnformatted => {
+                self.set_print_format_mode(PrintFormatMode::Unformatted)
+            }
+            Action::PrintFileOptionsMarginLeft => {
+                self.start_print_margin_prompt(PromptNext::PrintFileMarginLeft, "left")
+            }
+            Action::PrintFileOptionsMarginRight => {
+                self.start_print_margin_prompt(PromptNext::PrintFileMarginRight, "right")
+            }
+            Action::PrintFileOptionsMarginTop => {
+                self.start_print_margin_prompt(PromptNext::PrintFileMarginTop, "top")
+            }
+            Action::PrintFileOptionsMarginBottom => {
+                self.start_print_margin_prompt(PromptNext::PrintFileMarginBottom, "bottom")
+            }
+            Action::PrintFileOptionsMarginsQuit => self.enter_print_options_menu(),
+            Action::PrintFileOptionsPgLength => {
+                self.start_print_pg_length_prompt();
+            }
+            Action::RangeSearchFormulas => {
+                self.begin_point(PendingCommand::RangeSearchRange {
+                    scope: SearchScope::Formulas,
+                })
+            }
+            Action::RangeSearchLabels => {
+                self.begin_point(PendingCommand::RangeSearchRange {
+                    scope: SearchScope::Labels,
+                })
+            }
+            Action::RangeSearchBoth => {
+                self.begin_point(PendingCommand::RangeSearchRange {
+                    scope: SearchScope::Both,
+                })
+            }
+            Action::RangeSearchFind => self.execute_range_search_find(),
+            Action::RangeSearchReplace => self.start_range_search_replace_prompt(),
             Action::FileDir => self.start_file_dir_prompt(),
             Action::FileListWorksheet => self.open_file_list(FileListKind::Worksheet),
             Action::FileListActive => self.open_file_list(FileListKind::Active),
@@ -1300,6 +1578,306 @@ impl App {
             self.wb_mut().engine = engine;
         }
         self.mode = Mode::Ready;
+    }
+
+    fn start_print_file_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter print file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::PrintFileFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn enter_print_file_menu(&mut self) {
+        self.menu = Some(MenuState::rooted_at(menu::PRINT_FILE_MENU));
+        self.mode = Mode::Menu;
+    }
+
+    /// Re-enter the Options sub-sub-menu at path=['O'] under the
+    /// PRINT_FILE_MENU root. Used after an Options-level prompt
+    /// commits so the user stays in Options for further tweaks.
+    fn enter_print_options_menu(&mut self) {
+        self.menu = Some(MenuState {
+            path: vec!['O'],
+            highlight: 0,
+            message: None,
+            override_root: Some(menu::PRINT_FILE_MENU),
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn set_print_content_mode(&mut self, mode: PrintContentMode) {
+        if let Some(s) = self.print.as_mut() {
+            s.content_mode = mode;
+        }
+        // After the setting commits, return to the Options submenu so
+        // the user can pick another option or Quit.
+        self.enter_print_options_menu();
+    }
+
+    fn set_print_format_mode(&mut self, mode: PrintFormatMode) {
+        if let Some(s) = self.print.as_mut() {
+            s.format_mode = mode;
+        }
+        self.enter_print_options_menu();
+    }
+
+    /// Re-enter the Margins sub-sub-menu at path=['O', 'M'] under
+    /// the /PF root, matching the flow where each margin prompt
+    /// committing drops the user back into Margins.
+    fn enter_print_margins_menu(&mut self) {
+        self.menu = Some(MenuState {
+            path: vec!['O', 'M'],
+            highlight: 0,
+            message: None,
+            override_root: Some(menu::PRINT_FILE_MENU),
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_print_margin_prompt(&mut self, next: PromptNext, which: &str) {
+        self.menu = None;
+        let current: u16 = match (next, self.print.as_ref()) {
+            (PromptNext::PrintFileMarginLeft, Some(s)) => s.margin_left,
+            (PromptNext::PrintFileMarginRight, Some(s)) => s.margin_right,
+            (PromptNext::PrintFileMarginTop, Some(s)) => s.margin_top,
+            (PromptNext::PrintFileMarginBottom, Some(s)) => s.margin_bottom,
+            _ => 0,
+        };
+        self.prompt = Some(PromptState {
+            label: format!("Enter {which} margin (0..1000):"),
+            buffer: current.to_string(),
+            next,
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_print_pg_length_prompt(&mut self) {
+        self.menu = None;
+        let current: u16 = self.print.as_ref().map(|s| s.pg_length).unwrap_or(0);
+        self.prompt = Some(PromptState {
+            label: "Enter page length (0 = no pagination, 1..1000):".into(),
+            buffer: current.to_string(),
+            next: PromptNext::PrintFilePgLength,
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_print_header_prompt(&mut self) {
+        self.menu = None;
+        let buffer = self
+            .print
+            .as_ref()
+            .map(|s| s.header.clone())
+            .unwrap_or_default();
+        let fresh = !buffer.is_empty();
+        self.prompt = Some(PromptState {
+            label: "Enter print header (L|C|R):".into(),
+            buffer,
+            next: PromptNext::PrintFileHeader,
+            fresh,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_print_footer_prompt(&mut self) {
+        self.menu = None;
+        let buffer = self
+            .print
+            .as_ref()
+            .map(|s| s.footer.clone())
+            .unwrap_or_default();
+        let fresh = !buffer.is_empty();
+        self.prompt = Some(PromptState {
+            label: "Enter print footer (L|C|R):".into(),
+            buffer,
+            next: PromptNext::PrintFileFooter,
+            fresh,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn finish_print_session(&mut self) {
+        self.print = None;
+        self.close_menu();
+    }
+
+    fn execute_print_file_go(&mut self) {
+        let Some(session) = self.print.as_ref() else {
+            self.close_menu();
+            return;
+        };
+        let Some(range) = session.range else {
+            // No range selected — bounce back to the menu without
+            // writing anything. Matches 1-2-3's "Go with no range =
+            // no-op".
+            self.enter_print_file_menu();
+            return;
+        };
+        let path = session.path.clone();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        let settings = PrintSettings {
+            header: session.header.clone(),
+            footer: session.footer.clone(),
+            content_mode: session.content_mode,
+            format_mode: session.format_mode,
+            margin_left: session.margin_left,
+            margin_right: session.margin_right,
+            margin_top: session.margin_top,
+            margin_bottom: session.margin_bottom,
+            pg_length: session.pg_length,
+            start_page: session.next_page,
+        };
+        let (body, pages) = self.render_print_body(range, &settings);
+        let _ = std::fs::write(&path, body);
+        // Session stays alive so the user can issue further commands
+        // (Options, another Go, Align, Clear, …). Quit is the way
+        // out. Advance the page counter for the next Go.
+        if let Some(s) = self.print.as_mut() {
+            s.next_page = s.next_page.saturating_add(pages);
+        }
+        self.enter_print_file_menu();
+    }
+
+    /// Render the selected range as plain ASCII, one line per row.
+    /// Each cell gets its configured column width; trailing spaces
+    /// are trimmed per row. Optional `header` / `footer` surround
+    /// the body as `|`-split L|C|R strings.
+    /// Returns the rendered body and the number of pages written so
+    /// the caller can advance its page counter.
+    fn render_print_body(&self, range: Range, settings: &PrintSettings) -> (String, u32) {
+        let r = range.normalized();
+        // Page width = sum of column widths in the selected range.
+        let page_width: usize = (r.start.col..=r.end.col)
+            .map(|c| self.col_width_of(r.start.sheet, c) as usize)
+            .sum();
+        let page_width = page_width.max(1);
+        // Right margin trims content lines (after the left pad) down
+        // to `page_width - margin_right`. `0` = no limit.
+        let effective_width = if settings.margin_right == 0 {
+            page_width
+        } else {
+            page_width.saturating_sub(settings.margin_right as usize)
+        };
+        let (header, footer) = match settings.format_mode {
+            PrintFormatMode::Formatted => (settings.header.as_str(), settings.footer.as_str()),
+            PrintFormatMode::Unformatted => ("", ""),
+        };
+        let content_mode = settings.content_mode;
+        let left_pad: String = " ".repeat(settings.margin_left as usize);
+
+        // Collect content rows (after pipe-row suppression, content-
+        // mode rendering, and right-margin truncation). Each entry
+        // already has `left_pad` prepended and a trailing `\n`.
+        let mut rows: Vec<String> = Vec::new();
+        for row in r.start.row..=r.end.row {
+            let first = Address::new(r.start.sheet, r.start.col, row);
+            if let Some(CellContents::Label { prefix: LabelPrefix::Pipe, .. }) =
+                self.wb().cells.get(&first)
+            {
+                continue;
+            }
+            let mut line = String::new();
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                let w = self.col_width_of(r.start.sheet, col) as usize;
+                let piece = match self.wb().cells.get(&addr) {
+                    Some(CellContents::Empty) | None => " ".repeat(w),
+                    Some(CellContents::Label { prefix, text }) => {
+                        render_label(*prefix, text, w)
+                    }
+                    Some(CellContents::Constant(v)) => {
+                        let fmt = self.format_for_cell(addr);
+                        render_value_in_cell(v, w, fmt).unwrap_or_else(|| " ".repeat(w))
+                    }
+                    Some(CellContents::Formula { expr, cached_value }) => {
+                        match content_mode {
+                            PrintContentMode::CellFormulas => {
+                                let src = format!("@{expr}");
+                                let pad = w.saturating_sub(src.chars().count());
+                                let mut s = src;
+                                s.extend(std::iter::repeat_n(' ', pad));
+                                s
+                            }
+                            PrintContentMode::AsDisplayed => match cached_value {
+                                Some(v) => {
+                                    let fmt = self.format_for_cell(addr);
+                                    render_value_in_cell(v, w, fmt)
+                                        .unwrap_or_else(|| " ".repeat(w))
+                                }
+                                None => " ".repeat(w),
+                            },
+                        }
+                    }
+                };
+                line.push_str(&piece);
+            }
+            let truncated: String = line.chars().take(effective_width).collect();
+            let trimmed: String = truncated.trim_end().to_string();
+            let mut entry = String::with_capacity(left_pad.len() + trimmed.len() + 1);
+            entry.push_str(&left_pad);
+            entry.push_str(&trimmed);
+            entry.push('\n');
+            rows.push(entry);
+        }
+
+        // Chunk into pages. pg_length == 0 means no pagination — one
+        // page with every row.
+        let per_page = if settings.pg_length == 0 {
+            rows.len().max(1)
+        } else {
+            settings.pg_length as usize
+        };
+        let pages: Vec<&[String]> = if rows.is_empty() {
+            vec![&[]]
+        } else {
+            rows.chunks(per_page).collect()
+        };
+
+        let today = today_ddmmmyy();
+        let mut out = String::new();
+        for (i, page) in pages.iter().enumerate() {
+            let page_no = settings.start_page as usize + i;
+            // Top margin.
+            for _ in 0..settings.margin_top {
+                out.push('\n');
+            }
+            if !header.is_empty() {
+                let substituted = substitute_tokens(header, page_no, &today);
+                out.push_str(&left_pad);
+                out.push_str(&format_three_part(&substituted, page_width));
+                out.push('\n');
+                out.push('\n');
+            }
+            for row in page.iter() {
+                out.push_str(row);
+            }
+            if !footer.is_empty() {
+                let substituted = substitute_tokens(footer, page_no, &today);
+                out.push('\n');
+                out.push_str(&left_pad);
+                out.push_str(&format_three_part(&substituted, page_width));
+                out.push('\n');
+            }
+            // Bottom margin.
+            for _ in 0..settings.margin_bottom {
+                out.push('\n');
+            }
+            // Form feed between pages (not after the last).
+            if i + 1 < pages.len() {
+                out.push('\x0c');
+            }
+        }
+        (out, pages.len() as u32)
     }
 
     fn start_file_open_prompt(&mut self, before: bool) {
@@ -1862,7 +2440,125 @@ impl App {
                 }
                 self.mode = Mode::Ready;
             }
+            PendingCommand::PrintFileRange => {
+                if let Some(session) = self.print.as_mut() {
+                    session.range = Some(range);
+                }
+                // Back to the /PF submenu for Options/Go/…
+                self.enter_print_file_menu();
+            }
+            PendingCommand::RangeSearchRange { scope } => {
+                self.start_range_search_string_prompt(scope, range);
+            }
         }
+    }
+
+    fn start_range_search_string_prompt(&mut self, scope: SearchScope, range: Range) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter search string:".into(),
+            buffer: String::new(),
+            next: PromptNext::RangeSearchString { scope, range },
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn enter_range_search_find_replace_menu(&mut self) {
+        self.menu = Some(MenuState::rooted_at(menu::RANGE_SEARCH_FIND_REPLACE_MENU));
+        self.mode = Mode::Menu;
+    }
+
+    fn start_range_search_replace_prompt(&mut self) {
+        if self.search.is_none() {
+            self.close_menu();
+            return;
+        }
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter replacement string:".into(),
+            buffer: String::new(),
+            next: PromptNext::RangeSearchReplacement,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Pick the first match, land in FIND mode. While in FIND,
+    /// Enter advances (wrapping at the end), Esc exits. No matches
+    /// → session is discarded and we return to READY.
+    fn execute_range_search_find(&mut self) {
+        let Some(mut session) = self.search.take() else {
+            self.close_menu();
+            return;
+        };
+        session.matches = self.find_matches(&session);
+        if session.matches.is_empty() {
+            self.close_menu();
+            return;
+        }
+        session.cursor = 0;
+        self.wb_mut().pointer = session.matches[0];
+        self.scroll_into_view();
+        self.menu = None;
+        self.search = Some(session);
+        self.mode = Mode::Find;
+    }
+
+    fn handle_key_find(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Enter => {
+                if let Some(s) = self.search.as_mut() {
+                    if !s.matches.is_empty() {
+                        s.cursor = (s.cursor + 1) % s.matches.len();
+                        let next = s.matches[s.cursor];
+                        self.wb_mut().pointer = next;
+                        self.scroll_into_view();
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                self.search = None;
+                self.mode = Mode::Ready;
+            }
+            _ => {}
+        }
+    }
+
+    /// Collect the addresses within `session.range` whose content (per
+    /// scope) contains `session.search` as a substring.
+    fn find_matches(&self, session: &SearchSession) -> Vec<Address> {
+        let r = session.range.normalized();
+        let needle = &session.search;
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                let Some(contents) = self.wb().cells.get(&addr) else { continue };
+                let matched = match (session.scope, contents) {
+                    (SearchScope::Formulas, CellContents::Formula { expr, .. }) => {
+                        expr.contains(needle)
+                    }
+                    (SearchScope::Labels, CellContents::Label { text, .. }) => {
+                        text.contains(needle)
+                    }
+                    (SearchScope::Both, CellContents::Formula { expr, .. }) => {
+                        expr.contains(needle)
+                    }
+                    (SearchScope::Both, CellContents::Label { text, .. }) => {
+                        text.contains(needle)
+                    }
+                    _ => false,
+                };
+                if matched {
+                    out.push(addr);
+                }
+            }
+        }
+        out
     }
 
     /// Build a fresh IronCalc workbook containing just `range`, then
@@ -2075,7 +2771,118 @@ impl App {
                 let path = PathBuf::from(&p.buffer);
                 self.open_file_alongside(path, before);
             }
+            PromptNext::PrintFileFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(&p.buffer);
+                self.print = Some(PrintSession::new(path));
+                self.enter_print_file_menu();
+            }
+            PromptNext::PrintFileHeader => {
+                if let Some(s) = self.print.as_mut() {
+                    s.header = p.buffer;
+                }
+                self.enter_print_options_menu();
+            }
+            PromptNext::PrintFileFooter => {
+                if let Some(s) = self.print.as_mut() {
+                    s.footer = p.buffer;
+                }
+                self.enter_print_options_menu();
+            }
+            PromptNext::RangeSearchString { scope, range } => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                self.search = Some(SearchSession {
+                    scope,
+                    range,
+                    search: p.buffer,
+                    matches: Vec::new(),
+                    cursor: 0,
+                });
+                self.enter_range_search_find_replace_menu();
+            }
+            PromptNext::RangeSearchReplacement => {
+                let Some(session) = self.search.take() else {
+                    self.mode = Mode::Ready;
+                    return;
+                };
+                self.execute_range_search_replace(session, p.buffer);
+                self.mode = Mode::Ready;
+            }
+            PromptNext::PrintFileMarginLeft
+            | PromptNext::PrintFileMarginRight
+            | PromptNext::PrintFileMarginTop
+            | PromptNext::PrintFileMarginBottom => {
+                let v: u16 = p.buffer.parse::<u16>().unwrap_or(0).min(1000);
+                if let Some(s) = self.print.as_mut() {
+                    match p.next {
+                        PromptNext::PrintFileMarginLeft => s.margin_left = v,
+                        PromptNext::PrintFileMarginRight => s.margin_right = v,
+                        PromptNext::PrintFileMarginTop => s.margin_top = v,
+                        PromptNext::PrintFileMarginBottom => s.margin_bottom = v,
+                        _ => {}
+                    }
+                }
+                self.enter_print_margins_menu();
+            }
+            PromptNext::PrintFilePgLength => {
+                let v: u16 = p.buffer.parse::<u16>().unwrap_or(0).min(1000);
+                if let Some(s) = self.print.as_mut() {
+                    s.pg_length = v;
+                }
+                self.enter_print_options_menu();
+            }
         }
+    }
+
+    /// Replace every occurrence of `session.search` within `session.range`
+    /// with `replacement`. Formulas use expr-string substring; labels
+    /// use text substring. Both updates journaled as CellEdits.
+    fn execute_range_search_replace(&mut self, session: SearchSession, replacement: String) {
+        let matches = self.find_matches(&session);
+        if matches.is_empty() {
+            return;
+        }
+        let needle = session.search;
+        let mut batch: Vec<JournalEntry> = Vec::new();
+        for addr in matches {
+            let Some(contents) = self.wb().cells.get(&addr).cloned() else { continue };
+            let (new_contents, prev_contents, prev_format) = match contents {
+                CellContents::Formula { expr, cached_value } => {
+                    let new_expr = expr.replace(&needle, &replacement);
+                    let prev = CellContents::Formula {
+                        expr: expr.clone(),
+                        cached_value: cached_value.clone(),
+                    };
+                    (
+                        CellContents::Formula { expr: new_expr, cached_value: None },
+                        Some(prev),
+                        self.wb().cell_formats.get(&addr).copied(),
+                    )
+                }
+                CellContents::Label { prefix, text } => {
+                    let new_text = text.replace(&needle, &replacement);
+                    let prev = CellContents::Label { prefix, text: text.clone() };
+                    (
+                        CellContents::Label { prefix, text: new_text },
+                        Some(prev),
+                        self.wb().cell_formats.get(&addr).copied(),
+                    )
+                }
+                _ => continue,
+            };
+            batch.push(JournalEntry::CellEdit { addr, prev_contents, prev_format });
+            self.push_to_engine_at(addr, &new_contents);
+            self.wb_mut().cells.insert(addr, new_contents);
+        }
+        self.push_journal_batch(batch);
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
     }
 
     // ---------------- range-format execution ----------------
@@ -2915,6 +3722,91 @@ fn shift_cells_cols(
     }
 }
 
+/// Substitute 1-2-3 header/footer tokens:
+///   `#` → `page_no` (as a decimal number)
+///   `@` → `today` (pre-formatted DD-MMM-YY date string)
+/// Other characters pass through untouched. `\name` (named-range
+/// substitution) is a later milestone.
+fn substitute_tokens(s: &str, page_no: usize, today: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '#' => out.push_str(&page_no.to_string()),
+            '@' => out.push_str(today),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Today's date formatted as `DD-MMM-YY` (1-2-3's default D1 date
+/// format). Falls back to an empty string if the system clock is
+/// somehow earlier than the Unix epoch.
+fn today_ddmmmyy() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(_) => return String::new(),
+    };
+    // Convert Unix seconds to (year, month, day) via the civil
+    // from-days algorithm from Howard Hinnant's date paper.
+    let days = secs.div_euclid(86_400);
+    let (y, m, d) = days_to_ymd(days);
+    let month_name = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ][(m - 1) as usize];
+    format!("{d:02}-{month_name}-{:02}", (y % 100 + 100) % 100)
+}
+
+/// Days since Unix epoch (1970-01-01) → (year, month [1..12],
+/// day-of-month [1..31]). Hinnant's civil-from-days algorithm.
+fn days_to_ymd(z: i64) -> (i32, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + if m <= 2 { 1 } else { 0 };
+    (y as i32, m, d)
+}
+
+/// Format a `|`-split three-part header/footer line to `width`
+/// characters. Parts past the third are ignored; missing parts are
+/// treated as empty. Left-aligned | centered | right-aligned,
+/// truncated to width if over.
+fn format_three_part(s: &str, width: usize) -> String {
+    let mut parts = s.splitn(3, '|');
+    let left = parts.next().unwrap_or("");
+    let center = parts.next().unwrap_or("");
+    let right = parts.next().unwrap_or("");
+    let lcount = left.chars().count();
+    let ccount = center.chars().count();
+    let rcount = right.chars().count();
+    // Lay out Left..padL..Center..padR..Right within `width`.
+    if lcount + ccount + rcount >= width {
+        // Truncate: concatenate without alignment, cut to width.
+        let joined = format!("{left}{center}{right}");
+        return joined.chars().take(width).collect();
+    }
+    let c_start = (width.saturating_sub(ccount)) / 2;
+    let c_end = c_start + ccount;
+    let r_start = width - rcount;
+    let mut out = String::with_capacity(width);
+    out.push_str(left);
+    let pad1 = c_start.saturating_sub(lcount);
+    out.extend(std::iter::repeat_n(' ', pad1));
+    out.push_str(center);
+    let pad2 = r_start.saturating_sub(c_end);
+    out.extend(std::iter::repeat_n(' ', pad2));
+    out.push_str(right);
+    out
+}
+
 fn write_centered(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
     let w = width as usize;
     let t: String = if text.chars().count() >= w {
@@ -3043,6 +3935,29 @@ fn repeat_to_width(pattern: &str, width: usize) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn days_to_ymd_known_dates() {
+        // Fixtures cover epoch, leap year, century non-leap, and
+        // post-2000 leap dates to cross-check the civil algorithm.
+        assert_eq!(days_to_ymd(0), (1970, 1, 1));
+        assert_eq!(days_to_ymd(31), (1970, 2, 1));
+        assert_eq!(days_to_ymd(365), (1971, 1, 1));
+        // 2000-02-29 is 11016 days past 1970-01-01.
+        assert_eq!(days_to_ymd(11016), (2000, 2, 29));
+        assert_eq!(days_to_ymd(11017), (2000, 3, 1));
+        // 2026-04-23
+        assert_eq!(days_to_ymd(20566), (2026, 4, 23));
+    }
+
+    #[test]
+    fn substitute_tokens_expands_hash_and_at() {
+        assert_eq!(
+            substitute_tokens("Page # of 5 (@)", 3, "23-Apr-26"),
+            "Page 3 of 5 (23-Apr-26)"
+        );
+        assert_eq!(substitute_tokens("no tokens", 7, "X"), "no tokens");
+    }
 
     #[test]
     fn starts_at_a1() {

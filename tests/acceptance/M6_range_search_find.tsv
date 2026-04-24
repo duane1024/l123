@@ -1,0 +1,60 @@
+# /Range Search Formulas → Find walks through every match.
+#
+# After /RSF ... Find, the session stays live: Enter advances to the
+# next match, wrapping back to the first when we run off the end.
+# Esc exits to READY.
+
+# A1 = @SUM(B1..B3); B1..B3 = 1,2,3; A5 = @AVG(B1..B3).
+KEYS @SUM(B1..B3)
+ENTER
+RIGHT
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+DOWN
+KEYS 3
+ENTER
+LEFT
+DOWN
+DOWN
+KEYS @AVG(B1..B3)
+ENTER
+HOME
+ASSERT_POINTER    A:A1
+
+# /RS F → Formulas; POINT A1..B5.
+KEY /
+KEY R
+KEY S
+KEY F
+ASSERT_MODE       POINT
+RIGHT
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+
+# Search string "B1" — matches in A1 and A5.
+KEYS B1
+ENTER
+
+# /F → Find. Pointer moves to first match (A1).
+KEY F
+ASSERT_MODE       FIND
+ASSERT_POINTER    A:A1
+
+# Enter advances to the second match (A5).
+ENTER
+ASSERT_POINTER    A:A5
+
+# Enter wraps back to A1.
+ENTER
+ASSERT_POINTER    A:A1
+
+# Esc exits to READY.
+ESC
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1

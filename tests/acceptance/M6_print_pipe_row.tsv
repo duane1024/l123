@@ -1,0 +1,37 @@
+# SPEC §8 label prefixes / PLAN M6: a `|` prefix in the first column
+# of the print range marks the row as "non-print". Go drops those rows
+# from the output.
+
+RM_FILE $TMPDIR/m6_print_pipe.prn
+
+# A1 = 'Visible1 (regular label)
+KEYS 'Visible1
+ENTER
+DOWN
+# A2 = |hidden1 (pipe prefix → non-print row)
+KEYS |hidden1
+ENTER
+DOWN
+# A3 = 'Visible3
+KEYS 'Visible3
+ENTER
+HOME
+ASSERT_POINTER    A:A1
+
+# /PF inc.prn ~ R (A1..A3) ~ G
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_print_pipe.prn
+ENTER
+KEY R
+DOWN
+DOWN
+ENTER
+KEY G
+KEY Q
+ASSERT_MODE       READY
+
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_print_pipe.prn  Visible1
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_print_pipe.prn  Visible3
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_print_pipe.prn  hidden1

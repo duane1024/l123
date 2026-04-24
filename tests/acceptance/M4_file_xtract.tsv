@@ -8,7 +8,7 @@
 # saved file preserves formulas vs. replaces them with values is the
 # subject of a separate unit test.
 
-RM_FILE target/m4_file_xtract.xlsx
+RM_FILE $TMPDIR/m4_file_xtract.xlsx
 
 # Seed A1=10 A2=20 A3=+A1+A2  (= 30).
 KEYS 10
@@ -31,7 +31,7 @@ ASSERT_PANEL_L2  Values
 KEY F
 ASSERT_MODE      MENU
 ASSERT_PANEL_L3  Enter extract file name
-KEYS target/m4_file_xtract.xlsx
+KEYS $TMPDIR/m4_file_xtract.xlsx
 ENTER
 
 # POINT for the range.  POINT auto-anchors at the current pointer

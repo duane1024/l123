@@ -1,0 +1,63 @@
+# /Range Search Formulas → Replace.
+#
+# PLAN acceptance: "/RSF find sum<Enter>replace total<Enter> → all 'sum'
+# in formulas replaced with 'total' in selected range." Our Replace
+# variant applies to every match in the range in one go.
+
+# Seed: A1 = @SUM(B1..B3); B1..B3 = 1,2,3 so A1 computes 6.
+KEYS @SUM(B1..B3)
+ENTER
+RIGHT
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+DOWN
+KEYS 3
+ENTER
+HOME
+ASSERT_POINTER    A:A1
+ASSERT_PANEL_L1   @SUM(B1..B3)
+ASSERT_CELL       A:A1  6
+
+# /RS — descend to Formulas|Labels|Both.
+KEY /
+KEY R
+KEY S
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Formulas
+ASSERT_PANEL_L2   Labels
+ASSERT_PANEL_L2   Both
+
+# /F → Formulas scope; POINT for range. Anchor at A1, extend to B3.
+KEY F
+ASSERT_MODE       POINT
+RIGHT
+DOWN
+DOWN
+ENTER
+
+# Prompt for the search string.
+ASSERT_PANEL_L3   Enter search
+KEYS SUM
+ENTER
+
+# Find | Replace submenu appears.
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Find
+ASSERT_PANEL_L2   Replace
+
+# /R — replacement prompt.
+KEY R
+ASSERT_PANEL_L3   Enter replacement
+KEYS AVERAGE
+ENTER
+
+# Back in READY. Pointer was left at the POINT-final cell; navigate
+# back to A1 to read its formula from line 1.
+ASSERT_MODE       READY
+HOME
+ASSERT_POINTER    A:A1
+ASSERT_PANEL_L1   @AVERAGE(B1..B3)
+ASSERT_CELL       A:A1  2

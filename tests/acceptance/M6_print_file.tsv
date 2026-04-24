@@ -1,0 +1,45 @@
+# /Print File — minimal ASCII dump flow.
+#
+# The command prompts for a filename, then descends into the
+# Range|Line|Page|Options|Clear|Align|Go|Quit submenu. For this
+# slice, only Range and Go are wired; Go writes the selected range
+# to the prompted file as plain ASCII (as-displayed).
+
+RM_FILE $TMPDIR/m6_print.prn
+
+# Seed A:A1 = 'Hello, A:B1 = 42.
+KEYS 'Hello
+ENTER
+RIGHT
+KEYS 42
+ENTER
+
+# /PF prompts for an output filename.
+HOME
+KEY /
+KEY P
+KEY F
+ASSERT_MODE       MENU
+ASSERT_PANEL_L3   Enter print file name
+
+KEYS $TMPDIR/m6_print.prn
+ENTER
+# After commit, the File submenu shows its leaves.
+ASSERT_PANEL_L2   Range
+ASSERT_PANEL_L2   Go
+ASSERT_PANEL_L2   Quit
+
+# /R → POINT; extend anchor from A1 to B1.
+KEY R
+ASSERT_MODE       POINT
+RIGHT
+ENTER
+# Back in the File submenu.
+ASSERT_PANEL_L2   Go
+
+# /G writes; harness then verifies the file on disk.
+KEY G
+KEY Q
+ASSERT_MODE       READY
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print.prn  Hello
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print.prn  42

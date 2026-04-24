@@ -10,8 +10,8 @@
 #   6. Ctrl-PgDn while armed rotates to file B.  A1 reads 22.
 #   7. Ctrl-End then Ctrl-PgDn again rotates back to A.  A1 reads 11.
 
-RM_FILE target/m5_file_open_a.xlsx
-RM_FILE target/m5_file_open_b.xlsx
+RM_FILE $TMPDIR/m5_file_open_a.xlsx
+RM_FILE $TMPDIR/m5_file_open_b.xlsx
 
 # --- build A on disk ---
 KEYS 11
@@ -19,7 +19,7 @@ ENTER
 KEY /
 KEY F
 KEY S
-KEYS target/m5_file_open_a.xlsx
+KEYS $TMPDIR/m5_file_open_a.xlsx
 ENTER
 ASSERT_MODE     READY
 
@@ -33,7 +33,7 @@ ENTER
 KEY /
 KEY F
 KEY S
-KEYS target/m5_file_open_b.xlsx
+KEYS $TMPDIR/m5_file_open_b.xlsx
 ENTER
 ASSERT_MODE     READY
 
@@ -41,7 +41,7 @@ ASSERT_MODE     READY
 KEY /
 KEY F
 KEY R
-KEYS target/m5_file_open_a.xlsx
+KEYS $TMPDIR/m5_file_open_a.xlsx
 ENTER
 ASSERT_MODE     READY
 ASSERT_CELL     A:A1  11
@@ -54,7 +54,7 @@ ASSERT_MODE     MENU
 ASSERT_PANEL_L2 Before
 ASSERT_PANEL_L2 After
 KEY A
-KEYS target/m5_file_open_b.xlsx
+KEYS $TMPDIR/m5_file_open_b.xlsx
 ENTER
 ASSERT_MODE     READY
 ASSERT_CELL     A:A1  11

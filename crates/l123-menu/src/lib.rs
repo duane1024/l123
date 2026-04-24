@@ -83,6 +83,30 @@ pub enum Action {
     FileNew,
     FileOpenBefore,
     FileOpenAfter,
+    PrintFile,
+    PrintFileRange,
+    PrintFileGo,
+    PrintFileQuit,
+    PrintFileAlign,
+    PrintFileClear,
+    PrintFileOptionsHeader,
+    PrintFileOptionsFooter,
+    PrintFileOptionsQuit,
+    PrintFileOptionsOtherAsDisplayed,
+    PrintFileOptionsOtherCellFormulas,
+    PrintFileOptionsOtherFormatted,
+    PrintFileOptionsOtherUnformatted,
+    PrintFileOptionsMarginLeft,
+    PrintFileOptionsMarginRight,
+    PrintFileOptionsMarginTop,
+    PrintFileOptionsMarginBottom,
+    PrintFileOptionsMarginsQuit,
+    PrintFileOptionsPgLength,
+    RangeSearchFormulas,
+    RangeSearchLabels,
+    RangeSearchBoth,
+    RangeSearchFind,
+    RangeSearchReplace,
     FileDir,
     FileListWorksheet,
     FileListActive,
@@ -91,7 +115,17 @@ pub enum Action {
 /// Resolve a path of letter accelerators from the root menu.  Returns
 /// `None` if any letter fails to match. Letters are case-insensitive.
 pub fn resolve(path: &[char]) -> Option<&'static MenuItem> {
-    let mut items: &[MenuItem] = ROOT;
+    resolve_within(ROOT, path)
+}
+
+/// Like [`resolve`] but starts from an arbitrary menu slice — used by
+/// nested menus (e.g. the `/Print File` submenu rooted at
+/// [`PRINT_FILE_MENU`]).
+pub fn resolve_within(
+    root: &'static [MenuItem],
+    path: &[char],
+) -> Option<&'static MenuItem> {
+    let mut items: &[MenuItem] = root;
     let mut last: Option<&MenuItem> = None;
     for &letter in path {
         let item = items
@@ -118,10 +152,19 @@ pub fn children(item: &MenuItem) -> &'static [MenuItem] {
 /// descended `path`. Empty path → ROOT. If `path` ends at a leaf,
 /// the leaf's parent level is returned.
 pub fn current_level(path: &[char]) -> &'static [MenuItem] {
+    current_level_within(ROOT, path)
+}
+
+/// Nested variant of [`current_level`]: starts from `root` rather
+/// than [`ROOT`].
+pub fn current_level_within(
+    root: &'static [MenuItem],
+    path: &[char],
+) -> &'static [MenuItem] {
     if path.is_empty() {
-        return ROOT;
+        return root;
     }
-    match resolve(path) {
+    match resolve_within(root, path) {
         Some(item) => children(item),
         None => &[],
     }
@@ -638,6 +681,44 @@ const RANGE_LABEL_MENU: &[MenuItem] = &[
     },
 ];
 
+const RANGE_SEARCH_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'F',
+        name: "Formulas",
+        help: "Search only formula cells",
+        body: MenuBody::Action(Action::RangeSearchFormulas),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Labels",
+        help: "Search only label cells",
+        body: MenuBody::Action(Action::RangeSearchLabels),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "Both",
+        help: "Search both formulas and labels",
+        body: MenuBody::Action(Action::RangeSearchBoth),
+    },
+];
+
+/// Find|Replace sub-sub-menu shown after the search string commits.
+/// Public so the UI layer can root a nested menu at it.
+pub const RANGE_SEARCH_FIND_REPLACE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'F',
+        name: "Find",
+        help: "Move the pointer to the next match",
+        body: MenuBody::Action(Action::RangeSearchFind),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Replace",
+        help: "Replace all matches with another string",
+        body: MenuBody::Action(Action::RangeSearchReplace),
+    },
+];
+
 const RANGE_NAME_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'C',
@@ -748,7 +829,7 @@ const RANGE_MENU: &[MenuItem] = &[
         letter: 'S',
         name: "Search",
         help: "Find / Replace across formulas and labels",
-        body: MenuBody::NotImplemented("r-search"),
+        body: MenuBody::Submenu(RANGE_SEARCH_MENU),
     },
 ];
 
@@ -920,6 +1001,182 @@ const FILE_MENU: &[MenuItem] = &[
     },
 ];
 
+const PRINT_FILE_OPTIONS_MARGINS_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'L',
+        name: "Left",
+        help: "Set the left margin (spaces prefixed to each printed line)",
+        body: MenuBody::Action(Action::PrintFileOptionsMarginLeft),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Right",
+        help: "Set the right margin",
+        body: MenuBody::Action(Action::PrintFileOptionsMarginRight),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Top",
+        help: "Set the top margin (blank lines above the first row)",
+        body: MenuBody::Action(Action::PrintFileOptionsMarginTop),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "Bottom",
+        help: "Set the bottom margin",
+        body: MenuBody::Action(Action::PrintFileOptionsMarginBottom),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to the Options menu",
+        body: MenuBody::Action(Action::PrintFileOptionsMarginsQuit),
+    },
+];
+
+const PRINT_FILE_OPTIONS_OTHER_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "As-Displayed",
+        help: "Print cells as they appear on screen (default)",
+        body: MenuBody::Action(Action::PrintFileOptionsOtherAsDisplayed),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Cell-Formulas",
+        help: "Print the formula source in place of the computed value",
+        body: MenuBody::Action(Action::PrintFileOptionsOtherCellFormulas),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Formatted",
+        help: "Honor headers, footers, margins, and page breaks",
+        body: MenuBody::Action(Action::PrintFileOptionsOtherFormatted),
+    },
+    MenuItem {
+        letter: 'U',
+        name: "Unformatted",
+        help: "Dump the range with no page decorations",
+        body: MenuBody::Action(Action::PrintFileOptionsOtherUnformatted),
+    },
+];
+
+const PRINT_FILE_OPTIONS_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'H',
+        name: "Header",
+        help: "Set a three-part header (L|C|R), printed above each page",
+        body: MenuBody::Action(Action::PrintFileOptionsHeader),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Footer",
+        help: "Set a three-part footer (L|C|R), printed below each page",
+        body: MenuBody::Action(Action::PrintFileOptionsFooter),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Margins",
+        help: "Set Left / Right / Top / Bottom margins",
+        body: MenuBody::Submenu(PRINT_FILE_OPTIONS_MARGINS_MENU),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Pg-Length",
+        help: "Set page length (lines per page)",
+        body: MenuBody::Action(Action::PrintFileOptionsPgLength),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "Borders",
+        help: "Repeat columns/rows at the top/left of each page",
+        body: MenuBody::NotImplemented("pfo-borders"),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Setup",
+        help: "Setup escape sequence for the printer",
+        body: MenuBody::NotImplemented("pfo-setup"),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "As-Displayed / Cell-Formulas / Formatted / Unformatted",
+        body: MenuBody::Submenu(PRINT_FILE_OPTIONS_OTHER_MENU),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Name",
+        help: "Named print-settings sets",
+        body: MenuBody::NotImplemented("pfo-name"),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Advanced",
+        help: "Advanced options (AutoLf, Color, Fonts, …)",
+        body: MenuBody::NotImplemented("pfo-advanced"),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to the print menu",
+        body: MenuBody::Action(Action::PrintFileOptionsQuit),
+    },
+];
+
+/// Sub-menu shown inside `/Print File` after the filename has been
+/// committed. `pub` so the UI layer can root a nested menu at it.
+pub const PRINT_FILE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'R',
+        name: "Range",
+        help: "Select the range of cells to print",
+        body: MenuBody::Action(Action::PrintFileRange),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Line",
+        help: "Advance one line in the output file",
+        body: MenuBody::NotImplemented("pf-line"),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Page",
+        help: "Advance to the next page in the output file",
+        body: MenuBody::NotImplemented("pf-page"),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Options",
+        help: "Header, footer, margins, page length, and output format",
+        body: MenuBody::Submenu(PRINT_FILE_OPTIONS_MENU),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Clear",
+        help: "Clear print settings (header, footer, margins, …)",
+        body: MenuBody::Action(Action::PrintFileClear),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Align",
+        help: "Reset the page counter to 1",
+        body: MenuBody::Action(Action::PrintFileAlign),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Go",
+        help: "Write the selected range to the print file",
+        body: MenuBody::Action(Action::PrintFileGo),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::PrintFileQuit),
+    },
+];
+
 const PRINT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'P',
@@ -931,7 +1188,7 @@ const PRINT_MENU: &[MenuItem] = &[
         letter: 'F',
         name: "File",
         help: "Print to .PRN text file",
-        body: MenuBody::NotImplemented("p-file"),
+        body: MenuBody::Action(Action::PrintFile),
     },
     MenuItem {
         letter: 'E',

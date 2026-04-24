@@ -46,3 +46,34 @@ and its argument (separated by tabs or spaces). `#` starts a comment.
 |---|---|
 | `SIZE <w> <h>` | Set render buffer size (default 80×25) |
 | `RM_FILE <path>` | Delete a file on disk (ignored if missing). Use at the top of a transcript to start from a known state. |
+| `ASSERT_FILE_CONTAINS <path>  <substr>` | Assert the named file's text contents contain `<substr>`. Supports `\n`, `\t`, `\f`, `\\` escapes in the substring. |
+| `ASSERT_FILE_NOT_CONTAINS <path>  <substr>` | Negation of the above. |
+
+### Filesystem sandbox
+
+Each transcript runs inside a scratch directory at
+`std::env::temp_dir().join("l123_accept_<transcript_stem>")`. Transcripts
+that read or write files (save, retrieve, xtract, import, print) refer
+to this directory via the literal placeholder `$TMPDIR`, which the
+harness substitutes into every directive argument before the directive
+runs. Example:
+
+```
+RM_FILE $TMPDIR/out.prn
+…
+KEYS $TMPDIR/out.prn
+ENTER
+…
+ASSERT_FILE_CONTAINS  $TMPDIR/out.prn  expected text
+```
+
+The harness creates the directory fresh at transcript start and cleans
+it up on successful completion. Tests that need a wider panel to fit a
+long temp-dir path in `ASSERT_PANEL_L*` assertions should include
+`SIZE 200 25` (or similar) at the top.
+
+### Comments
+
+A `#` starts a line comment when it is either at the start of the line
+or preceded by whitespace — so directives carrying literal `#` in
+their arguments (`KEYS P#`) work unescaped.

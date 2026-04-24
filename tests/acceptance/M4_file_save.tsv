@@ -4,14 +4,17 @@
 # commit.  The Cancel/Replace/Backup submenu (when the target already
 # exists) lands in a later slice.
 #
-# The transcript writes to target/m4_file_save_acceptance.xlsx — the
+# The transcript writes to $TMPDIR/m4_file_save_acceptance.xlsx — the
 # target/ dir is always present and gitignored.  We verify UI state
 # only; the on-disk round-trip is covered by an app-level unit test
 # in crates/l123-ui/src/app.rs.
 
+# Wider panel so the temp-dir path fits on line 2/3 for the asserts.
+SIZE 200 25
+
 # Start clean — earlier runs may have left the file, which would
 # route us into the Cancel/Replace/Backup submenu.
-RM_FILE target/m4_file_save_acceptance.xlsx
+RM_FILE $TMPDIR/m4_file_save_acceptance.xlsx
 
 # Seed one cell so the workbook has something to save.
 KEYS 42
@@ -27,8 +30,8 @@ ASSERT_MODE      MENU
 ASSERT_PANEL_L3  Enter save file name
 
 # Type a filename — buffer appears on line 2.
-KEYS target/m4_file_save_acceptance.xlsx
-ASSERT_PANEL_L2  target/m4_file_save_acceptance.xlsx
+KEYS $TMPDIR/m4_file_save_acceptance.xlsx
+ASSERT_PANEL_L2  $TMPDIR/m4_file_save_acceptance.xlsx
 
 # Commit — returns to READY, pointer unchanged.
 ENTER

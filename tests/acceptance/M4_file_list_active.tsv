@@ -3,14 +3,14 @@
 # We set active_path by saving once, then /FLA opens the FILES overlay
 # showing the file name on line 2.  Esc dismisses to READY.
 
-RM_FILE target/m4_file_list_active.xlsx
+RM_FILE $TMPDIR/m4_file_list_active.xlsx
 
 KEYS 42
 ENTER
 KEY /
 KEY F
 KEY S
-KEYS target/m4_file_list_active.xlsx
+KEYS $TMPDIR/m4_file_list_active.xlsx
 ENTER
 ASSERT_MODE      READY
 

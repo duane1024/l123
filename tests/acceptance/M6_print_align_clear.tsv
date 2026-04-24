@@ -1,0 +1,59 @@
+# /PF Align and /PF Clear.
+#
+# Page numbers advance across successive Gos in the same print session.
+# Align resets the counter to 1; Clear wipes the per-session settings
+# (header, footer, margins, pg-length) back to defaults.
+
+RM_FILE $TMPDIR/m6_align.prn
+
+KEYS 'row1
+ENTER
+DOWN
+KEYS 'row2
+ENTER
+HOME
+
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_align.prn
+ENTER
+
+KEY R
+DOWN
+ENTER
+
+# Options: header "P#", pg-length 1.
+KEY O
+KEY H
+KEYS P#
+ENTER
+KEY P
+KEYS 1
+ENTER
+KEY Q
+
+# Two Gos in a row: the second advances page numbering.
+# After Go #1 (pages 1..2) and Go #2 (pages 3..4), the file holds the
+# output of Go #2 — pages 3 and 4.
+KEY G
+KEY G
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_align.prn  P3
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_align.prn  P4
+
+# Align resets the counter; next Go writes pages 1..2 again.
+KEY A
+KEY G
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_align.prn  P1
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_align.prn  P2
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_align.prn  P3
+
+# Clear wipes the header. A subsequent Go's output has no "P<n>".
+KEY C
+KEY G
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_align.prn  P1
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_align.prn  P2
+
+# Quit exits the print session; no active_path lingers.
+KEY Q
+ASSERT_MODE     READY
