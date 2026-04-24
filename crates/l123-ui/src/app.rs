@@ -31,7 +31,7 @@ use ratatui::{
 };
 use l123_core::{
     address::col_to_letters, label::is_value_starter, render_label, render_value_in_cell, Address,
-    CellContents, Format, FormatKind, LabelPrefix, Mode, Range, SheetId, Value,
+    CellContents, ErrKind, Format, FormatKind, LabelPrefix, Mode, Range, SheetId, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
@@ -58,6 +58,45 @@ enum EntryKind {
     Edit,
 }
 
+/// `/Worksheet Global Recalc` direction. Natural is dependency-order
+/// (IronCalc's default); Columnwise/Rowwise force the traversal shape.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RecalcOrder {
+    #[default]
+    Natural,
+    Columnwise,
+    Rowwise,
+}
+
+impl RecalcOrder {
+    pub fn label(self) -> &'static str {
+        match self {
+            RecalcOrder::Natural => "Natural",
+            RecalcOrder::Columnwise => "Columnwise",
+            RecalcOrder::Rowwise => "Rowwise",
+        }
+    }
+}
+
+/// `/Worksheet Global Zero` — whether numeric zero cells render blank.
+/// R3.4a also has a `Label` mode where a custom string replaces the
+/// zero; we keep the binary shape for now.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ZeroDisplay {
+    #[default]
+    No,
+    Yes,
+}
+
+impl ZeroDisplay {
+    pub fn label(self) -> &'static str {
+        match self {
+            ZeroDisplay::No => "No",
+            ZeroDisplay::Yes => "Yes",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Entry {
     kind: EntryKind,
@@ -71,6 +110,10 @@ struct Workbook {
     cells: HashMap<Address, CellContents>,
     cell_formats: HashMap<Address, Format>,
     col_widths: HashMap<(SheetId, u16), u8>,
+    /// Workbook-wide default column width (1..240). Applied to any
+    /// column without a `col_widths` entry. Set by `/Worksheet Global
+    /// Col-Width`. Initialized to 9 — the 1-2-3 R3 factory default.
+    default_col_width: u8,
     /// Columns marked hidden by `/Worksheet Column Hide`. Skipped by
     /// the grid renderer; pointer and formulas can still address them.
     /// Not persisted through xlsx today — IronCalc 0.7 doesn't model
@@ -102,6 +145,7 @@ impl Workbook {
             cells: HashMap::new(),
             cell_formats: HashMap::new(),
             col_widths: HashMap::new(),
+            default_col_width: 9,
             hidden_cols: HashSet::new(),
             active_path: None,
             pointer: Address::A1,
@@ -134,7 +178,23 @@ pub struct App {
     entry: Option<Entry>,
     default_label_prefix: LabelPrefix,
     recalc_mode: RecalcMode,
+    /// `/Worksheet Global Recalc` direction setting. IronCalc always
+    /// evaluates in natural (dependency) order, so this is stored for
+    /// the status panel but doesn't change calculation today. Slotted
+    /// for a real effect once the engine grows explicit ordering.
+    recalc_order: RecalcOrder,
+    /// `/Worksheet Global Recalc Iteration` count (1..=50). Stored
+    /// for the status panel; iterative solving isn't wired yet.
+    recalc_iterations: u16,
     recalc_pending: bool,
+    /// `/Worksheet Global Zero` — hide numeric zeros in cell
+    /// rendering. Stored for the status panel; cell_render doesn't
+    /// honor it yet.
+    zero_display: ZeroDisplay,
+    /// `/Worksheet Global Protection` — disables edits to protected
+    /// cells when On. Stored for the status panel; mutating commands
+    /// don't consult it yet.
+    global_protection: bool,
     /// 1-2-3 GROUP mode: when true, format and row/col operations
     /// propagate across all sheets of the active file. Toggled by
     /// `/Worksheet Global Group Enable|Disable`. Lights the GROUP
@@ -391,6 +451,10 @@ enum JournalEntry {
         col: u16,
         prev_hidden: bool,
     },
+    /// Restore the workbook-wide default column width.
+    GlobalColWidth { prev: u8 },
+    /// Restore the workbook-wide default label prefix.
+    DefaultLabelPrefix { prev: LabelPrefix },
     /// Group of entries popped and applied together — used when
     /// GROUP propagated a single command to multiple sheets.
     Batch(Vec<JournalEntry>),
@@ -435,6 +499,11 @@ enum PromptNext {
     /// After the user types a width, enter POINT to pick the range of
     /// columns to apply it to.
     WorksheetColumnRangeSetWidth,
+    /// Set the workbook-wide default column width.
+    WorksheetGlobalColWidth,
+    /// `/Worksheet Global Recalc Iteration` — numeric prompt clamped
+    /// to 1..=50 iterations.
+    WorksheetGlobalRecalcIteration,
     /// After the user types a name, stash it and go to POINT for the range.
     RangeNameCreate,
     /// After the user types a name, delete it from the engine.
@@ -523,7 +592,9 @@ impl PromptNext {
         match self {
             PromptNext::RangeFormat { .. }
             | PromptNext::WorksheetColumnSetWidth
-            | PromptNext::WorksheetColumnRangeSetWidth => c.is_ascii_digit(),
+            | PromptNext::WorksheetColumnRangeSetWidth
+            | PromptNext::WorksheetGlobalColWidth
+            | PromptNext::WorksheetGlobalRecalcIteration => c.is_ascii_digit(),
             PromptNext::RangeNameCreate | PromptNext::RangeNameDelete => {
                 c.is_ascii_alphanumeric() || c == '_'
             }
@@ -847,7 +918,11 @@ impl App {
             entry: None,
             default_label_prefix: LabelPrefix::Apostrophe,
             recalc_mode: RecalcMode::Automatic,
+            recalc_order: RecalcOrder::Natural,
+            recalc_iterations: 1,
             recalc_pending: false,
+            zero_display: ZeroDisplay::No,
+            global_protection: false,
             group_mode: false,
             undo_enabled: true,
             menu: None,
@@ -986,6 +1061,26 @@ impl App {
         self.running
     }
 
+    /// Address of the first cell whose cached formula value is a
+    /// circular-reference error, searched in address order. Returns
+    /// `None` when no cell currently reports a cycle.
+    ///
+    /// Reads the UI cell cache rather than re-interrogating the
+    /// engine. IronCalc doesn't surface `#CIRC!` through our current
+    /// adapter yet, so this typically returns `None` even on workbooks
+    /// that cycle; the mechanism is in place for when the adapter
+    /// maps the error through.
+    fn first_circular_reference(&self) -> Option<Address> {
+        let mut entries: Vec<(&Address, &CellContents)> = self.wb().cells.iter().collect();
+        entries.sort_by_key(|(a, _)| (a.sheet, a.row, a.col));
+        entries.into_iter().find_map(|(addr, cc)| match cc {
+            CellContents::Formula { cached_value: Some(Value::Error(ErrKind::Circular)), .. } => {
+                Some(*addr)
+            }
+            _ => None,
+        })
+    }
+
     /// Current graph's type as an ASCII all-caps token, for use in
     /// `ASSERT_GRAPH_TYPE` transcript directives.
     pub fn graph_type_str(&self) -> &'static str {
@@ -1101,8 +1196,18 @@ impl App {
             Mode::Point => self.handle_key_point(k),
             Mode::Find => self.handle_key_find(k),
             Mode::Graph => self.handle_key_graph(k),
+            Mode::Stat => self.handle_key_stat(k),
             _ => {}
         }
+    }
+
+    fn handle_key_stat(&mut self, k: KeyEvent) {
+        // Any key dismisses the status panel, same shape as
+        // handle_key_graph. 1-2-3 R3.4a used Esc specifically, but a
+        // generic "any key" dismissal matches the splash screen's
+        // behavior and is friendlier.
+        let _ = k;
+        self.mode = Mode::Ready;
     }
 
     fn handle_key_graph(&mut self, k: KeyEvent) {
@@ -1422,6 +1527,12 @@ impl App {
                     self.wb_mut().hidden_cols.remove(&key);
                 }
             }
+            JournalEntry::GlobalColWidth { prev } => {
+                self.wb_mut().default_col_width = prev;
+            }
+            JournalEntry::DefaultLabelPrefix { prev } => {
+                self.default_label_prefix = prev;
+            }
             JournalEntry::Batch(entries) => {
                 // Apply in reverse order so the "outer" state restores
                 // after the "inner" details.
@@ -1474,6 +1585,11 @@ impl App {
         self.graph_view = Some(GraphOverlay { values, img });
         self.menu = None;
         self.mode = Mode::Graph;
+    }
+
+    fn enter_worksheet_status(&mut self) {
+        self.menu = None;
+        self.mode = Mode::Stat;
     }
 
     fn picker_is_graphical(&self) -> bool {
@@ -1654,6 +1770,37 @@ impl App {
                 self.recalc_mode = RecalcMode::Manual;
                 self.close_menu();
             }
+            Action::WorksheetGlobalRecalcNatural => {
+                self.recalc_order = RecalcOrder::Natural;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalRecalcColumnwise => {
+                self.recalc_order = RecalcOrder::Columnwise;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalRecalcRowwise => {
+                self.recalc_order = RecalcOrder::Rowwise;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalRecalcIteration => {
+                self.start_recalc_iteration_prompt();
+            }
+            Action::WorksheetGlobalZeroNo => {
+                self.zero_display = ZeroDisplay::No;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalZeroYes => {
+                self.zero_display = ZeroDisplay::Yes;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalProtectionEnable => {
+                self.global_protection = true;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalProtectionDisable => {
+                self.global_protection = false;
+                self.close_menu();
+            }
             Action::WorksheetGlobalGroupEnable => {
                 self.group_mode = true;
                 self.close_menu();
@@ -1683,6 +1830,17 @@ impl App {
             }
             Action::WorksheetColumnHide => self.begin_point(PendingCommand::ColumnHide),
             Action::WorksheetColumnDisplay => self.begin_point(PendingCommand::ColumnDisplay),
+            Action::WorksheetStatus => self.enter_worksheet_status(),
+            Action::WorksheetGlobalColWidth => self.start_global_col_width_prompt(),
+            Action::WorksheetGlobalLabelLeft => {
+                self.set_default_label_prefix(LabelPrefix::Apostrophe)
+            }
+            Action::WorksheetGlobalLabelRight => {
+                self.set_default_label_prefix(LabelPrefix::Quote)
+            }
+            Action::WorksheetGlobalLabelCenter => {
+                self.set_default_label_prefix(LabelPrefix::Caret)
+            }
             Action::RangeNameCreate => self.start_name_prompt(
                 "Enter name:",
                 PromptNext::RangeNameCreate,
@@ -1947,6 +2105,7 @@ impl App {
         self.wb_mut().cells.clear();
         self.wb_mut().cell_formats.clear();
         self.wb_mut().col_widths.clear();
+        self.wb_mut().default_col_width = 9;
         self.wb_mut().hidden_cols.clear();
         self.entry = None;
         self.menu = None;
@@ -2134,7 +2293,22 @@ impl App {
                         let _ = std::fs::create_dir_all(parent);
                     }
                 }
-                let _ = std::fs::write(path, l123_print::to_ascii(&grid));
+                // `.pdf` extension (case-insensitive) → PDF encoding.
+                // Any other extension — or no extension — gets the
+                // classic .prn ASCII stream.
+                let is_pdf = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+                let bytes: Vec<u8> = if is_pdf {
+                    l123_print::encode::pdf::to_pdf(
+                        &grid,
+                        &l123_print::encode::pdf::PdfOptions::default(),
+                    )
+                } else {
+                    l123_print::to_ascii(&grid).into_bytes()
+                };
+                let _ = std::fs::write(path, bytes);
             }
             PrintDestination::Printer(lp_opts) => {
                 #[cfg(unix)]
@@ -2196,6 +2370,7 @@ impl App {
             cells,
             cell_formats: HashMap::new(),
             col_widths,
+            default_col_width: 9,
             hidden_cols: HashSet::new(),
             active_path: Some(path),
             pointer: Address::A1,
@@ -2340,6 +2515,7 @@ impl App {
         self.wb_mut().cells.clear();
         self.wb_mut().cell_formats.clear();
         self.wb_mut().col_widths.clear();
+        self.wb_mut().default_col_width = 9;
         self.wb_mut().hidden_cols.clear();
         self.entry = None;
         self.wb_mut().pointer = Address::A1;
@@ -2927,6 +3103,46 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    /// `/Worksheet Global Recalc Iteration` — prompt for iteration
+    /// count (1..=50). Seeded with the current value so Enter-only
+    /// is a no-op.
+    fn start_recalc_iteration_prompt(&mut self) {
+        self.menu = None;
+        let current = self.recalc_iterations;
+        self.prompt = Some(PromptState {
+            label: "Enter iteration count (1..50):".into(),
+            buffer: current.to_string(),
+            next: PromptNext::WorksheetGlobalRecalcIteration,
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Worksheet Global Col-Width` — prompt for the new workbook-wide
+    /// default column width (1..240). The prompt is seeded with the
+    /// current default so Enter-only is a no-op.
+    fn start_global_col_width_prompt(&mut self) {
+        self.menu = None;
+        let current = self.wb().default_col_width;
+        self.prompt = Some(PromptState {
+            label: "Enter default column width (1..240):".into(),
+            buffer: current.to_string(),
+            next: PromptNext::WorksheetGlobalColWidth,
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Worksheet Global Label <Left|Right|Center>` — change the
+    /// default label prefix used for unprefixed label entries. Journals
+    /// the previous prefix so Alt-F4 reverts.
+    fn set_default_label_prefix(&mut self, new_prefix: LabelPrefix) {
+        let prev = self.default_label_prefix;
+        self.default_label_prefix = new_prefix;
+        self.push_journal_batch(vec![JournalEntry::DefaultLabelPrefix { prev }]);
+        self.close_menu();
+    }
+
     /// `/Worksheet Column Column-Range Set-Width` — prompt for the new
     /// width first; on Enter, enter POINT to pick the column range.
     fn start_col_range_width_prompt(&mut self) {
@@ -2986,13 +3202,14 @@ impl App {
     /// Alt-F4 undoes the whole range in one step.
     fn execute_col_range_width(&mut self, range: Range, new_width: Option<u8>) {
         let r = range.normalized();
+        let default = self.wb().default_col_width;
         let mut batch: Vec<JournalEntry> = Vec::new();
         for sheet in self.target_sheets() {
             for col in r.start.col..=r.end.col {
                 let key = (sheet, col);
                 let prev = self.wb().col_widths.get(&key).copied();
                 match new_width {
-                    Some(w) if w != 9 => {
+                    Some(w) if w != default => {
                         self.wb_mut().col_widths.insert(key, w);
                     }
                     _ => {
@@ -3018,10 +3235,14 @@ impl App {
         self.mode = Mode::Menu;
     }
 
-    /// Width of `col` in `sheet`. Returns the stored width, or the default
-    /// (9) if none is set.
+    /// Width of `col` in `sheet`. Returns the per-column override if
+    /// one is set, otherwise the workbook's global default width.
     fn col_width_of(&self, sheet: SheetId, col: u16) -> u8 {
-        self.wb().col_widths.get(&(sheet, col)).copied().unwrap_or(9)
+        self.wb()
+            .col_widths
+            .get(&(sheet, col))
+            .copied()
+            .unwrap_or(self.wb().default_col_width)
     }
 
     fn handle_key_prompt(&mut self, k: KeyEvent) {
@@ -3072,13 +3293,14 @@ impl App {
                 self.begin_point(PendingCommand::RangeFormat { format });
             }
             PromptNext::WorksheetColumnSetWidth => {
-                let width: u8 = p.buffer.parse().unwrap_or(9).clamp(1, 240);
+                let default = self.wb().default_col_width;
+                let width: u8 = p.buffer.parse().unwrap_or(default).clamp(1, 240);
                 let col = self.wb().pointer.col;
                 let mut batch: Vec<JournalEntry> = Vec::new();
                 for sheet in self.target_sheets() {
                     let key = (sheet, col);
                     let prev = self.wb().col_widths.get(&key).copied();
-                    if width == 9 {
+                    if width == default {
                         self.wb_mut().col_widths.remove(&key);
                     } else {
                         self.wb_mut().col_widths.insert(key, width);
@@ -3089,8 +3311,23 @@ impl App {
                 self.mode = Mode::Ready;
             }
             PromptNext::WorksheetColumnRangeSetWidth => {
-                let width: u8 = p.buffer.parse().unwrap_or(9).clamp(1, 240);
+                let default = self.wb().default_col_width;
+                let width: u8 = p.buffer.parse().unwrap_or(default).clamp(1, 240);
                 self.begin_point(PendingCommand::ColumnRangeSetWidth { width });
+            }
+            PromptNext::WorksheetGlobalColWidth => {
+                let default = self.wb().default_col_width;
+                let width: u8 = p.buffer.parse().unwrap_or(default).clamp(1, 240);
+                let prev = default;
+                self.wb_mut().default_col_width = width;
+                self.push_journal_batch(vec![JournalEntry::GlobalColWidth { prev }]);
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WorksheetGlobalRecalcIteration => {
+                let current = self.recalc_iterations;
+                let n: u16 = p.buffer.parse().unwrap_or(current).clamp(1, 50);
+                self.recalc_iterations = n;
+                self.mode = Mode::Ready;
             }
             PromptNext::RangeNameCreate => {
                 if p.buffer.is_empty() {
@@ -3627,6 +3864,8 @@ impl App {
             self.render_file_list_overlay(chunks[1], buf);
         } else if self.mode == Mode::Graph {
             self.render_graph_overlay(chunks[1], buf);
+        } else if self.mode == Mode::Stat {
+            self.render_stat_overlay(chunks[1], buf);
         } else {
             self.render_grid(main_area, buf);
             if let Some(area) = icon_area {
@@ -3637,23 +3876,30 @@ impl App {
     }
 
     fn render_splash(&self, area: Rect, buf: &mut Buffer, info: &SplashInfo) {
-        // Teal field matches the 1-2-3 R3.4a startup screen. Rendering
-        // is best-effort on narrow terminals — text is centered and
-        // truncated by the Paragraph widget if it doesn't fit.
-        let teal = Style::default().bg(Color::Cyan);
+        // Classic DOS VGA "cyan" (palette index 3) is #00AAAA — the
+        // shade the 1-2-3 R3.4a welcome screen fills its field with.
+        // Using explicit RGB triples keeps the colors stable across
+        // terminals that remap their ANSI slots.
+        const TEAL: Color = Color::Rgb(0, 170, 170);
+        const BLACK: Color = Color::Rgb(0, 0, 0);
+        let teal_bg = Style::default().bg(TEAL);
         for y in 0..area.height {
             for x in 0..area.width {
-                buf[(area.x + x, area.y + y)].set_style(teal);
+                buf[(area.x + x, area.y + y)].set_style(teal_bg);
             }
         }
 
+        let title_style = Style::default()
+            .bg(BLACK)
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD);
         let banner = [
             Line::from(""),
+            Line::from(Span::styled("l123", title_style)),
             Line::from(Span::styled(
-                "l123",
-                Style::default().add_modifier(Modifier::BOLD),
+                format!("Release {}", env!("CARGO_PKG_VERSION")),
+                title_style,
             )),
-            Line::from(format!("Release {}", env!("CARGO_PKG_VERSION"))),
             Line::from(""),
             Line::from("A terminal spreadsheet in the 1-2-3 tradition."),
             Line::from(""),
@@ -3671,14 +3917,13 @@ impl App {
         let banner_x = area.x + (area.width - banner_w) / 2;
         let banner_y = area.y + 2;
         let banner_rect = Rect::new(banner_x, banner_y, banner_w, banner_h);
-        let banner_block = Block::default()
-            .borders(Borders::ALL)
-            .style(Style::default().bg(Color::Black).fg(Color::Cyan));
+        let body_style = Style::default().bg(BLACK).fg(TEAL);
+        let banner_block = Block::default().borders(Borders::ALL).style(body_style);
         let banner_inner = banner_block.inner(banner_rect);
         banner_block.render(banner_rect, buf);
         Paragraph::new(banner.to_vec())
             .alignment(ratatui::layout::Alignment::Center)
-            .style(Style::default().bg(Color::Black).fg(Color::Cyan))
+            .style(body_style)
             .render(banner_inner, buf);
 
         let licensing_y = banner_y + banner_h + 2;
@@ -3692,16 +3937,16 @@ impl App {
         let heading = Paragraph::new(Line::from(Span::styled(
             "LICENSING INFORMATION:",
             Style::default()
-                .bg(Color::Cyan)
+                .bg(TEAL)
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )))
         .alignment(ratatui::layout::Alignment::Center);
         heading.render(Rect::new(licensing_x, licensing_y, licensing_w, 1), buf);
 
-        let label_style = Style::default().bg(Color::Cyan).fg(Color::Black);
+        let label_style = Style::default().bg(TEAL).fg(BLACK);
         let value_style = Style::default()
-            .bg(Color::Cyan)
+            .bg(TEAL)
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD);
         let rows = [
@@ -3718,6 +3963,25 @@ impl App {
             Rect::new(licensing_x, licensing_y + 2, licensing_w, 2),
             buf,
         );
+
+        // Bottom legal notice, in black on teal to match the 1-2-3
+        // R3.4a welcome screen. Rendered only when there is room
+        // beneath the licensing block.
+        let footer_y = licensing_y + 5;
+        if footer_y + 3 >= area.y + area.height {
+            return;
+        }
+        let footer = Paragraph::new(vec![
+            Line::from(
+                "Use, duplication, or sale of this product, except as described",
+            ),
+            Line::from(
+                "in the project's license agreement, is strictly prohibited.",
+            ),
+            Line::from("Violators may be prosecuted."),
+        ])
+        .style(Style::default().bg(TEAL).fg(BLACK));
+        footer.render(Rect::new(licensing_x, footer_y, licensing_w, 3), buf);
     }
 
     /// The v3.1 manual shows the icon panel occupying the right edge
@@ -3853,6 +4117,133 @@ impl App {
             }
         }
         l123_graph::render_unicode(&self.wb().current_graph, &overlay.values, area, buf);
+    }
+
+    fn render_stat_overlay(&self, area: Rect, buf: &mut Buffer) {
+        // Monochrome CRT look: green-on-black, like the R3.4a status
+        // page. Explicit RGB so terminals that remap their ANSI green
+        // slot don't lose the effect.
+        const GREEN: Color = Color::Rgb(0, 170, 85);
+        const BLACK: Color = Color::Rgb(0, 0, 0);
+        let text_style = Style::default().bg(BLACK).fg(GREEN);
+
+        for y in 0..area.height {
+            for x in 0..area.width {
+                buf[(area.x + x, area.y + y)].set_style(Style::default().bg(BLACK));
+            }
+        }
+
+        let outer = Block::default()
+            .borders(Borders::ALL)
+            .border_style(text_style)
+            .title("Worksheet Status")
+            .title_alignment(ratatui::layout::Alignment::Center)
+            .style(text_style);
+        let outer_inner = outer.inner(area);
+        outer.render(area, buf);
+
+        // Upper band: two side-by-side sub-boxes (Recalculation + Cell
+        // display). Lower band: the environment readout.
+        let band = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(6), Constraint::Length(1), Constraint::Min(1)])
+            .split(outer_inner);
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .split(band[0]);
+
+        let recalc = Block::default()
+            .borders(Borders::ALL)
+            .border_style(text_style)
+            .title("Recalculation")
+            .style(text_style);
+        let recalc_inner = recalc.inner(split[0]);
+        recalc.render(split[0], buf);
+        let method = match self.recalc_mode {
+            RecalcMode::Automatic => "Automatic",
+            RecalcMode::Manual => "Manual",
+        };
+        let order = self.recalc_order.label();
+        let iterations = self.recalc_iterations;
+        Paragraph::new(vec![
+            Line::from(format!("Method:     {method}")),
+            Line::from(format!("Order:      {order}")),
+            Line::from(format!("Iterations: {iterations}")),
+        ])
+        .style(text_style)
+        .render(recalc_inner, buf);
+
+        let cell = Block::default()
+            .borders(Borders::ALL)
+            .border_style(text_style)
+            .title("Cell display")
+            .style(text_style);
+        let cell_inner = cell.inner(split[1]);
+        cell.render(split[1], buf);
+        let prefix = self.default_label_prefix.char();
+        let col_width = self.wb().default_col_width;
+        let zero = self.zero_display.label();
+        Paragraph::new(vec![
+            // Global default format isn't wired to `/Worksheet Global
+            // Format` yet, so report the generic default — matches
+            // what a cell with no explicit format gets.
+            Line::from("Format:       (G)"),
+            Line::from(format!("Label prefix: {prefix}")),
+            Line::from(format!("Column width: {col_width}")),
+            Line::from(format!("Zero setting: {zero}")),
+        ])
+        .style(text_style)
+        .render(cell_inner, buf);
+
+        let info = crate::sysinfo::SysInfo::probe();
+        let mem_free = info
+            .memory_free
+            .map(crate::sysinfo::format_bytes)
+            .unwrap_or_else(|| "—".to_string());
+        let mem_total = info
+            .memory_total
+            .map(crate::sysinfo::format_bytes)
+            .unwrap_or_else(|| "—".to_string());
+        let pad = 20;
+        Paragraph::new(vec![
+            Line::from(""),
+            Line::from(format!(
+                "{label:<pad$}{mem_free} bytes",
+                label = "Available memory:"
+            )),
+            Line::from(format!(
+                "{label:<pad$}{mem_total} bytes",
+                label = "        out of:"
+            )),
+            Line::from(""),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Processor:",
+                value = info.processor
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Math coprocessor:",
+                value = info.coprocessor
+            )),
+            Line::from(""),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Global protection:",
+                value = if self.global_protection { "On" } else { "Off" }
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Circular reference:",
+                value = match self.first_circular_reference() {
+                    Some(addr) => addr.display_full(),
+                    None => "(None)".to_string(),
+                }
+            )),
+        ])
+        .style(text_style)
+        .render(band[2], buf);
     }
 
     fn render_control_panel(&self, area: Rect, buf: &mut Buffer) {
@@ -4139,10 +4530,11 @@ impl App {
             .unwrap_or(Format::GENERAL)
     }
 
-    /// `[Wn]` tag when the current column's width is non-default.
+    /// `[Wn]` tag when the current column's width differs from the
+    /// workbook's global default.
     fn width_tag_for_line1(&self) -> String {
         let w = self.col_width_of(self.wb().pointer.sheet, self.wb().pointer.col);
-        if w == 9 {
+        if w == self.wb().default_col_width {
             String::new()
         } else {
             format!("[W{w}]")
@@ -4256,7 +4648,17 @@ impl App {
     }
 
     fn render_status(&self, area: Rect, buf: &mut Buffer) {
-        let left = " *untitled*";
+        // Left slot: the active workbook's base filename, or the
+        // current local date/time in 1-2-3 `DD-Mon-YYYY HH:MM` style.
+        let left_text = match self.wb().active_path.as_ref() {
+            Some(p) => p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| p.display().to_string()),
+            None => crate::clock::format_ddmmmyyyy_hhmm(crate::clock::local_now()),
+        };
+        let left = format!(" {left_text}");
         let hint = "Ctrl-C to quit";
         // Active status indicators, in the order 1-2-3 displays them.
         // For M2 we emit CALC only; the others arrive with their features.

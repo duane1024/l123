@@ -17,3 +17,4 @@ crossterm = { workspace = true }
 anyhow = { workspace = true }
 ratatui-image = { workspace = true }
 image = { workspace = true }
+libc = { workspace = true }

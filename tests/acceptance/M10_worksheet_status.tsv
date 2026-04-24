@@ -1,0 +1,79 @@
+# /Worksheet Status — full-screen overlay that mirrors the 1-2-3 R3.4a
+# status page. Sections: Recalculation, Cell display, and the
+# environment block (memory, processor, coprocessor, protection,
+# circular reference). Esc returns to READY.
+
+SIZE 80 30
+
+# Flip each global setting away from its default so the status page
+# has to be reading live state, not the old hardcodings.
+#   /WGC 20       — global column width        (default 9)
+#   /WGRC         — recalc order  Columnwise   (default Natural)
+#   /WGRI 7       — iteration count 7          (default 1)
+#   /WGZY         — zero display  Yes          (default No)
+#   /WGPE         — global protection On       (default Off)
+KEY /
+KEY W
+KEY G
+KEY C
+KEYS 20
+ENTER
+ASSERT_MODE    READY
+
+KEY /
+KEY W
+KEY G
+KEY R
+KEY C
+ASSERT_MODE    READY
+
+KEY /
+KEY W
+KEY G
+KEY R
+KEY I
+KEYS 7
+ENTER
+ASSERT_MODE    READY
+
+KEY /
+KEY W
+KEY G
+KEY Z
+KEY Y
+ASSERT_MODE    READY
+
+KEY /
+KEY W
+KEY G
+KEY P
+KEY E
+ASSERT_MODE    READY
+
+KEY /
+KEY W
+KEY S
+ASSERT_MODE    STAT
+
+# Page layout is intact.
+ASSERT_SCREEN  Worksheet Status
+ASSERT_SCREEN  Recalculation
+ASSERT_SCREEN  Cell display
+ASSERT_SCREEN  Available memory:
+ASSERT_SCREEN  Processor:
+ASSERT_SCREEN  Math coprocessor:
+
+# Live values reflect the flipped settings.
+ASSERT_SCREEN  Method:     Automatic
+ASSERT_SCREEN  Order:      Columnwise
+ASSERT_SCREEN  Iterations: 7
+ASSERT_SCREEN  Column width: 20
+ASSERT_SCREEN  Zero setting: Yes
+ASSERT_SCREEN  Global protection:  On
+
+# No formula has cycled, so the circular-reference row reports (None).
+ASSERT_SCREEN  Circular reference: (None)
+
+ESC
+ASSERT_MODE    READY
+ASSERT_SCREEN_NOT_CONTAINS  Worksheet Status

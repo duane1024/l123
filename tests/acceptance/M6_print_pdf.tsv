@@ -1,0 +1,38 @@
+# /Print File with a .pdf filename — emit a PDF instead of ASCII.
+#
+# Extension-driven: any path ending in .pdf (case-insensitive) takes
+# the PDF encoding path; everything else stays on the classic .prn
+# ASCII stream. No menu change is required — users just name their
+# file .pdf.
+
+RM_FILE $TMPDIR/m6_print.pdf
+
+# Seed the workbook.
+KEYS 'Hello
+ENTER
+
+# /Print File with a .pdf extension.
+HOME
+KEY /
+KEY P
+KEY F
+ASSERT_MODE       MENU
+ASSERT_PANEL_L3   Enter print file name
+
+KEYS $TMPDIR/m6_print.pdf
+ENTER
+ASSERT_PANEL_L2   Range
+
+# Range A1..A1 → Go → Quit.
+KEY R
+ASSERT_MODE       POINT
+ENTER
+ASSERT_PANEL_L2   Go
+KEY G
+KEY Q
+ASSERT_MODE       READY
+
+# The file is a real PDF: magic header, Courier base font, cell text.
+ASSERT_FILE_BYTES_CONTAIN  $TMPDIR/m6_print.pdf  %PDF-
+ASSERT_FILE_BYTES_CONTAIN  $TMPDIR/m6_print.pdf  Courier
+ASSERT_FILE_BYTES_CONTAIN  $TMPDIR/m6_print.pdf  Hello

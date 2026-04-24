@@ -20,7 +20,7 @@ pub use icons::{icon_action, render_panel_png, IconAction, Panel, SysAction};
 pub use render::{render as render_unicode, GraphValues};
 pub use raster::{render_png, render_png_sized, render_svg, render_svg_sized};
 
-/// The seven graph types 1-2-3 R3.1 supports.
+/// The seven graph types 1-2-3 R3.4a supports.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub enum GraphType {
     #[default]

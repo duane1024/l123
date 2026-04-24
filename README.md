@@ -3,11 +3,12 @@
 **A Lotus 1-2-3–style terminal spreadsheet with modern Excel compatibility.**
 
 l123 recreates the classic DOS-era spreadsheet experience — slash menus,
-three-line control panel, keyboard-first workflows, and all — on top of a
-modern formula engine with native `.xlsx` round-trip.
+three-line control panel, keyboard-first workflows, WYSIWYG icon panel,
+and all — on top of a modern formula engine with native `.xlsx`
+round-trip.
 
-Its interaction model targets **Lotus 1-2-3 Release 3.1** (1990). Its
-compute and I/O layers are Rust, IronCalc, and UTF-8.
+Its interaction model targets **Lotus 1-2-3 Release 3.4a for DOS**
+(1993). Its compute and I/O layers are Rust, IronCalc, and UTF-8.
 
 ---
 
@@ -24,8 +25,11 @@ Actively developed. Tracking the milestone plan in
 | M3 | Menu system and MVP slash commands | ✅ done |
 | M4 | `.xlsx` and CSV round-trip | ✅ done |
 | M5 | 3D sheets, GROUP, named ranges, undo | ✅ done |
-| M6 | Printing (ASCII) and Range Search | 🚧 in progress |
-| M7+ | Graphs, Data commands, macros, polish | planned |
+| M6 | Printing (ASCII, PDF, line-printer) and Range Search | ✅ done |
+| M7 | Graphs: 7 chart types, F10 view, SVG/PNG save | ✅ done |
+| M8 | R3.4 WYSIWYG icon panel with mouse support | ✅ done |
+| M9 | Macros: `/X`, `{BRANCH}`, `{IF}`, Learn | planned |
+| M10 | Polish: startup splash, context help, themes | 🚧 in progress |
 
 API, keybindings, and file paths may still change before v1.0.
 
@@ -69,8 +73,11 @@ The keyboard *is* the product.
 | `F4` | Cycle `$` absoluteness in a reference |
 | `F5` | GOTO cell |
 | `F9` | Recalculate |
+| `F10` | Full-screen graph view |
 | `Alt-F4` | Undo |
 | `Ctrl-PgUp` / `Ctrl-PgDn` | Previous / next sheet |
+
+Mouse is supported for the WYSIWYG icon panel (17 icons, R3.4a layout).
 
 Formulas use 1-2-3 syntax: `@SUM(A1..A5)`, not `=SUM(A1:A5)`. The `@`
 sigil and `..` separator are required. `#AND#`, `#OR#`, `#NOT#` are the
@@ -96,12 +103,22 @@ cell with dashes.
 - Named ranges, `@` function MVP set (see `docs/SPEC.md` §15)
 - Command-journal undo, toggleable via `/WGD Other Undo`
 - Multi-file sessions (`/File Open Before|After`, Ctrl-End navigation)
+- `/Print File` to ASCII, PDF, or line-printer output; headers, footers,
+  margins, page-length, formatted / unformatted / as-displayed /
+  cell-formulas modes; `|` in first column hides rows from print
+- `/Range Search Formulas|Labels|Both` Find and Replace
+- `/Graph` tree: Line, Bar, XY, Stack, Pie, HLCO, Mixed; Titles, Legend,
+  Scale, Grid, Color/B&W, Data-Labels
+- F10 / `/Graph View` full-screen rendering with Unicode bar + line
+  output; Kitty / iTerm2 / Sixel image support via ratatui-image
+- `/Graph Save` to SVG (and plotters PNG output for all chart types)
+- R3.4a WYSIWYG icon panel: all 17 icons, mouse-wired
+- Startup splash screen
+- Column-width options (`/WGC`, range-level set/reset)
 
 ## ✦ Coming
 
-- `/Print File` ASCII output with headers, footers, margins (M6, active)
-- `/Range Search Formulas|Labels|Both` Find / Replace (M6)
-- `/Graph` tree with Unicode rendering and F10 full-screen (M7)
+- Context help (F1), CRT themes, LMBCS compose key (M10, active)
 - `/Data` tree: Fill, Sort, Query, Table, Distribution, Regression, Parse
 - Macros: `/X`, `{BRANCH}`, `{IF}`, `{MENUBRANCH}`, `/Worksheet Learn`
 - `.wk3` read-only import (values)
@@ -119,7 +136,7 @@ l123-parse, l123-menu
   ↑
 l123-engine           (wraps IronCalc behind a trait)
   ↑
-l123-cmd, l123-io
+l123-cmd, l123-io, l123-graph, l123-print
   ↑
 l123-ui               (ratatui + crossterm; engine-agnostic)
   ↑
@@ -137,15 +154,15 @@ types.
 
 l123 makes two promises (`docs/SPEC.md` §1):
 
-1. An experienced 1-2-3 R3.1 user can drive l123 cold, without reading
+1. An experienced 1-2-3 R3.4a user can drive l123 cold, without reading
    anything.
 2. Files round-trip cleanly to and from `.xlsx`.
 
-SPEC §20 enumerates the ten behaviors — three-line control panel, menu
+SPEC §20 enumerates the behaviors — three-line control panel, menu
 accelerators, POINT anchor semantics, first-char rule, `@` sigil, format
-tags, commit-on-arrow, and so on — that the project fails if it misses.
-Every item in the contract has at least one acceptance transcript under
-`tests/acceptance/`.
+tags, commit-on-arrow, WYSIWYG icon panel, and so on — that the project
+fails if it misses. Every item in the contract has at least one
+acceptance transcript under `tests/acceptance/`.
 
 ---
 
@@ -182,7 +199,8 @@ If code and doc disagree, fix the doc first.
 - Not a macro player for existing `.WK3` files. Read-only `.WK3` import
   is a stretch goal; write is not planned.
 - Not a reimplementation of the 1-2-3 compute core. IronCalc does that.
-- Not aimed at Lotus 1-2-3 for Windows or SmartSuite. Release 3.1 only.
+- Not aimed at Lotus 1-2-3 for Windows or SmartSuite. Release 3.4a for
+  DOS only.
 
 ---
 
@@ -204,9 +222,4 @@ Because the `/` key was never the problem.
 
 ## ✦ License
 
-Dual-licensed under either of:
-
-- Apache License, Version 2.0
-- MIT License
-
-at your option.
+Licensed under the MIT License. See [`LICENSE`](LICENSE).

@@ -1,0 +1,53 @@
+# /Worksheet Global Col-Width — change the workbook-wide default
+# column width. The `[W<n>]` tag appears whenever a column's width
+# differs from the current default; raising the default makes any
+# per-column width equal to the old default visible as a tag.
+
+ASSERT_POINTER    A:A1
+KEYS 42
+ENTER
+
+# Default is 9. A has no override and no tag.
+ASSERT_PANEL_L1   A:A1: (G) 42
+
+# Set per-column A to 9 (i.e. the current default) — should be a
+# no-op: no override, no tag.
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 9
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) 42
+
+# Change the global default to 12.
+KEY /
+KEY W
+KEY G
+KEY C
+ASSERT_PANEL_L3   default column width
+KEY 1
+KEY 2
+ENTER
+ASSERT_MODE       READY
+
+# A still has no override; its effective width is now 12 (the new
+# default), so still no [W*] tag.
+ASSERT_PANEL_L1   A:A1: (G) 42
+
+# /WCS 9 now diverges from the default (12) and should surface [W9].
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 9
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) [W9] 42
+
+# Undo reverts the per-column override; A inherits 12 again.
+ALT_F 4
+ASSERT_PANEL_L1   A:A1: (G) 42
+
+# Undo the global change too — default back to 9.
+ALT_F 4
+ASSERT_PANEL_L1   A:A1: (G) 42

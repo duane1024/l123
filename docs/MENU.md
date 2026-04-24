@@ -1,7 +1,8 @@
 # L123 — Complete Menu Tree
 
-Source of truth for `l123-menu`. Derived from *Lotus 1-2-3 Release 3.1
-Reference* (1990).
+Source of truth for `l123-menu`. Derived from *Lotus 1-2-3 Release 3.4a
+Reference* (1993), which retains the R3.1 menu tree and adds the
+always-on WYSIWYG commands and R3.4 icon panel.
 
 Legend: **[MVP]** = in MVP slice; **[CPL]** = Complete-tier; **[STR]** =
 Stretch. Every top-level entry and every leaf is reachable from day one —
@@ -321,8 +322,10 @@ node; it prompts on entry rather than branching per digit.
 
 ### The Release-2.x-only commands
 
-Release 3.1 retained everything from Release 2 and added these that did
+Release 3.x retained everything from Release 2 and added these that did
 not exist in R2: `/Worksheet Insert Sheet`, `/Worksheet Delete Sheet`,
 `/Worksheet Global Group`, `/Worksheet Window Perspective`, `/File Open`,
 `/File Admin`, `/Data Table 3`, `/Data Table Labeled`, `/Data External`,
-and the @ functions marked **♦** in `AT_FUNCTIONS.md`.
+and the @ functions marked **♦** in `AT_FUNCTIONS.md`. R3.4a additionally
+promotes the WYSIWYG add-in to always-on and ships the 17-icon R3.4 icon
+panel.

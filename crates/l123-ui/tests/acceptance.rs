@@ -292,6 +292,27 @@ fn run_transcript(path: &Path) {
                     path.display()
                 );
             }
+            // Bytes-level variant for binary outputs (PDF). Same
+            // substring semantics as ASSERT_FILE_CONTAINS, but reads
+            // raw bytes and matches on byte slices — necessary because
+            // PDF's magic header is not valid UTF-8 by spec.
+            "ASSERT_FILE_BYTES_CONTAIN" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let fpath = parts.next().unwrap_or("");
+                let raw = parts.next().unwrap_or("").trim();
+                let want = unescape(raw);
+                let want_bytes = want.as_bytes();
+                let body = std::fs::read(fpath).unwrap_or_else(|e| {
+                    panic!("{}:{line_no}: read {fpath}: {e}", path.display())
+                });
+                let found = want_bytes.len() <= body.len()
+                    && body.windows(want_bytes.len()).any(|w| w == want_bytes);
+                assert!(
+                    found,
+                    "{}:{line_no}: file {fpath:?} bytes do not contain {want:?}",
+                    path.display()
+                );
+            }
             other => {
                 panic!(
                     "{}:{line_no}: unknown directive {other:?}",
@@ -436,6 +457,8 @@ transcripts! {
     m3_ws_col_display  => "M3_ws_col_display.tsv",
     m3_ws_erase_confirm => "M3_ws_erase_confirm.tsv",
     m3_range_format_date => "M3_range_format_date.tsv",
+    m3_wg_col_width    => "M3_wg_col_width.tsv",
+    m3_wg_label        => "M3_wg_label.tsv",
     m3_range_name      => "M3_range_name.tsv",
     m4_file_save       => "M4_file_save.tsv",
     m4_file_save_replace => "M4_file_save_replace.tsv",
@@ -463,6 +486,7 @@ transcripts! {
     m6_print_header_tokens  => "M6_print_header_tokens.tsv",
     m6_print_align_clear    => "M6_print_align_clear.tsv",
     m6_print_printer_menu   => "M6_print_printer_menu.tsv",
+    m6_print_pdf            => "M6_print_pdf.tsv",
     m6_range_search_find    => "M6_range_search_find.tsv",
     m7_graph_type       => "M7_graph_type.tsv",
     m7_graph_series     => "M7_graph_series.tsv",
@@ -470,4 +494,6 @@ transcripts! {
     m7_graph_view_f10   => "M7_graph_view_f10.tsv",
     m7_graph_save       => "M7_graph_save.tsv",
     m10_startup_splash  => "M10_startup_splash.tsv",
+    m10_status_line_filename => "M10_status_line_filename.tsv",
+    m10_worksheet_status     => "M10_worksheet_status.tsv",
 }

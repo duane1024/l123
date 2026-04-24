@@ -1,6 +1,6 @@
 # CLAUDE.md — L123 project guide
 
-Session-level conventions for working on L123 (a Lotus 1-2-3 R3.1 TUI clone).
+Session-level conventions for working on L123 (a Lotus 1-2-3 R3.4a for DOS TUI clone).
 Living document — edit freely as conventions emerge.
 
 ## Canonical docs — read these before making decisions

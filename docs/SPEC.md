@@ -1,20 +1,23 @@
-# L123 — Lotus 1-2-3 TUI Spreadsheet (Spec v0.2)
+# L123 — Lotus 1-2-3 TUI Spreadsheet (Spec v0.3)
 
-> v0.2 is rewritten from v0.1 after deep review of the *Lotus 1-2-3 Release 3.1
-> Reference*, *Tutorial*, and *Quick Reference* manuals (1990). Corrections vs.
-> v0.1 are called out inline as **Δ**.
+> v0.3 retargets the project from Lotus 1-2-3 Release 3.1 (1990) to
+> **Release 3.4a for DOS** (1993) — the final DOS release, with the
+> WYSIWYG add-in promoted to a standard, always-on feature and the R3.4
+> icon panel. v0.2 was rewritten from v0.1 after deep review of the
+> *Lotus 1-2-3 Release 3.1 Reference*, *Tutorial*, and *Quick Reference*
+> manuals (1990). Corrections vs. v0.1 are called out inline as **Δ**.
 
 ---
 
 ## 1. What L123 is
 
 A terminal spreadsheet whose **interaction model is indistinguishable from
-Lotus 1-2-3 Release 3.1** on DOS, but whose compute and I/O layers are modern:
+Lotus 1-2-3 Release 3.4a for DOS** (1993), but whose compute and I/O layers are modern:
 xlsx-compatible, Unicode-correct, cross-platform.
 
 **Two promises — the project fails if either breaks:**
 
-1. An experienced 1-2-3 R3.1 user sitting down cold can drive L123 without
+1. An experienced 1-2-3 R3.4a user sitting down cold can drive L123 without
    reading anything.
 2. L123 files round-trip cleanly to and from `.xlsx` via a modern formula
    engine.
@@ -183,7 +186,7 @@ Post-MVP adds the rest as their features land.
 
 ## 7. Function key map
 
-Exactly matches R3.1. Keys in *italic* are MVP.
+Exactly matches R3.4a. Keys in *italic* are MVP.
 
 | Key | Plain | Alt |
 |---|---|---|
@@ -498,7 +501,7 @@ To save a *subset*: `/File Xtract`. L123 must match this model.
 
 ## 15. @Function surface
 
-All of R3.1's ~120 @functions, grouped by category. Full list in
+All of R3.4a's ~120 @functions, grouped by category. Full list in
 `docs/AT_FUNCTIONS.md`. MVP subset (must ship in M2):
 
 - Math: `@ABS @INT @MOD @ROUND @SQRT @EXP @LN @LOG @RAND @PI`
@@ -708,8 +711,11 @@ These behaviors are **not optional**. If any are missing, L123 fails promise 1
 9. **`\-` fills a cell with dashes**; values overflow as `*********`.
 10. **`/File Retrieve` wipes memory; `/File Save` does not prompt "Save As"**
     — the filename field is pre-filled and user-editable at the prompt.
+11. **R3.4a WYSIWYG icon panel** visible on screen, with the 17-icon R3.4a
+    layout and mouse activation — the most immediate visual marker that
+    distinguishes R3.4a from R3.1.
 
-These ten items are the acceptance checklist for MVP authenticity review.
+These items are the acceptance checklist for MVP authenticity review.
 
 ---
 

@@ -1465,6 +1465,7 @@ name = "l123-print"
 version = "0.0.1"
 dependencies = [
  "l123-core",
+ "pdf-writer",
 ]
 
 [[package]]
@@ -1481,6 +1482,7 @@ dependencies = [
  "l123-menu",
  "l123-parse",
  "l123-print",
+ "libc",
  "ratatui",
  "ratatui-image",
 ]
@@ -1943,6 +1945,18 @@ dependencies = [
  "hmac",
  "password-hash",
  "sha2",
+]
+
+[[package]]
+name = "pdf-writer"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92a79477295a713c2ed425aa82a8b5d20cec3fdee203706cbe6f3854880c1c81"
+dependencies = [
+ "bitflags 2.11.1",
+ "itoa",
+ "memchr",
+ "ryu",
 ]
 
 [[package]]

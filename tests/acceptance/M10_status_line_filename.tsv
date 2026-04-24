@@ -1,0 +1,20 @@
+# Status line shows the active file's base name after a successful
+# save. Before the save the left slot carries the current date/time —
+# that's covered by the format_status_date unit test since asserting a
+# live clock in a transcript would be flaky.
+
+SIZE 200 25
+
+RM_FILE $TMPDIR/m10_status_line.xlsx
+
+# Save a workbook so active_path is set.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m10_status_line.xlsx
+ENTER
+ASSERT_MODE     READY
+
+# After the save the status line should carry the file's base name
+# (no path, no extension stripping — the filename as saved).
+ASSERT_STATUS  m10_status_line.xlsx

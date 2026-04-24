@@ -57,8 +57,31 @@ pub enum Action {
     WorksheetColumnRangeResetWidth,
     WorksheetColumnHide,
     WorksheetColumnDisplay,
+    /// `/Worksheet Status` — full-screen overlay of recalculation
+    /// mode, cell-display defaults, and environment probes.
+    WorksheetStatus,
+    WorksheetGlobalColWidth,
+    WorksheetGlobalLabelLeft,
+    WorksheetGlobalLabelRight,
+    WorksheetGlobalLabelCenter,
     WorksheetGlobalRecalcAutomatic,
     WorksheetGlobalRecalcManual,
+    /// `/Worksheet Global Recalc Natural` — dependency-order recalc.
+    WorksheetGlobalRecalcNatural,
+    /// `/Worksheet Global Recalc Columnwise`.
+    WorksheetGlobalRecalcColumnwise,
+    /// `/Worksheet Global Recalc Rowwise`.
+    WorksheetGlobalRecalcRowwise,
+    /// `/Worksheet Global Recalc Iteration` — prompts for 1..=50.
+    WorksheetGlobalRecalcIteration,
+    /// `/Worksheet Global Zero No` — show numeric zeros (default).
+    WorksheetGlobalZeroNo,
+    /// `/Worksheet Global Zero Yes` — blank numeric-zero cells.
+    WorksheetGlobalZeroYes,
+    /// `/Worksheet Global Protection Enable`.
+    WorksheetGlobalProtectionEnable,
+    /// `/Worksheet Global Protection Disable`.
+    WorksheetGlobalProtectionDisable,
     WorksheetGlobalGroupEnable,
     WorksheetGlobalGroupDisable,
     WorksheetGlobalDefaultOtherUndoEnable,
@@ -358,19 +381,19 @@ const WS_GLOBAL_RECALC_MENU: &[MenuItem] = &[
         letter: 'N',
         name: "Natural",
         help: "Natural-order recalculation",
-        body: MenuBody::NotImplemented("wg-recalc-natural"),
+        body: MenuBody::Action(Action::WorksheetGlobalRecalcNatural),
     },
     MenuItem {
         letter: 'C',
         name: "Columnwise",
         help: "Columnwise recalculation order",
-        body: MenuBody::NotImplemented("wg-recalc-col"),
+        body: MenuBody::Action(Action::WorksheetGlobalRecalcColumnwise),
     },
     MenuItem {
         letter: 'R',
         name: "Rowwise",
         help: "Rowwise recalculation order",
-        body: MenuBody::NotImplemented("wg-recalc-row"),
+        body: MenuBody::Action(Action::WorksheetGlobalRecalcRowwise),
     },
     MenuItem {
         letter: 'A',
@@ -388,7 +411,37 @@ const WS_GLOBAL_RECALC_MENU: &[MenuItem] = &[
         letter: 'I',
         name: "Iteration",
         help: "Set iteration count (1-50)",
-        body: MenuBody::NotImplemented("wg-recalc-iter"),
+        body: MenuBody::Action(Action::WorksheetGlobalRecalcIteration),
+    },
+];
+
+const WG_PROT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Enable",
+        help: "Enable global worksheet protection",
+        body: MenuBody::Action(Action::WorksheetGlobalProtectionEnable),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Disable",
+        help: "Disable global worksheet protection",
+        body: MenuBody::Action(Action::WorksheetGlobalProtectionDisable),
+    },
+];
+
+const WG_ZERO_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'N',
+        name: "No",
+        help: "Show numeric zero values (default)",
+        body: MenuBody::Action(Action::WorksheetGlobalZeroNo),
+    },
+    MenuItem {
+        letter: 'Y',
+        name: "Yes",
+        help: "Hide numeric zero values",
+        body: MenuBody::Action(Action::WorksheetGlobalZeroYes),
     },
 ];
 
@@ -509,6 +562,27 @@ const WG_DEFAULT_MENU: &[MenuItem] = &[
     },
 ];
 
+const WG_LABEL_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'L',
+        name: "Left",
+        help: "Default to left-aligned label prefix (')",
+        body: MenuBody::Action(Action::WorksheetGlobalLabelLeft),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Right",
+        help: "Default to right-aligned label prefix (\")",
+        body: MenuBody::Action(Action::WorksheetGlobalLabelRight),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Center",
+        help: "Default to centered label prefix (^)",
+        body: MenuBody::Action(Action::WorksheetGlobalLabelCenter),
+    },
+];
+
 const WG_GROUP_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'E',
@@ -535,25 +609,25 @@ const WS_GLOBAL_MENU: &[MenuItem] = &[
         letter: 'L',
         name: "Label",
         help: "Set global default label prefix",
-        body: MenuBody::NotImplemented("wg-label"),
+        body: MenuBody::Submenu(WG_LABEL_MENU),
     },
     MenuItem {
         letter: 'C',
         name: "Col-Width",
         help: "Set global default column width",
-        body: MenuBody::NotImplemented("wg-col-width"),
+        body: MenuBody::Action(Action::WorksheetGlobalColWidth),
     },
     MenuItem {
         letter: 'P',
         name: "Prot",
         help: "Enable/disable worksheet protection",
-        body: MenuBody::NotImplemented("wg-prot"),
+        body: MenuBody::Submenu(WG_PROT_MENU),
     },
     MenuItem {
         letter: 'Z',
         name: "Zero",
-        help: "Zero-value display: No/Yes/Label",
-        body: MenuBody::NotImplemented("wg-zero"),
+        help: "Zero-value display: No/Yes",
+        body: MenuBody::Submenu(WG_ZERO_MENU),
     },
     MenuItem {
         letter: 'R',
@@ -628,7 +702,7 @@ const WORKSHEET_MENU: &[MenuItem] = &[
         letter: 'S',
         name: "Status",
         help: "Show worksheet status panel",
-        body: MenuBody::NotImplemented("ws-status"),
+        body: MenuBody::Action(Action::WorksheetStatus),
     },
     MenuItem {
         letter: 'P',

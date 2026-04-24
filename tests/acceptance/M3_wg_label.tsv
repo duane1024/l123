@@ -1,0 +1,55 @@
+# /Worksheet Global Label — Left/Right/Center sets the default
+# label-prefix used when the user types a label without an explicit
+# prefix char. Doesn't touch any existing cells.
+
+# Default is Left (apostrophe). Typing "hello" makes 'hello.
+ASSERT_POINTER    A:A1
+KEYS hello
+ENTER
+ASSERT_PANEL_L1   A:A1: 'hello
+
+# /WGLR → Right alignment. Next unprefixed label lands as "hi.
+KEY /
+KEY W
+KEY G
+KEY L
+ASSERT_PANEL_L2   Left
+ASSERT_PANEL_L2   Right
+ASSERT_PANEL_L2   Center
+KEY R
+ASSERT_MODE       READY
+
+RIGHT
+KEYS hi
+ENTER
+ASSERT_PANEL_L1   A:B1: "hi
+
+# /WGLC → Center alignment.
+KEY /
+KEY W
+KEY G
+KEY L
+KEY C
+RIGHT
+KEYS mid
+ENTER
+ASSERT_PANEL_L1   A:C1: ^mid
+
+# Existing A1 keeps its original 'hello prefix — the global change
+# doesn't rewrite stored labels.
+HOME
+ASSERT_PANEL_L1   A:A1: 'hello
+
+# Undo unwinds the two global-label changes back to Left, plus the
+# three label entries.
+ALT_F 4
+ALT_F 4
+ALT_F 4
+ALT_F 4
+ALT_F 4
+
+# After undoing every change, A1 is empty again and default is Left.
+RIGHT
+KEYS after
+ENTER
+ASSERT_PANEL_L1   A:B1: 'after

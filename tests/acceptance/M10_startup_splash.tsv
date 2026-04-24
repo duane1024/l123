@@ -13,6 +13,8 @@ ASSERT_SCREEN  LICENSING INFORMATION
 ASSERT_SCREEN  User name
 ASSERT_SCREEN  Organization
 ASSERT_SCREEN  Zarkov
+ASSERT_SCREEN  Use, duplication
+ASSERT_SCREEN  Violators may be prosecuted
 
 # Any key dismisses the splash and drops straight into READY without
 # dispatching the keystroke (so the 'a' does NOT start a LABEL entry).
