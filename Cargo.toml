@@ -9,6 +9,7 @@ members = [
     "crates/l123-ui",
     "crates/l123-io",
     "crates/l123-macro",
+    "crates/l123-graph",
     "crates/l123",
 ]
 
@@ -17,7 +18,7 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ddmoore/l123"
-rust-version = "1.80"
+rust-version = "1.85"
 
 [workspace.dependencies]
 # internal
@@ -29,11 +30,12 @@ l123-menu   = { path = "crates/l123-menu" }
 l123-ui     = { path = "crates/l123-ui" }
 l123-io     = { path = "crates/l123-io" }
 l123-macro  = { path = "crates/l123-macro" }
+l123-graph  = { path = "crates/l123-graph" }
 
 # external
 ironcalc       = "0.7"
 ironcalc_base  = "0.7"
-ratatui        = "0.29"
+ratatui        = "0.30"
 crossterm      = "0.28"
 thiserror      = "2"
 anyhow         = "1"

@@ -6,7 +6,7 @@
 //! - `'` auto-prefixed labels. Enter commits; Ctrl-C quits.
 //! - Three-line control panel, mode indicator, cell readout.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -30,6 +30,7 @@ use l123_core::{
     LabelPrefix, Mode, Range, SheetId, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
+use l123_graph::GraphDef;
 use l123_menu::{self as menu, Action, MenuBody, MenuItem};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
@@ -73,6 +74,14 @@ struct Workbook {
     /// Command journal for Undo (Alt-F4). Each mutating command
     /// pushes an inverse entry. Pop-and-apply reverts.
     journal: Vec<JournalEntry>,
+    /// The unnamed working graph — target of every `/Graph` menu
+    /// command until `/Graph Name Create` snapshots it by name.
+    #[allow(dead_code)] // read in slice 3 (menu wiring)
+    current_graph: GraphDef,
+    /// Named graphs defined via `/Graph Name Create`. `Use` restores
+    /// one into `current_graph`; `Delete` drops it; `Reset` wipes all.
+    #[allow(dead_code)] // read in slice 3 (menu wiring)
+    graphs: BTreeMap<String, GraphDef>,
 }
 
 impl Workbook {
@@ -87,6 +96,8 @@ impl Workbook {
             viewport_col_offset: 0,
             viewport_row_offset: 0,
             journal: Vec::new(),
+            current_graph: GraphDef::default(),
+            graphs: BTreeMap::new(),
         }
     }
 }
@@ -817,7 +828,10 @@ impl App {
     fn event_loop<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        B::Error: Send + Sync + 'static,
+    {
         while self.running {
             terminal.draw(|f| self.render(f.area(), f.buffer_mut()))?;
             if event::poll(Duration::from_millis(100))? {
@@ -1921,6 +1935,8 @@ impl App {
             viewport_col_offset: 0,
             viewport_row_offset: 0,
             journal: Vec::new(),
+            current_graph: GraphDef::default(),
+            graphs: BTreeMap::new(),
         };
         if before {
             self.active_files.insert(self.current, new_file);
