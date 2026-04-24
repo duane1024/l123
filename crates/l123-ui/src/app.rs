@@ -6,13 +6,17 @@
 //! - `'` auto-prefixed labels. Enter commits; Ctrl-C quits.
 //! - Three-line control panel, mode indicator, cell readout.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossterm::{
-    event::{self, DisableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -168,6 +172,10 @@ pub struct App {
     /// panel is simply not drawn — per user direction that we only
     /// show the panel where the terminal can render it well.
     icon_panel: Option<image::DynamicImage>,
+    /// Rect the icon panel last occupied on screen, stashed so mouse
+    /// clicks can hit-test against it without recomputing the layout.
+    /// Cleared at the top of each frame; re-set by `render_icon_panel`.
+    icon_panel_area: Cell<Option<Rect>>,
 }
 
 /// State kept for the duration of a [`Mode::Graph`] overlay.
@@ -824,6 +832,7 @@ impl App {
             graph_view: None,
             image_picker: None,
             icon_panel: None,
+            icon_panel_area: Cell::new(None),
         }
     }
 
@@ -850,7 +859,7 @@ impl App {
     pub fn run() -> anyhow::Result<()> {
         let mut stdout = io::stdout();
         enable_raw_mode()?;
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -875,10 +884,10 @@ impl App {
         while self.running {
             terminal.draw(|f| self.render(f.area(), f.buffer_mut()))?;
             if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(k) = event::read()? {
-                    if k.kind == KeyEventKind::Press {
-                        self.handle_key(k);
-                    }
+                match event::read()? {
+                    Event::Key(k) if k.kind == KeyEventKind::Press => self.handle_key(k),
+                    Event::Mouse(m) => self.handle_mouse(m),
+                    _ => {}
                 }
             }
         }
@@ -3447,6 +3456,10 @@ impl App {
             ])
             .split(area);
 
+        // Clear last frame's stashed icon-panel rect. render_icon_panel
+        // re-sets it iff it actually draws the panel this frame.
+        self.icon_panel_area.set(None);
+
         self.render_control_panel(chunks[0], buf);
         // Split the middle area horizontally when the v3.1 WYSIWYG icon
         // panel is live. File-list and graph-view overlays take the full
@@ -3502,6 +3515,50 @@ impl App {
         }
         if let Ok(protocol) = picker.new_protocol(img.clone(), area, Resize::Fit(None)) {
             Image::new(&protocol).render(area, buf);
+            self.icon_panel_area.set(Some(area));
+        }
+    }
+
+    /// Mouse handler. For now, only the icon panel is clickable.
+    pub fn handle_mouse(&mut self, m: MouseEvent) {
+        let MouseEventKind::Down(MouseButton::Left) = m.kind else { return };
+        let Some(area) = self.icon_panel_area.get() else { return };
+        if m.column < area.x
+            || m.column >= area.x + area.width
+            || m.row < area.y
+            || m.row >= area.y + area.height
+        {
+            return;
+        }
+        self.dispatch_icon_click(m.row - area.y, area.height);
+    }
+
+    /// Map a local row inside the icon panel to the icon slot it
+    /// belongs to, then fire that slot's action. Icons are stacked
+    /// evenly top-to-bottom in the panel area, matching the PNG
+    /// produced by `l123_graph::icons`.
+    fn dispatch_icon_click(&mut self, local_row: u16, panel_height: u16) {
+        if panel_height == 0 {
+            return;
+        }
+        let per_icon = (panel_height as usize).max(1) / (l123_graph::icons::ICON_COUNT as usize);
+        if per_icon == 0 {
+            return;
+        }
+        let index = (local_row as usize) / per_icon;
+        use l123_graph::icons::IconKind;
+        let kinds = IconKind::ORDER;
+        let Some(kind) = kinds.get(index.min(kinds.len() - 1)) else { return };
+        match kind {
+            IconKind::Left => self.move_pointer(-1, 0),
+            IconKind::Right => self.move_pointer(1, 0),
+            IconKind::Up => self.move_pointer(0, -1),
+            IconKind::Down => self.move_pointer(0, 1),
+            IconKind::SheetForward => self.move_sheet(1),
+            IconKind::SheetBackward => self.move_sheet(-1),
+            // Help isn't wired as a Mode yet (SPEC §18 Complete tier).
+            // A click here is a safe no-op rather than an error.
+            IconKind::Help => {}
         }
     }
 
@@ -5251,5 +5308,98 @@ mod tests {
 
         let _ = std::fs::remove_file(&target);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Simulate a left-click at `(col, row)` by stashing a fake panel
+    /// area and routing through [`App::handle_mouse`].
+    fn click(app: &mut App, area: Rect, col: u16, row: u16) {
+        app.icon_panel_area.set(Some(area));
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    #[test]
+    fn icon_click_left_moves_pointer_left() {
+        let mut app = App::new();
+        // Start at B2 so there's room to move left.
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.pointer().display_full(), "A:B2");
+        // Panel at x=80, 3 cols wide, rows 4..25 (21 rows tall, 3 per
+        // icon). Click the top (Left) icon: row 4..6.
+        let panel = Rect::new(80, 4, 3, 21);
+        click(&mut app, panel, 81, 5);
+        assert_eq!(app.pointer().display_full(), "A:A2", "Left click should move left");
+    }
+
+    #[test]
+    fn icon_click_down_moves_pointer_down() {
+        let mut app = App::new();
+        assert_eq!(app.pointer().display_full(), "A:A1");
+        // Panel: 21 rows / 7 icons = 3 rows per slot. Slot 1 (Down)
+        // spans local rows 3..=5.
+        let panel = Rect::new(80, 4, 3, 21);
+        click(&mut app, panel, 81, 4 + 4);
+        assert_eq!(app.pointer().display_full(), "A:A2");
+    }
+
+    #[test]
+    fn icon_click_right_moves_pointer_right() {
+        let mut app = App::new();
+        let panel = Rect::new(80, 4, 3, 21);
+        // Slot 3 (Right) spans local rows 9..=11.
+        click(&mut app, panel, 81, 4 + 10);
+        assert_eq!(app.pointer().display_full(), "A:B1");
+    }
+
+    #[test]
+    fn icon_click_help_is_safe_noop() {
+        let mut app = App::new();
+        let panel = Rect::new(80, 4, 3, 21);
+        // Slot 6 (Help) — local rows 18..=20.
+        click(&mut app, panel, 81, 4 + 19);
+        // No mode change, no pointer move, no panic.
+        assert_eq!(app.pointer().display_full(), "A:A1");
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    #[test]
+    fn mouse_click_outside_panel_is_ignored() {
+        let mut app = App::new();
+        let panel = Rect::new(80, 4, 3, 21);
+        // Far outside the panel — should not move the pointer.
+        click(&mut app, panel, 10, 10);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+    }
+
+    #[test]
+    fn mouse_click_without_cached_panel_is_ignored() {
+        let mut app = App::new();
+        app.icon_panel_area.set(None);
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 82,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.pointer().display_full(), "A:A1");
+    }
+
+    #[test]
+    fn mouse_non_left_button_is_ignored() {
+        let mut app = App::new();
+        let panel = Rect::new(80, 4, 3, 21);
+        app.icon_panel_area.set(Some(panel));
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 81,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.pointer().display_full(), "A:A1");
     }
 }
