@@ -127,6 +127,8 @@ pub enum Action {
     /// `/Graph Reset Graph` — clear every range and restore the
     /// default type.
     GraphResetGraph,
+    /// `/Graph View` — full-screen graph display (same as F10).
+    GraphView,
     /// `/Graph Quit` — close the `/Graph` menu back to READY.
     GraphQuit,
 }
@@ -1402,7 +1404,7 @@ const GRAPH_MENU: &[MenuItem] = &[
         letter: 'V',
         name: "View",
         help: "Display the current graph",
-        body: MenuBody::NotImplemented("g-view"),
+        body: MenuBody::Action(Action::GraphView),
     },
     MenuItem {
         letter: 'S',

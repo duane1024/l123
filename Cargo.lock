@@ -901,6 +901,7 @@ name = "l123-graph"
 version = "0.0.1"
 dependencies = [
  "l123-core",
+ "ratatui",
 ]
 
 [[package]]

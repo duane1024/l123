@@ -17,6 +17,9 @@ pub enum Mode {
     Wait,
     Find,
     Stat,
+    /// Full-screen graph view entered by F10 or `/Graph View`. Esc
+    /// returns to READY without mutating any graph state.
+    Graph,
 }
 
 impl Mode {
@@ -36,6 +39,7 @@ impl Mode {
             Mode::Wait => "WAIT",
             Mode::Find => "FIND",
             Mode::Stat => "STAT",
+            Mode::Graph => "GRAPH",
         }
     }
 }
@@ -60,6 +64,7 @@ mod tests {
             Mode::Wait,
             Mode::Find,
             Mode::Stat,
+            Mode::Graph,
         ] {
             let s = m.indicator();
             assert!(s.chars().all(|c| c.is_ascii_uppercase()), "{m:?} → {s}");

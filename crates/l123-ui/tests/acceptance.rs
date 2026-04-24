@@ -428,4 +428,5 @@ transcripts! {
     m7_graph_type       => "M7_graph_type.tsv",
     m7_graph_series     => "M7_graph_series.tsv",
     m7_graph_reset      => "M7_graph_reset.tsv",
+    m7_graph_view_f10   => "M7_graph_view_f10.tsv",
 }

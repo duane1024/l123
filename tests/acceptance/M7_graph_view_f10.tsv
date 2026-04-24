@@ -1,0 +1,77 @@
+# M7 slice 4 — F10 shows a full-screen graph. This is the M7
+# acceptance bar: seed numbers, pick a bar type, assign A1..A5 as
+# series A, press F10, verify block characters appear and the mode
+# indicator reads GRAPH. Esc returns to READY.
+
+# Seed A1..A5 = 1..5.
+KEYS 1
+ENTER
+KEYS 2
+ENTER
+KEYS 3
+ENTER
+KEYS 4
+ENTER
+KEYS 5
+ENTER
+
+HOME
+ASSERT_POINTER    A:A1
+
+# /GTB — Bar.
+KEY /
+KEY G
+KEY T
+KEY B
+ASSERT_GRAPH_TYPE BAR
+ASSERT_MODE       READY
+
+# /GA — POINT, extend to A5, commit.
+KEY /
+KEY G
+KEY A
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+ASSERT_GRAPH_SERIES A  A:A1..A:A5
+
+# F10 transitions to GRAPH with block characters on screen.
+F 10
+ASSERT_MODE    GRAPH
+ASSERT_SCREEN  █
+ASSERT_SCREEN  ─
+
+# Esc returns to READY, graph state preserved.
+ESC
+ASSERT_MODE    READY
+ASSERT_GRAPH_TYPE  BAR
+ASSERT_GRAPH_SERIES A  A:A1..A:A5
+
+# F10 again from READY still works (rotates back into view).
+F 10
+ASSERT_MODE    GRAPH
+ESC
+ASSERT_MODE    READY
+
+# /GV does the same thing.
+KEY /
+KEY G
+KEY V
+ASSERT_MODE    GRAPH
+ASSERT_SCREEN  █
+ESC
+ASSERT_MODE    READY
+
+# Empty graph → F10 still transitions but shows placeholder.
+KEY /
+KEY G
+KEY R
+KEY G
+ASSERT_GRAPH_SERIES A  none
+F 10
+ASSERT_MODE    GRAPH
+ASSERT_SCREEN  No graph ranges set
+ESC
+ASSERT_MODE    READY

@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 l123-core = { workspace = true }
+ratatui = { workspace = true }

@@ -151,6 +151,11 @@ pub struct App {
     /// In-flight `/Range Search` session between the search string
     /// commit and the Find/Replace leaf.
     search: Option<SearchSession>,
+    /// Pre-resolved values for the currently-displayed full-screen
+    /// graph. Some while in [`Mode::Graph`]; None otherwise. Snapshotting
+    /// at F10 time keeps the renderer free of an engine dependency and
+    /// means mid-view edits don't redraw until the user re-enters.
+    graph_view: Option<l123_graph::GraphValues>,
 }
 
 /// Which cell kinds `/Range Search` walks.
@@ -789,6 +794,7 @@ impl App {
             file_nav_pending: false,
             print: None,
             search: None,
+            graph_view: None,
         }
     }
 
@@ -968,7 +974,18 @@ impl App {
             Mode::Menu => self.handle_key_menu(k),
             Mode::Point => self.handle_key_point(k),
             Mode::Find => self.handle_key_find(k),
+            Mode::Graph => self.handle_key_graph(k),
             _ => {}
+        }
+    }
+
+    fn handle_key_graph(&mut self, k: KeyEvent) {
+        if matches!(
+            k.code,
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char(' ') | KeyCode::F(10)
+        ) {
+            self.graph_view = None;
+            self.mode = Mode::Ready;
         }
     }
 
@@ -1007,6 +1024,7 @@ impl App {
             KeyCode::F(2) => self.begin_edit(),
             KeyCode::F(4) if k.modifiers.contains(KeyModifiers::ALT) => self.undo(),
             KeyCode::F(9) => self.do_recalc(),
+            KeyCode::F(10) => self.enter_graph_view(),
             KeyCode::Char('/') => self.open_menu(),
             KeyCode::Char(c) => self.begin_entry(c),
             _ => {}
@@ -1306,6 +1324,54 @@ impl App {
         self.close_menu();
     }
 
+    /// F10 / `/Graph View`. Snapshot the current graph's series values
+    /// and transition to [`Mode::Graph`]. An empty graph shows a "define
+    /// ranges first" placeholder rather than silently no-op'ing so the
+    /// user sees something happened.
+    fn enter_graph_view(&mut self) {
+        let def = self.wb().current_graph.clone();
+        let vals = self.collect_graph_values(&def);
+        self.graph_view = Some(vals);
+        self.menu = None;
+        self.mode = Mode::Graph;
+    }
+
+    fn collect_graph_values(&self, def: &GraphDef) -> l123_graph::GraphValues {
+        let mut out = l123_graph::GraphValues::default();
+        if let Some(r) = def.x {
+            out.x = Some(self.read_series_values(r));
+        }
+        for (i, slot) in def.data.iter().enumerate() {
+            if let Some(r) = *slot {
+                out.data[i] = Some(self.read_series_values(r));
+            }
+        }
+        out
+    }
+
+    /// Flatten a range to a sequence of numeric values. Non-numeric or
+    /// error cells become `NaN` so positional alignment is preserved.
+    /// Column-major: for a single-column range this is just the column
+    /// read top to bottom, which is the common 1-2-3 idiom.
+    fn read_series_values(&self, r: Range) -> Vec<f64> {
+        let n = r.normalized();
+        let mut out = Vec::new();
+        for col in n.start.col..=n.end.col {
+            for row in n.start.row..=n.end.row {
+                let addr = Address { sheet: n.start.sheet, col, row };
+                let v = match self.wb().engine.get_cell(addr) {
+                    Ok(cv) => match cv.value {
+                        Value::Number(f) => f,
+                        _ => f64::NAN,
+                    },
+                    Err(_) => f64::NAN,
+                };
+                out.push(v);
+            }
+        }
+        out
+    }
+
     fn handle_key_menu(&mut self, k: KeyEvent) {
         let Some(state) = self.menu.as_mut() else {
             self.mode = Mode::Ready;
@@ -1533,6 +1599,7 @@ impl App {
                 self.wb_mut().current_graph.reset();
                 self.close_menu();
             }
+            Action::GraphView => self.enter_graph_view(),
             Action::GraphQuit => self.close_menu(),
             // Subsequent cycles wire these. For now, descent is a no-op.
             _ => self.close_menu(),
@@ -3295,6 +3362,17 @@ impl App {
         self.render_control_panel(chunks[0], buf);
         if self.file_list.is_some() {
             self.render_file_list_overlay(chunks[1], buf);
+        } else if self.mode == Mode::Graph {
+            if let Some(vals) = self.graph_view.as_ref() {
+                l123_graph::render_unicode(
+                    &self.wb().current_graph,
+                    vals,
+                    chunks[1],
+                    buf,
+                );
+            } else {
+                self.render_grid(chunks[1], buf);
+            }
         } else {
             self.render_grid(chunks[1], buf);
         }

@@ -12,6 +12,9 @@ use std::collections::BTreeMap;
 
 use l123_core::Range;
 
+pub mod render;
+pub use render::{render as render_unicode, GraphValues};
+
 /// The seven graph types 1-2-3 R3.1 supports.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub enum GraphType {
