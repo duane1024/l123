@@ -14,3 +14,5 @@ l123-graph = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 anyhow = { workspace = true }
+ratatui-image = { workspace = true }
+image = { workspace = true }

@@ -18,7 +18,7 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ddmoore/l123"
-rust-version = "1.85"
+rust-version = "1.90"
 
 [workspace.dependencies]
 # internal
@@ -41,6 +41,7 @@ thiserror      = "2"
 anyhow         = "1"
 plotters       = { version = "0.3", default-features = false, features = ["svg_backend", "bitmap_backend", "bitmap_encoder", "line_series", "point_series", "histogram", "full_palette", "ttf"] }
 image          = { version = "0.25", default-features = false, features = ["png"] }
+ratatui-image  = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
 
 [profile.dev]
 opt-level = 0

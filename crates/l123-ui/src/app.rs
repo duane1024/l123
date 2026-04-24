@@ -31,6 +31,7 @@ use l123_core::{
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
+use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
 use l123_menu::{self as menu, Action, MenuBody, MenuItem};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
@@ -155,7 +156,23 @@ pub struct App {
     /// graph. Some while in [`Mode::Graph`]; None otherwise. Snapshotting
     /// at F10 time keeps the renderer free of an engine dependency and
     /// means mid-view edits don't redraw until the user re-enters.
-    graph_view: Option<l123_graph::GraphValues>,
+    graph_view: Option<GraphOverlay>,
+    /// Terminal graphics-protocol picker, populated once at startup by
+    /// [`App::probe_image_picker`]. `None` in headless tests (and any
+    /// live session where the query fails) — the renderer falls back
+    /// to the unicode path in that case.
+    image_picker: Option<Picker>,
+}
+
+/// State kept for the duration of a [`Mode::Graph`] overlay.
+#[derive(Clone)]
+struct GraphOverlay {
+    /// Numeric values snapshotted off the engine at enter time.
+    values: l123_graph::GraphValues,
+    /// Pre-rendered PNG (via plotters) decoded into a DynamicImage.
+    /// Populated only when the app has a graphical picker — feeds
+    /// ratatui-image's `Image` widget at render time.
+    img: Option<image::DynamicImage>,
 }
 
 /// Which cell kinds `/Range Search` walks.
@@ -795,6 +812,7 @@ impl App {
             print: None,
             search: None,
             graph_view: None,
+            image_picker: None,
         }
     }
 
@@ -826,6 +844,7 @@ impl App {
         let mut terminal = Terminal::new(backend)?;
 
         let mut app = App::new();
+        app.probe_image_picker();
         let result = app.event_loop(&mut terminal);
 
         disable_raw_mode()?;
@@ -1330,10 +1349,31 @@ impl App {
     /// user sees something happened.
     fn enter_graph_view(&mut self) {
         let def = self.wb().current_graph.clone();
-        let vals = self.collect_graph_values(&def);
-        self.graph_view = Some(vals);
+        let values = self.collect_graph_values(&def);
+        let img = if self.picker_is_graphical() && !values.is_empty() {
+            let png = l123_graph::render_png(&def, &values);
+            image::load_from_memory(&png).ok()
+        } else {
+            None
+        };
+        self.graph_view = Some(GraphOverlay { values, img });
         self.menu = None;
         self.mode = Mode::Graph;
+    }
+
+    fn picker_is_graphical(&self) -> bool {
+        match self.image_picker.as_ref() {
+            Some(p) => p.protocol_type() != ProtocolType::Halfblocks,
+            None => false,
+        }
+    }
+
+    /// Called once by [`App::run`] after raw mode is enabled. Queries
+    /// the terminal for its graphics-protocol capability; if the query
+    /// fails (tmux, legacy terminals, redirected stdio) the picker is
+    /// left as `None` and F10 uses the unicode renderer.
+    pub fn probe_image_picker(&mut self) {
+        self.image_picker = Picker::from_query_stdio().ok();
     }
 
     fn collect_graph_values(&self, def: &GraphDef) -> l123_graph::GraphValues {
@@ -2240,15 +2280,9 @@ impl App {
                 self.save_confirm = None;
                 self.mode = Mode::Ready;
             }
-            KeyCode::Left => {
-                if sc.highlight > 0 {
-                    sc.highlight -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if sc.highlight + 1 < SAVE_CONFIRM_ITEMS.len() {
-                    sc.highlight += 1;
-                }
+            KeyCode::Left if sc.highlight > 0 => sc.highlight -= 1,
+            KeyCode::Right if sc.highlight + 1 < SAVE_CONFIRM_ITEMS.len() => {
+                sc.highlight += 1;
             }
             KeyCode::Home => sc.highlight = 0,
             KeyCode::End => sc.highlight = SAVE_CONFIRM_ITEMS.len() - 1,
@@ -3363,20 +3397,32 @@ impl App {
         if self.file_list.is_some() {
             self.render_file_list_overlay(chunks[1], buf);
         } else if self.mode == Mode::Graph {
-            if let Some(vals) = self.graph_view.as_ref() {
-                l123_graph::render_unicode(
-                    &self.wb().current_graph,
-                    vals,
-                    chunks[1],
-                    buf,
-                );
-            } else {
-                self.render_grid(chunks[1], buf);
-            }
+            self.render_graph_overlay(chunks[1], buf);
         } else {
             self.render_grid(chunks[1], buf);
         }
         self.render_status(chunks[2], buf);
+    }
+
+    fn render_graph_overlay(&self, area: Rect, buf: &mut Buffer) {
+        let Some(overlay) = self.graph_view.as_ref() else {
+            self.render_grid(area, buf);
+            return;
+        };
+        // Graphical path: ratatui-image with a freshly-built Protocol
+        // sized to this frame's content area. Protocol creation can
+        // fail (encoding error, terminal query hiccup); on any failure
+        // we fall through to the unicode path so the user still sees
+        // something.
+        if let (Some(picker), Some(img)) = (self.image_picker.as_ref(), overlay.img.as_ref()) {
+            if picker.protocol_type() != ProtocolType::Halfblocks {
+                if let Ok(protocol) = picker.new_protocol(img.clone(), area, Resize::Fit(None)) {
+                    Image::new(&protocol).render(area, buf);
+                    return;
+                }
+            }
+        }
+        l123_graph::render_unicode(&self.wb().current_graph, &overlay.values, area, buf);
     }
 
     fn render_control_panel(&self, area: Rect, buf: &mut Buffer) {

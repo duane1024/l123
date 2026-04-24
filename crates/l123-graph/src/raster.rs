@@ -294,7 +294,7 @@ where
             Histogram::vertical(&chart)
                 .style(color.filled())
                 .margin(6)
-                .data(points.into_iter()),
+                .data(points),
         )?;
     }
     Ok(())
