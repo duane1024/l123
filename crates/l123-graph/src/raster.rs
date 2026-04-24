@@ -77,7 +77,11 @@ pub fn render_png_sized(def: &GraphDef, vals: &GraphValues, w: u32, h: u32) -> V
     }
 }
 
-fn draw_graph<DB>(def: &GraphDef, vals: &GraphValues, root: &DrawingArea<DB, plotters::coord::Shift>) -> DrawResult
+fn draw_graph<DB>(
+    def: &GraphDef,
+    vals: &GraphValues,
+    root: &DrawingArea<DB, plotters::coord::Shift>,
+) -> DrawResult
 where
     DB: DrawingBackend,
     DB::ErrorType: 'static,
@@ -123,15 +127,23 @@ fn axis_bounds(series: &[&[f64]]) -> (f64, f64) {
             if !v.is_finite() {
                 continue;
             }
-            if v < lo { lo = v; }
-            if v > hi { hi = v; }
+            if v < lo {
+                lo = v;
+            }
+            if v > hi {
+                hi = v;
+            }
         }
     }
     if !lo.is_finite() || !hi.is_finite() {
         return (0.0, 1.0);
     }
     if lo == hi {
-        if lo == 0.0 { (0.0, 1.0) } else { (lo.min(0.0), hi.max(lo.abs())) }
+        if lo == 0.0 {
+            (0.0, 1.0)
+        } else {
+            (lo.min(0.0), hi.max(lo.abs()))
+        }
     } else {
         let pad = (hi - lo).abs() * 0.05;
         (lo - pad, hi + pad)
@@ -170,14 +182,24 @@ where
         let points: Vec<(f64, f64)> = s
             .iter()
             .enumerate()
-            .filter_map(|(idx, &v)| if v.is_finite() { Some((idx as f64, v)) } else { None })
+            .filter_map(|(idx, &v)| {
+                if v.is_finite() {
+                    Some((idx as f64, v))
+                } else {
+                    None
+                }
+            })
             .collect();
         chart
             .draw_series(LineSeries::new(points.clone(), color.stroke_width(2)))?
             .label(format!("Series {}", (b'A' + i as u8) as char))
             .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
         // Visible markers at each point.
-        chart.draw_series(points.into_iter().map(|(x, y)| Circle::new((x, y), 3, color.filled())))?;
+        chart.draw_series(
+            points
+                .into_iter()
+                .map(|(x, y)| Circle::new((x, y), 3, color.filled())),
+        )?;
     }
     chart.configure_series_labels().border_style(BLACK).draw()?;
     Ok(())
@@ -205,7 +227,11 @@ where
             .style(BLUE.filled())
             .margin(6)
             .data(a.iter().enumerate().filter_map(|(i, &v)| {
-                if v.is_finite() { Some((i as i32, v)) } else { None }
+                if v.is_finite() {
+                    Some((i as i32, v))
+                } else {
+                    None
+                }
             })),
     )?;
     Ok(())
@@ -242,7 +268,11 @@ where
             }
         })
         .collect();
-    chart.draw_series(points.iter().map(|&(px, py)| Circle::new((px, py), 4, BLUE.filled())))?;
+    chart.draw_series(
+        points
+            .iter()
+            .map(|&(px, py)| Circle::new((px, py), 4, BLUE.filled())),
+    )?;
     Ok(())
 }
 
@@ -267,9 +297,13 @@ where
         }
     }
     for &v in &stacked {
-        if v > y_max { y_max = v; }
+        if v > y_max {
+            y_max = v;
+        }
     }
-    if y_max == 0.0 { y_max = 1.0; }
+    if y_max == 0.0 {
+        y_max = 1.0;
+    }
     let mut chart = ChartBuilder::on(root)
         .margin(20)
         .x_label_area_size(30)
@@ -284,7 +318,9 @@ where
             .filter_map(|i| {
                 let idx = i as usize;
                 let v = s.get(idx).copied().unwrap_or(f64::NAN);
-                if !v.is_finite() || v <= 0.0 { return None; }
+                if !v.is_finite() || v <= 0.0 {
+                    return None;
+                }
                 let top = base[idx] + v;
                 base[idx] = top;
                 Some((i, top))
@@ -309,7 +345,11 @@ where
         Some(a) if !a.is_empty() => a,
         _ => return paint_error(root, "Set /Graph A to plot a pie."),
     };
-    let positive: Vec<f64> = a.iter().copied().filter(|v| v.is_finite() && *v > 0.0).collect();
+    let positive: Vec<f64> = a
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .collect();
     if positive.is_empty() {
         return paint_error(root, "Pie needs positive values.");
     }
@@ -317,7 +357,11 @@ where
     let cx = (w / 2) as i32;
     let cy = (h / 2) as i32;
     let radius = (w.min(h) as f64 * 0.4).max(20.0);
-    let labels: Vec<String> = positive.iter().enumerate().map(|(i, _)| format!("{}", i + 1)).collect();
+    let labels: Vec<String> = positive
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("{}", i + 1))
+        .collect();
     let colors: Vec<RGBColor> = positive
         .iter()
         .enumerate()
@@ -349,15 +393,23 @@ where
     let mut y_hi = f64::NEG_INFINITY;
     for s in [high, low, close, open] {
         for &v in s {
-            if !v.is_finite() { continue; }
-            if v < y_lo { y_lo = v; }
-            if v > y_hi { y_hi = v; }
+            if !v.is_finite() {
+                continue;
+            }
+            if v < y_lo {
+                y_lo = v;
+            }
+            if v > y_hi {
+                y_hi = v;
+            }
         }
     }
     if !y_lo.is_finite() || !y_hi.is_finite() {
         return paint_error(root, "HLCO has no numeric values.");
     }
-    if y_lo == y_hi { y_hi = y_lo + 1.0; }
+    if y_lo == y_hi {
+        y_hi = y_lo + 1.0;
+    }
 
     let mut chart = ChartBuilder::on(root)
         .margin(20)
@@ -369,7 +421,9 @@ where
         let l = low.get(i).copied().unwrap_or(f64::NAN);
         let c = close.get(i).copied().unwrap_or(f64::NAN);
         let o = open.get(i).copied().unwrap_or(f64::NAN);
-        if !h.is_finite() || !l.is_finite() { continue; }
+        if !h.is_finite() || !l.is_finite() {
+            continue;
+        }
         let x = i as f64;
         // Main vertical line from L to H.
         chart.draw_series(std::iter::once(PathElement::new(
@@ -417,7 +471,11 @@ where
                 .style(BLUE.filled())
                 .margin(6)
                 .data(a.iter().enumerate().filter_map(|(i, &v)| {
-                    if v.is_finite() { Some((i as i32, v)) } else { None }
+                    if v.is_finite() {
+                        Some((i as i32, v))
+                    } else {
+                        None
+                    }
                 })),
         )?;
     }
@@ -435,10 +493,19 @@ where
         let pts: Vec<(f64, f64)> = b
             .iter()
             .enumerate()
-            .filter_map(|(i, &v)| if v.is_finite() { Some((i as f64, v)) } else { None })
+            .filter_map(|(i, &v)| {
+                if v.is_finite() {
+                    Some((i as f64, v))
+                } else {
+                    None
+                }
+            })
             .collect();
         over.draw_series(LineSeries::new(pts.clone(), RED.stroke_width(2)))?;
-        over.draw_series(pts.into_iter().map(|(x, y)| Circle::new((x, y), 3, RED.filled())))?;
+        over.draw_series(
+            pts.into_iter()
+                .map(|(x, y)| Circle::new((x, y), 3, RED.filled())),
+        )?;
     }
     Ok(())
 }
@@ -466,7 +533,10 @@ mod tests {
 
     #[test]
     fn svg_line_has_svg_envelope_and_polyline() {
-        let def = GraphDef { graph_type: GraphType::Line, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::Line,
+            ..Default::default()
+        };
         let svg = render_svg(&def, &a(vec![1.0, 2.0, 5.0, 3.0, 4.0]));
         assert!(svg.contains("<svg"), "no <svg root: {svg:.120}");
         assert!(svg.contains("</svg>"), "no </svg> close");
@@ -479,7 +549,10 @@ mod tests {
 
     #[test]
     fn svg_bar_has_rect_elements() {
-        let def = GraphDef { graph_type: GraphType::Bar, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::Bar,
+            ..Default::default()
+        };
         let svg = render_svg(&def, &a(vec![1.0, 2.0, 3.0]));
         assert!(svg.contains("<rect"), "no <rect in bar SVG");
     }
@@ -487,10 +560,16 @@ mod tests {
     #[test]
     fn svg_xy_draws_when_x_and_a_are_set() {
         let vals = make_vals(&[(6, vec![1.0, 2.0, 3.0]), (0, vec![10.0, 20.0, 15.0])]);
-        let def = GraphDef { graph_type: GraphType::XY, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::XY,
+            ..Default::default()
+        };
         let svg = render_svg(&def, &vals);
         assert!(svg.contains("<svg"));
-        assert!(svg.contains("<circle") || svg.contains("fill"), "no data marks in XY");
+        assert!(
+            svg.contains("<circle") || svg.contains("fill"),
+            "no data marks in XY"
+        );
     }
 
     #[test]
@@ -500,14 +579,20 @@ mod tests {
             (1, vec![2.0, 1.0, 4.0]),
             (2, vec![0.5, 0.5, 0.5]),
         ]);
-        let def = GraphDef { graph_type: GraphType::Stack, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::Stack,
+            ..Default::default()
+        };
         let svg = render_svg(&def, &vals);
         assert!(svg.contains("<rect"), "stack should emit rects");
     }
 
     #[test]
     fn svg_pie_draws_slices() {
-        let def = GraphDef { graph_type: GraphType::Pie, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::Pie,
+            ..Default::default()
+        };
         let svg = render_svg(&def, &a(vec![30.0, 20.0, 50.0]));
         // plotters' Pie emits one <polygon> per slice.
         let slices = svg.matches("<polygon").count();
@@ -522,31 +607,49 @@ mod tests {
             (2, vec![9.0, 10.5, 11.0]),  // close
             (3, vec![8.5, 10.0, 10.5]),  // open
         ]);
-        let def = GraphDef { graph_type: GraphType::HLCO, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::HLCO,
+            ..Default::default()
+        };
         let svg = render_svg(&def, &vals);
         assert!(svg.contains("<svg"));
-        assert!(svg.contains("<path") || svg.contains("<line"), "no strokes in HLCO");
+        assert!(
+            svg.contains("<path") || svg.contains("<line"),
+            "no strokes in HLCO"
+        );
     }
 
     #[test]
     fn svg_mixed_has_both_bars_and_line() {
         let vals = make_vals(&[(0, vec![1.0, 2.0, 3.0]), (1, vec![3.0, 2.0, 1.0])]);
-        let def = GraphDef { graph_type: GraphType::Mixed, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::Mixed,
+            ..Default::default()
+        };
         let svg = render_svg(&def, &vals);
         assert!(svg.contains("<rect"), "mixed should include bars");
-        assert!(svg.contains("polyline") || svg.contains("<path"), "mixed should include a line");
+        assert!(
+            svg.contains("polyline") || svg.contains("<path"),
+            "mixed should include a line"
+        );
     }
 
     #[test]
     fn svg_empty_values_shows_placeholder() {
-        let def = GraphDef { graph_type: GraphType::Bar, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::Bar,
+            ..Default::default()
+        };
         let svg = render_svg(&def, &GraphValues::default());
         assert!(svg.contains("Define"), "placeholder text missing");
     }
 
     #[test]
     fn png_has_png_magic() {
-        let def = GraphDef { graph_type: GraphType::Line, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::Line,
+            ..Default::default()
+        };
         let bytes = render_png(&def, &a(vec![1.0, 2.0, 3.0]));
         assert!(bytes.len() > 8, "png bytes too short");
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "missing PNG magic");
@@ -554,7 +657,10 @@ mod tests {
 
     #[test]
     fn png_is_decodable() {
-        let def = GraphDef { graph_type: GraphType::Bar, ..Default::default() };
+        let def = GraphDef {
+            graph_type: GraphType::Bar,
+            ..Default::default()
+        };
         let bytes = render_png(&def, &a(vec![5.0, 10.0, 3.0, 7.0, 2.0]));
         let img = image::load_from_memory(&bytes).expect("valid PNG");
         assert_eq!(img.width(), DEFAULT_WIDTH);
@@ -579,7 +685,10 @@ mod tests {
             GraphType::HLCO,
             GraphType::Mixed,
         ] {
-            let def = GraphDef { graph_type: t, ..Default::default() };
+            let def = GraphDef {
+                graph_type: t,
+                ..Default::default()
+            };
             let svg = render_svg(&def, &vals);
             assert!(svg.contains("<svg"), "{t:?} produced no SVG");
             let png = render_png(&def, &vals);

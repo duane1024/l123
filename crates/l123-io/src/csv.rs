@@ -52,10 +52,7 @@ mod tests {
     #[test]
     fn plain_numbers() {
         let got = parse("10,20,30\n40,50,60\n");
-        assert_eq!(got, vec![
-            vec!["10", "20", "30"],
-            vec!["40", "50", "60"],
-        ]);
+        assert_eq!(got, vec![vec!["10", "20", "30"], vec!["40", "50", "60"],]);
     }
 
     #[test]

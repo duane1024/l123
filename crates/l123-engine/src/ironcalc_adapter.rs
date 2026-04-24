@@ -23,8 +23,8 @@ pub struct IronCalcEngine {
 impl IronCalcEngine {
     /// Create a fresh, empty workbook with a single sheet.
     pub fn new() -> Result<Self> {
-        let model = Model::new_empty("workbook", "en", "UTC", "en")
-            .map_err(EngineError::Backend)?;
+        let model =
+            Model::new_empty("workbook", "en", "UTC", "en").map_err(EngineError::Backend)?;
         Ok(Self { model })
     }
 
@@ -57,7 +57,12 @@ impl Engine for IronCalcEngine {
         self.extend_sheets_to(addr.sheet)?;
         let sheet = self.sheet_index(addr.sheet);
         self.model
-            .set_user_input(sheet, Self::row_1based(addr), Self::col_1based(addr), input.to_string())
+            .set_user_input(
+                sheet,
+                Self::row_1based(addr),
+                Self::col_1based(addr),
+                input.to_string(),
+            )
             .map_err(EngineError::Backend)
     }
 
@@ -77,7 +82,11 @@ impl Engine for IronCalcEngine {
         };
         // Formula retrieval is optional for M0; attempted but non-fatal.
         let formula = self.model.get_cell_formula(sheet, row, col).ok().flatten();
-        Ok(CellView { value, formula, formatted: None })
+        Ok(CellView {
+            value,
+            formula,
+            formatted: None,
+        })
     }
 
     fn clear_cell(&mut self, addr: Address) -> Result<()> {
@@ -170,9 +179,9 @@ impl Engine for IronCalcEngine {
 
     fn define_name(&mut self, name: &str, range: Range) -> Result<()> {
         let r = range.normalized();
-        let sheet_name = self.sheet_name(r.start.sheet).ok_or_else(|| {
-            EngineError::BadAddress(format!("unknown sheet {:?}", r.start.sheet))
-        })?;
+        let sheet_name = self
+            .sheet_name(r.start.sheet)
+            .ok_or_else(|| EngineError::BadAddress(format!("unknown sheet {:?}", r.start.sheet)))?;
         let formula = format!(
             "{}!${}${}:${}${}",
             sheet_name,
@@ -202,16 +211,16 @@ impl Engine for IronCalcEngine {
     }
 
     fn save_xlsx(&self, path: &Path) -> Result<()> {
-        let path_str = path.to_str().ok_or_else(|| {
-            EngineError::Backend(format!("non-UTF8 path: {}", path.display()))
-        })?;
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| EngineError::Backend(format!("non-UTF8 path: {}", path.display())))?;
         save_to_xlsx(&self.model, path_str).map_err(|e| EngineError::Backend(e.to_string()))
     }
 
     fn load_xlsx(&mut self, path: &Path) -> Result<()> {
-        let path_str = path.to_str().ok_or_else(|| {
-            EngineError::Backend(format!("non-UTF8 path: {}", path.display()))
-        })?;
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| EngineError::Backend(format!("non-UTF8 path: {}", path.display())))?;
         let mut model = load_from_xlsx(path_str, "en", "UTC", "en")
             .map_err(|e| EngineError::Backend(e.to_string()))?;
         model.evaluate();
@@ -338,9 +347,12 @@ mod tests {
     fn set_numbers_and_formula_m0_smoke() {
         let mut e = IronCalcEngine::new().unwrap();
         // A1=1, A2=2, A3=+A1+A2 → expected A3=3 after recalc
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "1").unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 1), "2").unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 2), "=A1+A2").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "1")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "2")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 2), "=A1+A2")
+            .unwrap();
         e.recalc();
         let cv = e.get_cell(Address::new(SheetId::A, 0, 2)).unwrap();
         assert_eq!(cv.value, Value::Number(3.0));
@@ -350,7 +362,8 @@ mod tests {
     fn text_label() {
         let mut e = IronCalcEngine::new().unwrap();
         // '-prefixed means "force label"
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "'hello").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "'hello")
+            .unwrap();
         e.recalc();
         let cv = e.get_cell(Address::new(SheetId::A, 0, 0)).unwrap();
         assert_eq!(cv.value, Value::Text("hello".into()));
@@ -359,14 +372,17 @@ mod tests {
     #[test]
     fn named_range_can_be_defined_and_used_in_formula() {
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "10").unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 1), "20").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "10")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "20")
+            .unwrap();
         let r = Range {
             start: Address::new(SheetId::A, 0, 0),
             end: Address::new(SheetId::A, 0, 1),
         };
         e.define_name("revenue", r).unwrap();
-        e.set_user_input(Address::new(SheetId::A, 1, 0), "=SUM(revenue)").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 1, 0), "=SUM(revenue)")
+            .unwrap();
         e.recalc();
         assert_eq!(
             e.get_cell(Address::new(SheetId::A, 1, 0)).unwrap().value,
@@ -377,7 +393,8 @@ mod tests {
     #[test]
     fn delete_name_removes_it() {
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "42").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "42")
+            .unwrap();
         let r = Range::single(Address::new(SheetId::A, 0, 0));
         e.define_name("tax", r).unwrap();
         e.delete_name("tax").unwrap();
@@ -403,12 +420,16 @@ mod tests {
     #[test]
     fn insert_sheet_at_start_shifts_existing() {
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId(0), 0, 0), "42").unwrap();
+        e.set_user_input(Address::new(SheetId(0), 0, 0), "42")
+            .unwrap();
         let original_name = e.sheet_name(SheetId(0)).unwrap();
         e.insert_sheet_at(0).unwrap();
         assert_eq!(e.sheet_count(), 2);
         // The original sheet now sits at index 1; the value follows it.
-        assert_eq!(e.sheet_name(SheetId(1)).as_deref(), Some(original_name.as_str()));
+        assert_eq!(
+            e.sheet_name(SheetId(1)).as_deref(),
+            Some(original_name.as_str())
+        );
         assert_eq!(
             e.get_cell(Address::new(SheetId(1), 0, 0)).unwrap().value,
             Value::Number(42.0)
@@ -428,7 +449,8 @@ mod tests {
     #[test]
     fn insert_rows_shifts_data_down() {
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "42").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "42")
+            .unwrap();
         e.insert_rows(SheetId::A, 0, 1).unwrap();
         e.recalc();
         assert_eq!(
@@ -444,8 +466,10 @@ mod tests {
     #[test]
     fn delete_rows_shifts_data_up() {
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "A").unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 1), "B").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "A")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "B")
+            .unwrap();
         e.delete_rows(SheetId::A, 0, 1).unwrap();
         e.recalc();
         assert_eq!(
@@ -457,7 +481,8 @@ mod tests {
     #[test]
     fn insert_cols_shifts_data_right() {
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "7").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "7")
+            .unwrap();
         e.insert_cols(SheetId::A, 0, 1).unwrap();
         e.recalc();
         assert_eq!(
@@ -469,8 +494,10 @@ mod tests {
     #[test]
     fn clear_cell_removes_value_and_unreferences_formula() {
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "10").unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 1), "=A1*2").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "10")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "=A1*2")
+            .unwrap();
         e.recalc();
         assert_eq!(
             e.get_cell(Address::new(SheetId::A, 0, 1)).unwrap().value,
@@ -487,9 +514,11 @@ mod tests {
         let mut e = IronCalcEngine::new().unwrap();
         // Fill A1..A5 = 10,20,30,40,50  → C1 = SUM = 150
         for (row, n) in [(0, 10), (1, 20), (2, 30), (3, 40), (4, 50)] {
-            e.set_user_input(Address::new(SheetId::A, 0, row), &n.to_string()).unwrap();
+            e.set_user_input(Address::new(SheetId::A, 0, row), &n.to_string())
+                .unwrap();
         }
-        e.set_user_input(Address::new(SheetId::A, 2, 0), "=SUM(A1:A5)").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 2, 0), "=SUM(A1:A5)")
+            .unwrap();
         e.recalc();
         let cv = e.get_cell(Address::new(SheetId::A, 2, 0)).unwrap();
         assert_eq!(cv.value, Value::Number(150.0));
@@ -503,11 +532,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "l123_engine_colw_{}_{}",
-            process::id(),
-            nanos
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("l123_engine_colw_{}_{}", process::id(), nanos));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("colw.xlsx");
 
@@ -534,18 +560,17 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "l123_engine_rt_{}_{}",
-            process::id(),
-            nanos
-        ));
+        let dir = std::env::temp_dir().join(format!("l123_engine_rt_{}_{}", process::id(), nanos));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("rt.xlsx");
 
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "42").unwrap();
-        e.set_user_input(Address::new(SheetId::A, 1, 0), "'hello").unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 1), "=A1+10").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "42")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 1, 0), "'hello")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "=A1+10")
+            .unwrap();
         e.recalc();
         e.save_xlsx(&path).unwrap();
 

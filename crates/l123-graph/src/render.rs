@@ -107,7 +107,11 @@ fn render_bar(vals: &GraphValues, area: Rect, buf: &mut Buffer) {
         .copied()
         .filter(|v| v.is_finite())
         .fold(f64::NEG_INFINITY, f64::max);
-    let max = if max <= 0.0 || !max.is_finite() { 1.0 } else { max };
+    let max = if max <= 0.0 || !max.is_finite() {
+        1.0
+    } else {
+        max
+    };
 
     let bar_count = series.len() as u16;
     let plot_width = area.width;
@@ -173,10 +177,13 @@ fn render_line(vals: &GraphValues, area: Rect, buf: &mut Buffer) {
     if plot_height < 2 || series.is_empty() {
         return;
     }
-    let (min, max) = series.iter().copied().filter(|v| v.is_finite()).fold(
-        (f64::INFINITY, f64::NEG_INFINITY),
-        |(lo, hi), v| (lo.min(v), hi.max(v)),
-    );
+    let (min, max) = series
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
     let (min, max) = if !min.is_finite() || !max.is_finite() || min == max {
         (0.0, 1.0)
     } else {
@@ -217,7 +224,10 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let mut vals = GraphValues::default();
         vals.data[0] = Some(a);
-        let gdef = GraphDef { graph_type: def, ..Default::default() };
+        let gdef = GraphDef {
+            graph_type: def,
+            ..Default::default()
+        };
         render(&gdef, &vals, area, &mut buf);
         buf
     }
@@ -272,7 +282,10 @@ mod tests {
         let mut vals = GraphValues::default();
         vals.data[0] = Some(vec![1.0, 2.0, 3.0]);
         render(
-            &GraphDef { graph_type: GraphType::Bar, ..Default::default() },
+            &GraphDef {
+                graph_type: GraphType::Bar,
+                ..Default::default()
+            },
             &vals,
             area,
             &mut buf,
@@ -293,8 +306,16 @@ mod tests {
                 }
             }
         }
-        let small = heights.iter().filter(|&&h| h > 0).copied().min().unwrap_or(0);
+        let small = heights
+            .iter()
+            .filter(|&&h| h > 0)
+            .copied()
+            .min()
+            .unwrap_or(0);
         let big = heights.iter().copied().max().unwrap_or(0);
-        assert!(big > small, "bigger value should produce taller bar ({big} vs {small})");
+        assert!(
+            big > small,
+            "bigger value should produce taller bar ({big} vs {small})"
+        );
     }
 }

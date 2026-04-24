@@ -13,7 +13,7 @@ use std::io::Cursor;
 
 use plotters::prelude::*;
 
-use crate::icon_data::{ICON_BITMAPS, ICON_DESCRIPTIONS, BITMAP_DIM};
+use crate::icon_data::{BITMAP_DIM, ICON_BITMAPS, ICON_DESCRIPTIONS};
 
 /// Logical pixel size of one icon cell in the generated PNG. Ratatui-
 /// image downscales this to fit the terminal area.
@@ -37,7 +37,13 @@ pub enum Panel {
 
 impl Panel {
     pub const ORDER: [Panel; 7] = [
-        Panel::One, Panel::Two, Panel::Three, Panel::Four, Panel::Five, Panel::Six, Panel::Seven,
+        Panel::One,
+        Panel::Two,
+        Panel::Three,
+        Panel::Four,
+        Panel::Five,
+        Panel::Six,
+        Panel::Seven,
     ];
 
     /// 1-based panel number shown in the slot-16 navigator.
@@ -71,16 +77,22 @@ impl Panel {
             Panel::One => [5, 6, 67, 68, 69, 70, 9, 10, 57, 7, 8, 12, 13, 15, 23, 4],
 
             // Cursor + editing.
-            Panel::Two => [38, 39, 40, 41, 42, 43, 49, 50, 26, 27, 33, 34, 35, 36, 37, 4],
+            Panel::Two => [
+                38, 39, 40, 41, 42, 43, 49, 50, 26, 27, 33, 34, 35, 36, 37, 4,
+            ],
 
             // Format & WYSIWYG style.
-            Panel::Three => [12, 13, 15, 16, 14, 17, 18, 19, 20, 21, 22, 23, 24, 25, 44, 4],
+            Panel::Three => [
+                12, 13, 15, 16, 14, 17, 18, 19, 20, 21, 22, 23, 24, 25, 44, 4,
+            ],
 
             // Data & alignment.
             Panel::Four => [31, 32, 28, 29, 30, 51, 9, 45, 46, 47, 48, 62, 60, 61, 49, 4],
 
             // View, scroll, window.
-            Panel::Five => [65, 68, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 63, 64, 11, 4],
+            Panel::Five => [
+                65, 68, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 63, 64, 11, 4,
+            ],
 
             // Graph-focused.
             Panel::Six => [10, 57, 58, 9, 45, 46, 7, 8, 5, 6, 50, 49, 65, 44, 11, 4],
@@ -135,37 +147,37 @@ pub fn icon_action(id: u8) -> IconAction {
     use IconAction::*;
     use SysAction::*;
     match id {
-        4 => Noop,                    // Help (context help not wired)
-        5 => MenuPath("FS"),          // Save
-        6 => MenuPath("FR"),          // Retrieve
-        7 => MenuPath("PF"),          // Print file
+        4 => Noop,           // Help (context help not wired)
+        5 => MenuPath("FS"), // Save
+        6 => MenuPath("FR"), // Retrieve
+        7 => MenuPath("PF"), // Print file
         10 => SysKey(GraphView),
         11 => SysKey(Undo),
-        14 => MenuPath("RFR"),        // Clear formats → Range Format Reset
-        17 => MenuPath("RFC"),        // Currency
-        19 => MenuPath("RFP"),        // Percent
-        26 => MenuPath("C"),          // Copy
-        27 => MenuPath("M"),          // Move
-        28 => MenuPath("RLL"),        // Label Left
-        29 => MenuPath("RLC"),        // Label Center
-        30 => MenuPath("RLR"),        // Label Right
-        33 => MenuPath("RE"),         // Range Erase
-        34 => MenuPath("WIR"),        // Insert row
-        35 => MenuPath("WIC"),        // Insert column
-        36 => MenuPath("WDR"),        // Delete row
-        37 => MenuPath("WDC"),        // Delete column
+        14 => MenuPath("RFR"), // Clear formats → Range Format Reset
+        17 => MenuPath("RFC"), // Currency
+        19 => MenuPath("RFP"), // Percent
+        26 => MenuPath("C"),   // Copy
+        27 => MenuPath("M"),   // Move
+        28 => MenuPath("RLL"), // Label Left
+        29 => MenuPath("RLC"), // Label Center
+        30 => MenuPath("RLR"), // Label Right
+        33 => MenuPath("RE"),  // Range Erase
+        34 => MenuPath("WIR"), // Insert row
+        35 => MenuPath("WIC"), // Insert column
+        36 => MenuPath("WDR"), // Delete row
+        37 => MenuPath("WDC"), // Delete column
         38 => SysKey(Home),
         44 => SysKey(Recalc),
         49 => SysKey(Goto),
-        50 => MenuPath("RS"),         // Range Search
-        51 => MenuPath("DF"),         // Data Fill
+        50 => MenuPath("RS"), // Range Search
+        51 => MenuPath("DF"), // Data Fill
         58 => SysKey(GraphView),
         61 => SysKey(Edit),
-        66 => MenuPath("FN"),         // File New
-        67 => MenuPath("FOA"),        // File Open After
+        66 => MenuPath("FN"),  // File New
+        67 => MenuPath("FOA"), // File Open After
         69 => SysKey(NextSheet),
         70 => SysKey(PrevSheet),
-        71 => MenuPath("WISA"),       // Worksheet Insert Sheet After
+        71 => MenuPath("WISA"), // Worksheet Insert Sheet After
         // Everything else: Noop until the underlying feature lands.
         _ => Noop,
     }
@@ -193,6 +205,75 @@ const BG: RGBColor = RGBColor(0xC0, 0xC0, 0xC0);
 const INK: RGBColor = RGBColor(0x10, 0x10, 0x10);
 const ACCENT: RGBColor = RGBColor(0x00, 0x80, 0x80);
 
+/// Functional grouping used to tint each icon's ink. At terminal
+/// resolution the 24×24 mono shapes are too small to tell apart on
+/// their own, so we shade them by role (file ops, edit, format, …).
+/// Groups match 1-2-3's own menu structure where they cleanly can.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Category {
+    Nav,
+    File,
+    Edit,
+    Format,
+    Data,
+    View,
+    Macro,
+    Other,
+}
+
+impl Category {
+    /// Ink color used when painting icons of this category. Each is
+    /// chosen for contrast against the silver panel background and to
+    /// stay distinguishable even after the terminal downscales the
+    /// PNG to fit a 3-column strip.
+    pub fn ink(self) -> RGBColor {
+        match self {
+            Category::Nav => RGBColor(0x10, 0x30, 0xA0),
+            Category::File => RGBColor(0x00, 0x60, 0x20),
+            Category::Edit => RGBColor(0x90, 0x20, 0x10),
+            Category::Format => RGBColor(0x60, 0x10, 0x80),
+            Category::Data => RGBColor(0x00, 0x70, 0x70),
+            Category::View => RGBColor(0xB0, 0x50, 0x00),
+            Category::Macro => RGBColor(0x60, 0x40, 0x10),
+            Category::Other => INK,
+        }
+    }
+
+    /// Pale tint for the icon cell background. Without this, only ~4%
+    /// of each cell is inked, so at terminal resolution the category
+    /// color averages back to grey during image downscale. A distinct
+    /// tinted cell stays readable even when the mono detail blurs.
+    pub fn tint(self) -> RGBColor {
+        if matches!(self, Category::Other) {
+            return BG;
+        }
+        let ink = self.ink();
+        // 30% ink + 70% silver background.
+        blend(&ink, &BG, 0.30)
+    }
+}
+
+fn blend(fg: &RGBColor, bg: &RGBColor, fg_weight: f32) -> RGBColor {
+    let w = fg_weight.clamp(0.0, 1.0);
+    let mix = |a: u8, b: u8| ((a as f32) * w + (b as f32) * (1.0 - w)).round() as u8;
+    RGBColor(mix(fg.0, bg.0), mix(fg.1, bg.1), mix(fg.2, bg.2))
+}
+
+/// Category for each catalog icon ID. Unknown/user-defined IDs fall
+/// through to `Other` (ink black).
+pub fn icon_category(id: u8) -> Category {
+    match id {
+        11 | 26..=27 | 33..=37 | 61 | 63..=64 | 71..=72 => Category::Edit,
+        0..=3 | 38..=43 | 49 | 69..=70 | 73..=80 => Category::Nav,
+        5..=8 | 66..=67 => Category::File,
+        12..=25 | 28..=30 | 48 | 60 | 62 => Category::Format,
+        9 | 31..=32 | 45..=47 | 50..=51 => Category::Data,
+        10 | 57..=58 | 65 | 68 => Category::View,
+        52..=56 | 59 | 81 => Category::Macro,
+        _ => Category::Other,
+    }
+}
+
 pub fn render_panel_png(panel: Panel) -> Vec<u8> {
     let w = ICON_PANEL_WIDTH_PX;
     let h = ICON_PANEL_HEIGHT_PX;
@@ -204,18 +285,26 @@ pub fn render_panel_png(panel: Panel) -> Vec<u8> {
         let cells = root.split_evenly((CELLS_PER_PANEL as usize, 1));
         let ids = panel.icon_ids();
         for (slot, cell) in cells.iter().enumerate() {
-            // Subtle frame around each cell.
             let (cw, ch) = cell.dim_in_pixel();
+            if slot < 16 {
+                let id = ids[slot];
+                let cat = icon_category(id);
+                // Tint the cell so each category reads as a distinct
+                // color block even when the terminal downscale blurs
+                // away the 24×24 mono detail.
+                let _ = cell.draw(&Rectangle::new(
+                    [(1, 1), ((cw as i32) - 2, (ch as i32) - 2)],
+                    cat.tint().filled(),
+                ));
+                paint_bitmap(cell, &ICON_BITMAPS[id as usize], &cat.ink());
+            } else {
+                draw_pager(cell, panel);
+            }
+            // Frame drawn last so the tint never leaks over the border.
             let _ = cell.draw(&Rectangle::new(
                 [(0, 0), ((cw as i32) - 1, (ch as i32) - 1)],
                 INK.stroke_width(1),
             ));
-            if slot < 16 {
-                let id = ids[slot] as usize;
-                paint_bitmap(cell, &ICON_BITMAPS[id]);
-            } else {
-                draw_pager(cell, panel);
-            }
         }
         let _ = root.present();
     }
@@ -234,7 +323,7 @@ pub fn render_panel_png(panel: Panel) -> Vec<u8> {
 /// bitmap stores one bit per pixel, MSB-first; bit value 0 = ink.
 /// The last row of every catalog bitmap is a solid black separator
 /// row that we crop out, rendering only rows 0..23 (top 23).
-fn paint_bitmap<DB>(cell: &DrawingArea<DB, plotters::coord::Shift>, bits: &[u8; 72])
+fn paint_bitmap<DB>(cell: &DrawingArea<DB, plotters::coord::Shift>, bits: &[u8; 72], ink: &RGBColor)
 where
     DB: DrawingBackend,
     DB::ErrorType: 'static,
@@ -264,7 +353,7 @@ where
                 let y0 = off_y + y * scale;
                 let _ = cell.draw(&Rectangle::new(
                     [(x0, y0), (x0 + scale - 1, y0 + scale - 1)],
-                    INK.filled(),
+                    ink.filled(),
                 ));
             }
         }
@@ -395,8 +484,54 @@ mod tests {
     }
 
     #[test]
+    fn icon_category_spot_check() {
+        assert_eq!(icon_category(0), Category::Nav);
+        assert_eq!(icon_category(5), Category::File);
+        assert_eq!(icon_category(9), Category::Data);
+        assert_eq!(icon_category(10), Category::View);
+        assert_eq!(icon_category(12), Category::Format);
+        assert_eq!(icon_category(26), Category::Edit);
+        assert_eq!(icon_category(52), Category::Macro);
+        assert_eq!(icon_category(4), Category::Other);
+        assert_eq!(icon_category(44), Category::Other);
+        assert_eq!(icon_category(200), Category::Other);
+    }
+
+    #[test]
+    fn category_inks_are_all_distinct() {
+        let cats = [
+            Category::Nav,
+            Category::File,
+            Category::Edit,
+            Category::Format,
+            Category::Data,
+            Category::View,
+            Category::Macro,
+            Category::Other,
+        ];
+        for (i, a) in cats.iter().enumerate() {
+            for b in &cats[i + 1..] {
+                assert_ne!(a.ink(), b.ink(), "{a:?} and {b:?} share ink color");
+            }
+        }
+    }
+
+    #[test]
+    fn every_catalog_id_maps_to_a_category() {
+        // No-op: just ensures the match is total and panics aren't
+        // possible on any u8. Also useful as a guard if new IDs are
+        // added and we forget to categorize them.
+        for id in 0u8..=104 {
+            let _ = icon_category(id);
+        }
+    }
+
+    #[test]
     fn pager_description_includes_current_number() {
         let d = slot_description(Panel::Three, 16);
-        assert!(d.contains('3'), "pager description should mention number: {d}");
+        assert!(
+            d.contains('3'),
+            "pager description should mention number: {d}"
+        );
     }
 }

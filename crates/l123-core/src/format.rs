@@ -12,16 +12,16 @@ pub enum FormatKind {
     General,
     PlusMinus,
     Percent,
-    DateDmy,          // D1: DD-MMM-YY
-    DateDm,           // D2: DD-MMM
-    DateMy,           // D3: MMM-YY
-    DateLongIntl,     // D4
-    DateShortIntl,    // D5
-    TimeHmsAmPm,      // D6
-    TimeHmAmPm,       // D7
-    TimeLongIntl,     // D8
-    TimeShortIntl,    // D9
-    Text,             // Show formula, not value
+    DateDmy,       // D1: DD-MMM-YY
+    DateDm,        // D2: DD-MMM
+    DateMy,        // D3: MMM-YY
+    DateLongIntl,  // D4
+    DateShortIntl, // D5
+    TimeHmsAmPm,   // D6
+    TimeHmAmPm,    // D7
+    TimeLongIntl,  // D8
+    TimeShortIntl, // D9
+    Text,          // Show formula, not value
     Hidden,
     Automatic,
     LabelOnly,
@@ -37,20 +37,38 @@ pub struct Format {
 }
 
 impl Format {
-    pub const GENERAL: Format = Format { kind: FormatKind::General, decimals: 0 };
-    pub const RESET: Format = Format { kind: FormatKind::Reset, decimals: 0 };
+    pub const GENERAL: Format = Format {
+        kind: FormatKind::General,
+        decimals: 0,
+    };
+    pub const RESET: Format = Format {
+        kind: FormatKind::Reset,
+        decimals: 0,
+    };
 
     pub fn fixed(d: u8) -> Self {
-        Self { kind: FormatKind::Fixed, decimals: d.min(15) }
+        Self {
+            kind: FormatKind::Fixed,
+            decimals: d.min(15),
+        }
     }
     pub fn currency(d: u8) -> Self {
-        Self { kind: FormatKind::Currency, decimals: d.min(15) }
+        Self {
+            kind: FormatKind::Currency,
+            decimals: d.min(15),
+        }
     }
     pub fn percent(d: u8) -> Self {
-        Self { kind: FormatKind::Percent, decimals: d.min(15) }
+        Self {
+            kind: FormatKind::Percent,
+            decimals: d.min(15),
+        }
     }
     pub fn comma(d: u8) -> Self {
-        Self { kind: FormatKind::Comma, decimals: d.min(15) }
+        Self {
+            kind: FormatKind::Comma,
+            decimals: d.min(15),
+        }
     }
 
     /// Tag as shown in parentheses on control-panel line 1.
@@ -127,8 +145,8 @@ pub fn format_number(n: f64, format: Format) -> String {
         General | Reset | Automatic => crate::contents::format_number_general(n),
         // Date/Time/Text/Hidden/Label — display the underlying number
         // until later milestones teach the formatter about those.
-        DateDmy | DateDm | DateMy | DateLongIntl | DateShortIntl | TimeHmsAmPm
-        | TimeHmAmPm | TimeLongIntl | TimeShortIntl | Text | Hidden | LabelOnly => {
+        DateDmy | DateDm | DateMy | DateLongIntl | DateShortIntl | TimeHmsAmPm | TimeHmAmPm
+        | TimeLongIntl | TimeShortIntl | Text | Hidden | LabelOnly => {
             crate::contents::format_number_general(n)
         }
     }
@@ -207,17 +225,52 @@ mod format_number_tests {
 
     #[test]
     fn scientific_uses_e_notation() {
-        assert_eq!(format_number(1234.5, Format { kind: FormatKind::Scientific, decimals: 2 }), "1.23e3");
+        assert_eq!(
+            format_number(
+                1234.5,
+                Format {
+                    kind: FormatKind::Scientific,
+                    decimals: 2
+                }
+            ),
+            "1.23e3"
+        );
     }
 
     #[test]
     fn plus_minus_bar_draws_bars() {
-        assert_eq!(format_number(3.0, Format { kind: FormatKind::PlusMinus, decimals: 0 }), "+++");
-        assert_eq!(format_number(-2.0, Format { kind: FormatKind::PlusMinus, decimals: 0 }), "--");
-        assert_eq!(format_number(0.0, Format { kind: FormatKind::PlusMinus, decimals: 0 }), "");
+        assert_eq!(
+            format_number(
+                3.0,
+                Format {
+                    kind: FormatKind::PlusMinus,
+                    decimals: 0
+                }
+            ),
+            "+++"
+        );
+        assert_eq!(
+            format_number(
+                -2.0,
+                Format {
+                    kind: FormatKind::PlusMinus,
+                    decimals: 0
+                }
+            ),
+            "--"
+        );
+        assert_eq!(
+            format_number(
+                0.0,
+                Format {
+                    kind: FormatKind::PlusMinus,
+                    decimals: 0
+                }
+            ),
+            ""
+        );
     }
 }
-
 
 #[cfg(test)]
 mod tests {

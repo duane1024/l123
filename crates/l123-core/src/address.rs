@@ -45,7 +45,11 @@ pub struct Address {
 }
 
 impl Address {
-    pub const A1: Address = Address { sheet: SheetId::A, col: 0, row: 0 };
+    pub const A1: Address = Address {
+        sheet: SheetId::A,
+        col: 0,
+        row: 0,
+    };
 
     pub fn new(sheet: SheetId, col: u16, row: u32) -> Self {
         Self { sheet, col, row }
@@ -53,7 +57,12 @@ impl Address {
 
     /// Render as `A:A1` form (1-2-3 style, 1-based row).
     pub fn display_full(&self) -> String {
-        format!("{}:{}{}", self.sheet, col_to_letters(self.col), self.row + 1)
+        format!(
+            "{}:{}{}",
+            self.sheet,
+            col_to_letters(self.col),
+            self.row + 1
+        )
     }
 
     /// Render as `A1` form without sheet prefix.
@@ -67,7 +76,11 @@ impl Address {
         if c < 0 || c >= MAX_COLS as i32 || r < 0 || r >= MAX_ROWS as i32 {
             return None;
         }
-        Some(Address { sheet: self.sheet, col: c as u16, row: r as u32 })
+        Some(Address {
+            sheet: self.sheet,
+            col: c as u16,
+            row: r as u32,
+        })
     }
 
     /// Parse `A:B5` or `B5` (no sheet prefix → sheet A).
@@ -126,8 +139,16 @@ impl Range {
         let (c1, c2) = ord(self.start.col, self.end.col);
         let (r1, r2) = ord(self.start.row, self.end.row);
         Range {
-            start: Address { sheet: SheetId(s1), col: c1, row: r1 },
-            end: Address { sheet: SheetId(s2), col: c2, row: r2 },
+            start: Address {
+                sheet: SheetId(s1),
+                col: c1,
+                row: r1,
+            },
+            end: Address {
+                sheet: SheetId(s2),
+                col: c2,
+                row: r2,
+            },
         }
     }
 
@@ -219,11 +240,19 @@ mod tests {
 
     #[test]
     fn address_display() {
-        let a = Address { sheet: SheetId(0), col: 1, row: 4 };
+        let a = Address {
+            sheet: SheetId(0),
+            col: 1,
+            row: 4,
+        };
         assert_eq!(a.display_full(), "A:B5");
         assert_eq!(a.display_short(), "B5");
 
-        let b = Address { sheet: SheetId(2), col: 27, row: 0 };
+        let b = Address {
+            sheet: SheetId(2),
+            col: 27,
+            row: 0,
+        };
         assert_eq!(b.display_full(), "C:AB1");
     }
 
@@ -232,7 +261,9 @@ mod tests {
         let a = Address::A1;
         assert_eq!(a.shifted(1, 1).unwrap(), Address::new(SheetId::A, 1, 1));
         assert!(a.shifted(-1, 0).is_none());
-        assert!(Address::new(SheetId::A, MAX_COLS - 1, 0).shifted(1, 0).is_none());
+        assert!(Address::new(SheetId::A, MAX_COLS - 1, 0)
+            .shifted(1, 0)
+            .is_none());
     }
 
     #[test]
@@ -263,7 +294,11 @@ mod tests {
         assert_eq!(Address::parse("A1").unwrap(), Address::A1);
         assert_eq!(
             Address::parse("B5").unwrap(),
-            Address { sheet: SheetId(0), col: 1, row: 4 }
+            Address {
+                sheet: SheetId(0),
+                col: 1,
+                row: 4
+            }
         );
     }
 
@@ -271,11 +306,19 @@ mod tests {
     fn parse_with_sheet() {
         assert_eq!(
             Address::parse("A:A1").unwrap(),
-            Address { sheet: SheetId(0), col: 0, row: 0 }
+            Address {
+                sheet: SheetId(0),
+                col: 0,
+                row: 0
+            }
         );
         assert_eq!(
             Address::parse("C:AB100").unwrap(),
-            Address { sheet: SheetId(2), col: 27, row: 99 }
+            Address {
+                sheet: SheetId(2),
+                col: 27,
+                row: 99
+            }
         );
     }
 

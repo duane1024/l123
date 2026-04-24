@@ -20,6 +20,16 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use l123_core::{
+    address::col_to_letters, label::is_value_starter, render_label, render_value_in_cell, Address,
+    CellContents, ErrKind, Format, FormatKind, LabelPrefix, Mode, Range, SheetId, Value,
+};
+use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
+use l123_graph::{GraphDef, GraphType, Series};
+use l123_menu::{self as menu, Action, MenuBody, MenuItem};
+use l123_print::{
+    encode::lp::LpOptions, PrintContentMode, PrintFormatMode, PrintSettings, WorkbookView,
+};
 use ratatui::{
     backend::CrosstermBackend,
     buffer::Buffer,
@@ -29,17 +39,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
     Terminal,
 };
-use l123_core::{
-    address::col_to_letters, label::is_value_starter, render_label, render_value_in_cell, Address,
-    CellContents, ErrKind, Format, FormatKind, LabelPrefix, Mode, Range, SheetId, Value,
-};
-use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
-use l123_graph::{GraphDef, GraphType, Series};
 use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
-use l123_menu::{self as menu, Action, MenuBody, MenuItem};
-use l123_print::{
-    encode::lp::LpOptions, PrintContentMode, PrintFormatMode, PrintSettings, WorkbookView,
-};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
@@ -168,7 +168,10 @@ impl WorkbookView for Workbook {
     }
 
     fn format_for_cell(&self, addr: Address) -> Format {
-        self.cell_formats.get(&addr).copied().unwrap_or(Format::GENERAL)
+        self.cell_formats
+            .get(&addr)
+            .copied()
+            .unwrap_or(Format::GENERAL)
     }
 }
 
@@ -260,6 +263,12 @@ pub struct App {
     /// clicks can hit-test against it without recomputing the layout.
     /// Cleared at the top of each frame; re-set by `render_icon_panel`.
     icon_panel_area: Cell<Option<Rect>>,
+    /// Rect the spreadsheet grid last occupied on screen. Cursor moves
+    /// happen between renders, so `scroll_into_view` reads this stale
+    /// rect to decide whether the new pointer fits below/right of the
+    /// visible window. Cleared at the top of each frame; re-set by
+    /// `render_grid`.
+    last_grid_area: Cell<Option<Rect>>,
     /// Startup welcome screen. `Some` while the splash is up; any
     /// keypress consumes the state and drops to READY without
     /// dispatching. Always `None` for `App::new()` so existing
@@ -493,7 +502,9 @@ struct PromptState {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum PromptNext {
     /// Then go to POINT and apply `Format { kind, decimals: <buffer> }`.
-    RangeFormat { kind: FormatKind },
+    RangeFormat {
+        kind: FormatKind,
+    },
     /// Set the current column's width to the buffered number.
     WorksheetColumnSetWidth,
     /// After the user types a width, enter POINT to pick the range of
@@ -516,7 +527,9 @@ enum PromptNext {
     FileRetrieveFilename,
     /// After the user types a filename, enter POINT to pick the range
     /// to extract with the given kind (Formulas or Values).
-    FileXtractFilename { kind: XtractKind },
+    FileXtractFilename {
+        kind: XtractKind,
+    },
     /// After the user types a filename, parse it as CSV and paint the
     /// values into cells starting at the pointer.
     FileImportNumbersFilename,
@@ -527,7 +540,9 @@ enum PromptNext {
     /// second active file. `before` controls whether the new file
     /// takes the current slot (and the old one is stashed ahead) or
     /// is appended after the current one.
-    FileOpenFilename { before: bool },
+    FileOpenFilename {
+        before: bool,
+    },
     /// After the user types a print destination path, start a
     /// [`PrintSession`] and descend into the `/PF` submenu.
     PrintFileFilename,
@@ -545,7 +560,10 @@ enum PromptNext {
     PrintFilePgLength,
     /// After the user types the search string, open the Find|Replace
     /// submenu. `scope` and `range` were captured earlier.
-    RangeSearchString { scope: SearchScope, range: Range },
+    RangeSearchString {
+        scope: SearchScope,
+        range: Range,
+    },
     /// After the user types the replacement string, apply it to all
     /// matches in the active [`SearchSession`].
     RangeSearchReplacement,
@@ -608,9 +626,7 @@ impl PromptNext {
             | PromptNext::GraphSaveFilename => is_path_char(c),
             // Header and footer are free-form text with the `|`
             // separator carving them into L|C|R.
-            PromptNext::PrintFileHeader | PromptNext::PrintFileFooter => {
-                c != '\n' && c != '\t'
-            }
+            PromptNext::PrintFileHeader | PromptNext::PrintFileFooter => c != '\n' && c != '\t',
             // Search / replacement strings are free text.
             PromptNext::RangeSearchString { .. } | PromptNext::RangeSearchReplacement => {
                 c != '\n' && c != '\t'
@@ -628,8 +644,7 @@ impl PromptNext {
 /// narrower than 1-2-3's "anything goes" — we exclude keys with menu
 /// semantics (`/`, period-free submenus). `/` is fine; `.` is fine.
 fn is_path_char(c: char) -> bool {
-    c.is_ascii_alphanumeric()
-        || matches!(c, '.' | '-' | '_' | '/' | '\\' | ' ' | '~')
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/' | '\\' | ' ' | '~')
 }
 
 /// Resolve a user-typed filename into a save-target path. If the input
@@ -804,32 +819,48 @@ struct PointState {
 enum PendingCommand {
     RangeErase,
     CopyFrom,
-    CopyTo { source: Range },
+    CopyTo {
+        source: Range,
+    },
     MoveFrom,
-    MoveTo { source: Range },
-    RangeLabel { new_prefix: LabelPrefix },
-    RangeFormat { format: Format },
+    MoveTo {
+        source: Range,
+    },
+    RangeLabel {
+        new_prefix: LabelPrefix,
+    },
+    RangeFormat {
+        format: Format,
+    },
     /// `pending_name` on App carries the name; on commit, define it over
     /// the selected range.
     RangeNameCreate,
     /// `pending_xtract_path` on App carries the destination path; on
     /// commit, extract the selected range into a new workbook file.
-    FileXtractRange { kind: XtractKind },
+    FileXtractRange {
+        kind: XtractKind,
+    },
     /// The user is choosing the print range for the active
     /// [`PrintSession`]. On commit the range is stashed and the
     /// `/PF` submenu reopens.
     PrintFileRange,
     /// POINT step of `/Range Search`: on commit, prompt for the
     /// search string.
-    RangeSearchRange { scope: SearchScope },
+    RangeSearchRange {
+        scope: SearchScope,
+    },
     /// POINT step of `/Graph X` and `/Graph A`..`F`: on commit, the
     /// selected range is written into the named slot of the workbook's
     /// current graph and the menu returns to READY.
-    GraphSeries { series: Series },
+    GraphSeries {
+        series: Series,
+    },
     /// POINT step of `/Worksheet Column Column-Range Set-Width`. The
     /// width was captured from the prompt; on commit, apply it to every
     /// column in the selected range.
-    ColumnRangeSetWidth { width: u8 },
+    ColumnRangeSetWidth {
+        width: u8,
+    },
     /// POINT step of `/Worksheet Column Column-Range Reset-Width`. On
     /// commit, clear width overrides for every column in the selected
     /// range.
@@ -883,7 +914,12 @@ struct MenuState {
 
 impl MenuState {
     fn fresh() -> Self {
-        Self { path: Vec::new(), highlight: 0, message: None, override_root: None }
+        Self {
+            path: Vec::new(),
+            highlight: 0,
+            message: None,
+            override_root: None,
+        }
     }
 
     /// New menu rooted at a specific submenu rather than the global
@@ -942,6 +978,7 @@ impl App {
             icon_panel: None,
             current_panel: l123_graph::Panel::One,
             icon_panel_area: Cell::new(None),
+            last_grid_area: Cell::new(None),
             splash: None,
         }
     }
@@ -1021,7 +1058,11 @@ impl App {
         let result = app.event_loop(&mut terminal);
 
         disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
         terminal.show_cursor()?;
 
         result
@@ -1074,9 +1115,10 @@ impl App {
         let mut entries: Vec<(&Address, &CellContents)> = self.wb().cells.iter().collect();
         entries.sort_by_key(|(a, _)| (a.sheet, a.row, a.col));
         entries.into_iter().find_map(|(addr, cc)| match cc {
-            CellContents::Formula { cached_value: Some(Value::Error(ErrKind::Circular)), .. } => {
-                Some(*addr)
-            }
+            CellContents::Formula {
+                cached_value: Some(Value::Error(ErrKind::Circular)),
+                ..
+            } => Some(*addr),
             _ => None,
         })
     }
@@ -1270,7 +1312,10 @@ impl App {
             .get(&pointer)
             .map(|c| c.source_form())
             .unwrap_or_default();
-        self.entry = Some(Entry { kind: EntryKind::Edit, buffer: source });
+        self.entry = Some(Entry {
+            kind: EntryKind::Edit,
+            buffer: source,
+        });
         self.mode = Mode::Edit;
     }
 
@@ -1317,13 +1362,19 @@ impl App {
 
     fn begin_entry(&mut self, c: char) {
         if is_value_starter(c) {
-            self.entry = Some(Entry { kind: EntryKind::Value, buffer: c.to_string() });
+            self.entry = Some(Entry {
+                kind: EntryKind::Value,
+                buffer: c.to_string(),
+            });
             self.mode = Mode::Value;
         } else if matches!(c, '\'' | '"' | '^' | '\\' | '|') {
             // Explicit label prefix typed first: the char becomes the
             // LabelPrefix; the buffer starts empty.
             let prefix = LabelPrefix::from_char(c).expect("matched above");
-            self.entry = Some(Entry { kind: EntryKind::Label(prefix), buffer: String::new() });
+            self.entry = Some(Entry {
+                kind: EntryKind::Label(prefix),
+                buffer: String::new(),
+            });
             self.mode = Mode::Label;
         } else {
             // Any other non-value-starter: default `'` prefix auto-inserted;
@@ -1354,16 +1405,20 @@ impl App {
             });
         }
         let mut contents = match entry.kind {
-            EntryKind::Label(prefix) => CellContents::Label { prefix, text: entry.buffer },
+            EntryKind::Label(prefix) => CellContents::Label {
+                prefix,
+                text: entry.buffer,
+            },
             EntryKind::Value => match entry.buffer.parse::<f64>() {
                 Ok(n) => CellContents::Constant(Value::Number(n)),
-                Err(_) => CellContents::Formula { expr: entry.buffer, cached_value: None },
+                Err(_) => CellContents::Formula {
+                    expr: entry.buffer,
+                    cached_value: None,
+                },
             },
             // EDIT commits re-parse the full source buffer so the user can
             // change prefix or type (label ↔ value) via the first-char rule.
-            EntryKind::Edit => {
-                CellContents::from_source(&entry.buffer, self.default_label_prefix)
-            }
+            EntryKind::Edit => CellContents::from_source(&entry.buffer, self.default_label_prefix),
         };
         self.push_to_engine(&contents);
         match self.recalc_mode {
@@ -1413,7 +1468,9 @@ impl App {
     /// Pop the most recent journal entry and replay its inverse.
     /// No-op when the journal is empty.
     fn undo(&mut self) {
-        let Some(entry) = self.wb_mut().journal.pop() else { return };
+        let Some(entry) = self.wb_mut().journal.pop() else {
+            return;
+        };
         self.apply_undo(entry);
         self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
@@ -1421,7 +1478,11 @@ impl App {
 
     fn apply_undo(&mut self, entry: JournalEntry) {
         match entry {
-            JournalEntry::CellEdit { addr, prev_contents, prev_format } => {
+            JournalEntry::CellEdit {
+                addr,
+                prev_contents,
+                prev_format,
+            } => {
                 match prev_contents {
                     Some(c) => {
                         self.push_to_engine_at(addr, &c);
@@ -1441,7 +1502,12 @@ impl App {
                     }
                 }
             }
-            JournalEntry::RowDelete { sheet, at, cells, formats } => {
+            JournalEntry::RowDelete {
+                sheet,
+                at,
+                cells,
+                formats,
+            } => {
                 if self.wb_mut().engine.insert_rows(sheet, at, 1).is_ok() {
                     shift_cells_rows(&mut self.wb_mut().cells, sheet, at, 1);
                     for (addr, contents) in cells {
@@ -1464,7 +1530,12 @@ impl App {
                     shift_cells_rows(&mut self.wb_mut().cells, sheet, at + 1, -1);
                 }
             }
-            JournalEntry::ColDelete { sheet, at, cells, formats } => {
+            JournalEntry::ColDelete {
+                sheet,
+                at,
+                cells,
+                formats,
+            } => {
                 if self.wb_mut().engine.insert_cols(sheet, at, 1).is_ok() {
                     shift_cells_cols(&mut self.wb_mut().cells, sheet, at, 1);
                     for (addr, contents) in cells {
@@ -1508,7 +1579,11 @@ impl App {
                     }
                 }
             }
-            JournalEntry::ColWidth { sheet, col, prev_width } => {
+            JournalEntry::ColWidth {
+                sheet,
+                col,
+                prev_width,
+            } => {
                 let key = (sheet, col);
                 match prev_width {
                     Some(w) => {
@@ -1519,7 +1594,11 @@ impl App {
                     }
                 }
             }
-            JournalEntry::ColHidden { sheet, col, prev_hidden } => {
+            JournalEntry::ColHidden {
+                sheet,
+                col,
+                prev_hidden,
+            } => {
                 let key = (sheet, col);
                 if prev_hidden {
                     self.wb_mut().hidden_cols.insert(key);
@@ -1606,7 +1685,36 @@ impl App {
     /// picker reports a non-halfblocks protocol, also pre-decode the
     /// v3.1 WYSIWYG icon panel PNG so it's ready at first draw.
     pub fn probe_image_picker(&mut self) {
-        self.image_picker = Picker::from_query_stdio().ok();
+        let mut picker = Picker::from_query_stdio().ok();
+
+        // iTerm2-family hosts need the OSC 1337 "Iterm2" protocol, but
+        // `Picker::from_query_stdio` can steer us away from it in two
+        // ways: (1) when font-size detection fails, the library drops
+        // to Halfblocks and discards its own iTerm2 env hint; (2)
+        // iTerm2 3.5+ advertises partial Kitty graphics support, so
+        // Kitty wins the stdio probe — but iTerm2 doesn't implement
+        // the Unicode-placeholder variant ratatui-image renders with,
+        // so nothing actually draws. Mirror the WezTerm/Konsole
+        // treatment already in upstream and force Iterm2 in both
+        // cases. Sixel is left alone: when iTerm2 users turn it on,
+        // it genuinely works.
+        let needs_iterm2_override = picker.as_ref().is_none_or(|p| {
+            matches!(
+                p.protocol_type(),
+                ProtocolType::Halfblocks | ProtocolType::Kitty,
+            )
+        });
+        if needs_iterm2_override {
+            let term_program = std::env::var("TERM_PROGRAM").ok();
+            let lc_terminal = std::env::var("LC_TERMINAL").ok();
+            if is_iterm2_compatible_env(term_program.as_deref(), lc_terminal.as_deref()) {
+                let mut p = picker.take().unwrap_or_else(Picker::halfblocks);
+                p.set_protocol_type(ProtocolType::Iterm2);
+                picker = Some(p);
+            }
+        }
+
+        self.image_picker = picker;
         if self.picker_is_graphical() {
             self.refresh_icon_panel();
         }
@@ -1674,7 +1782,11 @@ impl App {
         let mut out = Vec::new();
         for col in n.start.col..=n.end.col {
             for row in n.start.row..=n.end.row {
-                let addr = Address { sheet: n.start.sheet, col, row };
+                let addr = Address {
+                    sheet: n.start.sheet,
+                    col,
+                    row,
+                };
                 let v = match self.wb().engine.get_cell(addr) {
                     Ok(cv) => match cv.value {
                         Value::Number(f) => f,
@@ -1733,15 +1845,24 @@ impl App {
     }
 
     fn descend_highlighted(&mut self) {
-        let Some(state) = self.menu.as_ref() else { return };
-        let Some(item) = state.highlighted() else { return };
+        let Some(state) = self.menu.as_ref() else {
+            return;
+        };
+        let Some(item) = state.highlighted() else {
+            return;
+        };
         self.descend_into(item);
     }
 
     fn descend_by_letter(&mut self, c: char) {
-        let Some(state) = self.menu.as_ref() else { return };
+        let Some(state) = self.menu.as_ref() else {
+            return;
+        };
         let level = state.level();
-        let item = level.iter().find(|m| m.letter.eq_ignore_ascii_case(&c)).copied();
+        let item = level
+            .iter()
+            .find(|m| m.letter.eq_ignore_ascii_case(&c))
+            .copied();
         if let Some(item) = item {
             self.descend_into(&item);
         }
@@ -1835,29 +1956,26 @@ impl App {
             Action::WorksheetGlobalLabelLeft => {
                 self.set_default_label_prefix(LabelPrefix::Apostrophe)
             }
-            Action::WorksheetGlobalLabelRight => {
-                self.set_default_label_prefix(LabelPrefix::Quote)
+            Action::WorksheetGlobalLabelRight => self.set_default_label_prefix(LabelPrefix::Quote),
+            Action::WorksheetGlobalLabelCenter => self.set_default_label_prefix(LabelPrefix::Caret),
+            Action::RangeNameCreate => {
+                self.start_name_prompt("Enter name:", PromptNext::RangeNameCreate)
             }
-            Action::WorksheetGlobalLabelCenter => {
-                self.set_default_label_prefix(LabelPrefix::Caret)
+            Action::RangeNameDelete => {
+                self.start_name_prompt("Enter name to delete:", PromptNext::RangeNameDelete)
             }
-            Action::RangeNameCreate => self.start_name_prompt(
-                "Enter name:",
-                PromptNext::RangeNameCreate,
-            ),
-            Action::RangeNameDelete => self.start_name_prompt(
-                "Enter name to delete:",
-                PromptNext::RangeNameDelete,
-            ),
             Action::RangeErase => self.begin_point(PendingCommand::RangeErase),
             Action::Copy => self.begin_point(PendingCommand::CopyFrom),
             Action::Move => self.begin_point(PendingCommand::MoveFrom),
-            Action::RangeLabelLeft => self
-                .begin_point(PendingCommand::RangeLabel { new_prefix: LabelPrefix::Apostrophe }),
-            Action::RangeLabelRight => self
-                .begin_point(PendingCommand::RangeLabel { new_prefix: LabelPrefix::Quote }),
-            Action::RangeLabelCenter => self
-                .begin_point(PendingCommand::RangeLabel { new_prefix: LabelPrefix::Caret }),
+            Action::RangeLabelLeft => self.begin_point(PendingCommand::RangeLabel {
+                new_prefix: LabelPrefix::Apostrophe,
+            }),
+            Action::RangeLabelRight => self.begin_point(PendingCommand::RangeLabel {
+                new_prefix: LabelPrefix::Quote,
+            }),
+            Action::RangeLabelCenter => self.begin_point(PendingCommand::RangeLabel {
+                new_prefix: LabelPrefix::Caret,
+            }),
             Action::RangeFormatFixed => self.start_decimals_prompt(FormatKind::Fixed),
             Action::RangeFormatScientific => self.start_decimals_prompt(FormatKind::Scientific),
             Action::RangeFormatCurrency => self.start_decimals_prompt(FormatKind::Currency),
@@ -1870,22 +1988,40 @@ impl App {
                 format: Format::RESET,
             }),
             Action::RangeFormatText => self.begin_point(PendingCommand::RangeFormat {
-                format: Format { kind: FormatKind::Text, decimals: 0 },
+                format: Format {
+                    kind: FormatKind::Text,
+                    decimals: 0,
+                },
             }),
             Action::RangeFormatDateDmy => self.begin_point(PendingCommand::RangeFormat {
-                format: Format { kind: FormatKind::DateDmy, decimals: 0 },
+                format: Format {
+                    kind: FormatKind::DateDmy,
+                    decimals: 0,
+                },
             }),
             Action::RangeFormatDateDm => self.begin_point(PendingCommand::RangeFormat {
-                format: Format { kind: FormatKind::DateDm, decimals: 0 },
+                format: Format {
+                    kind: FormatKind::DateDm,
+                    decimals: 0,
+                },
             }),
             Action::RangeFormatDateMy => self.begin_point(PendingCommand::RangeFormat {
-                format: Format { kind: FormatKind::DateMy, decimals: 0 },
+                format: Format {
+                    kind: FormatKind::DateMy,
+                    decimals: 0,
+                },
             }),
             Action::RangeFormatDateLongIntl => self.begin_point(PendingCommand::RangeFormat {
-                format: Format { kind: FormatKind::DateLongIntl, decimals: 0 },
+                format: Format {
+                    kind: FormatKind::DateLongIntl,
+                    decimals: 0,
+                },
             }),
             Action::RangeFormatDateShortIntl => self.begin_point(PendingCommand::RangeFormat {
-                format: Format { kind: FormatKind::DateShortIntl, decimals: 0 },
+                format: Format {
+                    kind: FormatKind::DateShortIntl,
+                    decimals: 0,
+                },
             }),
             Action::FileSave => self.start_file_save_prompt(),
             Action::FileRetrieve => self.start_file_retrieve_prompt(),
@@ -1943,21 +2079,15 @@ impl App {
             Action::PrintFileOptionsPgLength => {
                 self.start_print_pg_length_prompt();
             }
-            Action::RangeSearchFormulas => {
-                self.begin_point(PendingCommand::RangeSearchRange {
-                    scope: SearchScope::Formulas,
-                })
-            }
-            Action::RangeSearchLabels => {
-                self.begin_point(PendingCommand::RangeSearchRange {
-                    scope: SearchScope::Labels,
-                })
-            }
-            Action::RangeSearchBoth => {
-                self.begin_point(PendingCommand::RangeSearchRange {
-                    scope: SearchScope::Both,
-                })
-            }
+            Action::RangeSearchFormulas => self.begin_point(PendingCommand::RangeSearchRange {
+                scope: SearchScope::Formulas,
+            }),
+            Action::RangeSearchLabels => self.begin_point(PendingCommand::RangeSearchRange {
+                scope: SearchScope::Labels,
+            }),
+            Action::RangeSearchBoth => self.begin_point(PendingCommand::RangeSearchRange {
+                scope: SearchScope::Both,
+            }),
             Action::RangeSearchFind => self.execute_range_search_find(),
             Action::RangeSearchReplace => self.start_range_search_replace_prompt(),
             Action::FileDir => self.start_file_dir_prompt(),
@@ -2023,7 +2153,9 @@ impl App {
     }
 
     fn handle_key_file_list(&mut self, k: KeyEvent) {
-        let Some(fl) = self.file_list.as_mut() else { return };
+        let Some(fl) = self.file_list.as_mut() else {
+            return;
+        };
         match k.code {
             KeyCode::Esc => {
                 self.file_list = None;
@@ -2046,8 +2178,7 @@ impl App {
             }
             KeyCode::PageDown => {
                 if !fl.entries.is_empty() {
-                    fl.highlight = (fl.highlight + FILE_LIST_PAGE_SIZE)
-                        .min(fl.entries.len() - 1);
+                    fl.highlight = (fl.highlight + FILE_LIST_PAGE_SIZE).min(fl.entries.len() - 1);
                 }
             }
             KeyCode::Home => fl.highlight = 0,
@@ -2057,7 +2188,9 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                let Some(fl) = self.file_list.take() else { return };
+                let Some(fl) = self.file_list.take() else {
+                    return;
+                };
                 match fl.kind {
                     FileListKind::Worksheet => {
                         if let Some(path) = fl.entries.get(fl.highlight).cloned() {
@@ -2451,11 +2584,8 @@ impl App {
                 if field.is_empty() {
                     continue;
                 }
-                let addr = Address::new(
-                    origin.sheet,
-                    origin.col + dc as u16,
-                    origin.row + dr as u32,
-                );
+                let addr =
+                    Address::new(origin.sheet, origin.col + dc as u16, origin.row + dr as u32);
                 let (contents, engine_input) = match field.parse::<f64>() {
                     Ok(n) => (
                         CellContents::Constant(Value::Number(n)),
@@ -2561,7 +2691,9 @@ impl App {
 
     /// Handle a keystroke while the Cancel/Replace/Backup confirm is up.
     fn handle_key_save_confirm(&mut self, k: KeyEvent) {
-        let Some(sc) = self.save_confirm.as_mut() else { return };
+        let Some(sc) = self.save_confirm.as_mut() else {
+            return;
+        };
         match k.code {
             KeyCode::Esc => {
                 self.save_confirm = None;
@@ -2657,20 +2789,26 @@ impl App {
             // Capture the cells and formats about to be destroyed so
             // Alt-F4 can reinstate them. Only the first `n` rows on
             // this sheet are captured; deletion is always 1 for M5.
-            let captured_cells: Vec<(Address, CellContents)> = self.wb_mut().cells
+            let captured_cells: Vec<(Address, CellContents)> = self
+                .wb_mut()
+                .cells
                 .iter()
                 .filter(|(a, _)| a.sheet == sheet && a.row >= at && a.row < at + n)
                 .map(|(a, c)| (*a, c.clone()))
                 .collect();
-            let captured_formats: Vec<(Address, Format)> = self.wb_mut().cell_formats
+            let captured_formats: Vec<(Address, Format)> = self
+                .wb_mut()
+                .cell_formats
                 .iter()
                 .filter(|(a, _)| a.sheet == sheet && a.row >= at && a.row < at + n)
                 .map(|(a, f)| (*a, *f))
                 .collect();
             if self.wb_mut().engine.delete_rows(sheet, at, n).is_ok() {
-                self.wb_mut().cells
+                self.wb_mut()
+                    .cells
                     .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
-                self.wb_mut().cell_formats
+                self.wb_mut()
+                    .cell_formats
                     .retain(|a, _| !(a.sheet == sheet && a.row >= at && a.row < at + n));
                 shift_cells_rows(&mut self.wb_mut().cells, sheet, at + n, -(n as i64));
                 batch.push(JournalEntry::RowDelete {
@@ -2768,7 +2906,10 @@ impl App {
 
     fn begin_point(&mut self, pending: PendingCommand) {
         self.menu = None;
-        self.point = Some(PointState { anchor: Some(self.wb().pointer), pending });
+        self.point = Some(PointState {
+            anchor: Some(self.wb().pointer),
+            pending,
+        });
         self.mode = Mode::Point;
     }
 
@@ -2781,7 +2922,11 @@ impl App {
     /// this collapses to the pointer's cell.
     fn highlight_range(&self) -> Range {
         match self.point.as_ref().and_then(|p| p.anchor) {
-            Some(anchor) => Range { start: anchor, end: self.wb().pointer }.normalized(),
+            Some(anchor) => Range {
+                start: anchor,
+                end: self.wb().pointer,
+            }
+            .normalized(),
             None => Range::single(self.wb().pointer),
         }
     }
@@ -2808,7 +2953,9 @@ impl App {
     /// Esc during POINT: first press unanchors (pointer moves free); second
     /// press cancels the pending command back to READY.
     fn esc_in_point(&mut self) {
-        let Some(ps) = self.point.as_mut() else { return };
+        let Some(ps) = self.point.as_mut() else {
+            return;
+        };
         if ps.anchor.is_some() {
             ps.anchor = None;
         } else {
@@ -2861,7 +3008,11 @@ impl App {
             return;
         };
         let range = match ps.anchor {
-            Some(a) => Range { start: a, end: self.wb_mut().pointer }.normalized(),
+            Some(a) => Range {
+                start: a,
+                end: self.wb_mut().pointer,
+            }
+            .normalized(),
             None => Range::single(self.wb_mut().pointer),
         };
         match ps.pending {
@@ -2869,8 +3020,12 @@ impl App {
                 self.execute_range_erase(range);
                 self.mode = Mode::Ready;
             }
-            PendingCommand::CopyFrom => self.transition_point(PendingCommand::CopyTo { source: range }),
-            PendingCommand::MoveFrom => self.transition_point(PendingCommand::MoveTo { source: range }),
+            PendingCommand::CopyFrom => {
+                self.transition_point(PendingCommand::CopyTo { source: range })
+            }
+            PendingCommand::MoveFrom => {
+                self.transition_point(PendingCommand::MoveTo { source: range })
+            }
             PendingCommand::CopyTo { source } => {
                 // Destination anchor is the pointer's current position,
                 // regardless of how the TO range was painted — for M3
@@ -3023,7 +3178,9 @@ impl App {
         for row in r.start.row..=r.end.row {
             for col in r.start.col..=r.end.col {
                 let addr = Address::new(r.start.sheet, col, row);
-                let Some(contents) = self.wb().cells.get(&addr) else { continue };
+                let Some(contents) = self.wb().cells.get(&addr) else {
+                    continue;
+                };
                 let matched = match (session.scope, contents) {
                     (SearchScope::Formulas, CellContents::Formula { expr, .. }) => {
                         expr.contains(needle)
@@ -3034,9 +3191,7 @@ impl App {
                     (SearchScope::Both, CellContents::Formula { expr, .. }) => {
                         expr.contains(needle)
                     }
-                    (SearchScope::Both, CellContents::Label { text, .. }) => {
-                        text.contains(needle)
-                    }
+                    (SearchScope::Both, CellContents::Label { text, .. }) => text.contains(needle),
                     _ => false,
                 };
                 if matched {
@@ -3167,7 +3322,11 @@ impl App {
             if prev.is_some() {
                 self.wb_mut().col_widths.remove(&key);
             }
-            batch.push(JournalEntry::ColWidth { sheet, col, prev_width: prev });
+            batch.push(JournalEntry::ColWidth {
+                sheet,
+                col,
+                prev_width: prev,
+            });
         }
         self.push_journal_batch(batch);
         self.close_menu();
@@ -3190,7 +3349,11 @@ impl App {
                 } else {
                     self.wb_mut().hidden_cols.remove(&key);
                 }
-                batch.push(JournalEntry::ColHidden { sheet, col, prev_hidden });
+                batch.push(JournalEntry::ColHidden {
+                    sheet,
+                    col,
+                    prev_hidden,
+                });
             }
         }
         self.push_journal_batch(batch);
@@ -3216,7 +3379,11 @@ impl App {
                         self.wb_mut().col_widths.remove(&key);
                     }
                 }
-                batch.push(JournalEntry::ColWidth { sheet, col, prev_width: prev });
+                batch.push(JournalEntry::ColWidth {
+                    sheet,
+                    col,
+                    prev_width: prev,
+                });
             }
         }
         self.push_journal_batch(batch);
@@ -3305,7 +3472,11 @@ impl App {
                     } else {
                         self.wb_mut().col_widths.insert(key, width);
                     }
-                    batch.push(JournalEntry::ColWidth { sheet, col, prev_width: prev });
+                    batch.push(JournalEntry::ColWidth {
+                        sheet,
+                        col,
+                        prev_width: prev,
+                    });
                 }
                 self.push_journal_batch(batch);
                 self.mode = Mode::Ready;
@@ -3484,7 +3655,9 @@ impl App {
         let needle = session.search;
         let mut batch: Vec<JournalEntry> = Vec::new();
         for addr in matches {
-            let Some(contents) = self.wb().cells.get(&addr).cloned() else { continue };
+            let Some(contents) = self.wb().cells.get(&addr).cloned() else {
+                continue;
+            };
             let (new_contents, prev_contents, prev_format) = match contents {
                 CellContents::Formula { expr, cached_value } => {
                     let new_expr = expr.replace(&needle, &replacement);
@@ -3493,23 +3666,36 @@ impl App {
                         cached_value: cached_value.clone(),
                     };
                     (
-                        CellContents::Formula { expr: new_expr, cached_value: None },
+                        CellContents::Formula {
+                            expr: new_expr,
+                            cached_value: None,
+                        },
                         Some(prev),
                         self.wb().cell_formats.get(&addr).copied(),
                     )
                 }
                 CellContents::Label { prefix, text } => {
                     let new_text = text.replace(&needle, &replacement);
-                    let prev = CellContents::Label { prefix, text: text.clone() };
+                    let prev = CellContents::Label {
+                        prefix,
+                        text: text.clone(),
+                    };
                     (
-                        CellContents::Label { prefix, text: new_text },
+                        CellContents::Label {
+                            prefix,
+                            text: new_text,
+                        },
                         Some(prev),
                         self.wb().cell_formats.get(&addr).copied(),
                     )
                 }
                 _ => continue,
             };
-            batch.push(JournalEntry::CellEdit { addr, prev_contents, prev_format });
+            batch.push(JournalEntry::CellEdit {
+                addr,
+                prev_contents,
+                prev_format,
+            });
             self.push_to_engine_at(addr, &new_contents);
             self.wb_mut().cells.insert(addr, new_contents);
         }
@@ -3555,7 +3741,8 @@ impl App {
         for row in r.start.row..=r.end.row {
             for col in r.start.col..=r.end.col {
                 let addr = Address::new(r.start.sheet, col, row);
-                if let Some(CellContents::Label { prefix, .. }) = self.wb_mut().cells.get_mut(&addr) {
+                if let Some(CellContents::Label { prefix, .. }) = self.wb_mut().cells.get_mut(&addr)
+                {
                     *prefix = new_prefix;
                 }
             }
@@ -3649,10 +3836,13 @@ impl App {
     fn push_to_engine_at(&mut self, addr: Address, contents: &CellContents) {
         let result = match contents {
             CellContents::Empty => self.wb_mut().engine.clear_cell(addr),
-            CellContents::Label { text, .. } => {
-                self.wb_mut().engine.set_user_input(addr, &format!("'{text}"))
-            }
-            CellContents::Constant(Value::Number(n)) => self.wb_mut().engine
+            CellContents::Label { text, .. } => self
+                .wb_mut()
+                .engine
+                .set_user_input(addr, &format!("'{text}")),
+            CellContents::Constant(Value::Number(n)) => self
+                .wb_mut()
+                .engine
                 .set_user_input(addr, &l123_core::format_number_general(*n)),
             CellContents::Constant(Value::Text(s)) => {
                 self.wb_mut().engine.set_user_input(addr, &format!("'{s}"))
@@ -3778,10 +3968,13 @@ impl App {
         let addr = self.wb_mut().pointer;
         let result = match contents {
             CellContents::Empty => self.wb_mut().engine.clear_cell(addr),
-            CellContents::Label { text, .. } => {
-                self.wb_mut().engine.set_user_input(addr, &format!("'{text}"))
-            }
-            CellContents::Constant(Value::Number(n)) => self.wb_mut().engine
+            CellContents::Label { text, .. } => self
+                .wb_mut()
+                .engine
+                .set_user_input(addr, &format!("'{text}")),
+            CellContents::Constant(Value::Number(n)) => self
+                .wb_mut()
+                .engine
                 .set_user_input(addr, &l123_core::format_number_general(*n)),
             CellContents::Constant(Value::Text(s)) => {
                 self.wb_mut().engine.set_user_input(addr, &format!("'{s}"))
@@ -3803,13 +3996,19 @@ impl App {
     /// Walk every `Formula` cell and re-read its computed value from the
     /// engine.  Called after every recalc.
     fn refresh_formula_caches(&mut self) {
-        let formula_addrs: Vec<Address> = self.wb_mut().cells
+        let formula_addrs: Vec<Address> = self
+            .wb_mut()
+            .cells
             .iter()
             .filter_map(|(addr, c)| matches!(c, CellContents::Formula { .. }).then_some(*addr))
             .collect();
         for addr in formula_addrs {
-            let Ok(view) = self.wb_mut().engine.get_cell(addr) else { continue };
-            if let Some(CellContents::Formula { cached_value, .. }) = self.wb_mut().cells.get_mut(&addr) {
+            let Ok(view) = self.wb_mut().engine.get_cell(addr) else {
+                continue;
+            };
+            if let Some(CellContents::Formula { cached_value, .. }) =
+                self.wb_mut().cells.get_mut(&addr)
+            {
                 *cached_value = Some(view.value);
             }
         }
@@ -3828,6 +4027,67 @@ impl App {
         }
         if self.wb_mut().pointer.row < self.wb_mut().viewport_row_offset {
             self.wb_mut().viewport_row_offset = self.wb_mut().pointer.row;
+        }
+
+        // Down/right scroll requires viewport dimensions, which only
+        // the renderer knows. We use the previous frame's grid rect —
+        // the user always sees a frame before pressing a key, so the
+        // cached value is correct in steady state. If no grid has been
+        // rendered yet, leave the offsets alone; A1 is in view by
+        // construction.
+        let Some(area) = self.last_grid_area.get() else {
+            return;
+        };
+        if area.width <= ROW_GUTTER || area.height < 2 {
+            return;
+        }
+        let content_width = area.width - ROW_GUTTER;
+        let visible_rows = (area.height - 1) as u32;
+
+        let pointer_row = self.wb().pointer.row;
+        if pointer_row >= self.wb().viewport_row_offset + visible_rows {
+            self.wb_mut().viewport_row_offset = pointer_row - visible_rows + 1;
+        }
+
+        let sheet = self.wb().pointer.sheet;
+        let pointer_col = self.wb().pointer.col;
+        if !self.wb().hidden_cols.contains(&(sheet, pointer_col)) {
+            let actual_w = self.col_width_of(sheet, pointer_col) as u16;
+            let layout = self.visible_column_layout(content_width);
+            let fully_visible = layout
+                .iter()
+                .any(|&(c, _, drawn)| c == pointer_col && drawn == actual_w);
+            if !fully_visible {
+                self.wb_mut().viewport_col_offset =
+                    self.ideal_left_for_rightmost(pointer_col, content_width);
+            }
+        }
+    }
+
+    /// Walk leftward from `target_col`, summing visible-column widths,
+    /// and return the leftmost column that still leaves room for the
+    /// target on the right edge. If `target_col`'s own width exceeds
+    /// `content_width`, returns `target_col` so at least its left side
+    /// is shown.
+    fn ideal_left_for_rightmost(&self, target_col: u16, content_width: u16) -> u16 {
+        let sheet = self.wb().pointer.sheet;
+        let mut total: u16 = 0;
+        let mut col = target_col;
+        loop {
+            if !self.wb().hidden_cols.contains(&(sheet, col)) {
+                let w = self.col_width_of(sheet, col) as u16;
+                if w > 0 {
+                    let new_total = total.saturating_add(w);
+                    if new_total > content_width && col != target_col {
+                        return col + 1;
+                    }
+                    total = new_total;
+                }
+            }
+            if col == 0 {
+                return 0;
+            }
+            col -= 1;
         }
     }
 
@@ -3853,6 +4113,9 @@ impl App {
         // Clear last frame's stashed icon-panel rect. render_icon_panel
         // re-sets it iff it actually draws the panel this frame.
         self.icon_panel_area.set(None);
+        // Same pattern for the grid rect — render_grid re-sets it when
+        // a grid is actually drawn (not during overlays).
+        self.last_grid_area.set(None);
 
         self.render_control_panel(chunks[0], buf);
         // Split the middle area horizontally when the v3.1 WYSIWYG icon
@@ -3931,18 +4194,37 @@ impl App {
             return;
         }
 
-        let licensing_x = area.x + 4;
-        let licensing_w = area.width.saturating_sub(8);
+        const USER_LABEL: &str = "User name:     ";
+        const ORG_LABEL: &str = "Organization:  ";
+        const FOOTER: [&str; 3] = [
+            "Use, duplication, or sale of this product, except as described",
+            "in the project's license agreement, is strictly prohibited.",
+            "Violators may be prosecuted.",
+        ];
+        const HEADING: &str = "LICENSING INFORMATION:";
+
+        // Width of the license block is the longest line it contains:
+        // rows and footer anchor the left edge so the labels and legal
+        // text read as a single centered column.
+        let user_w = USER_LABEL.len() + info.user.chars().count();
+        let org_w = ORG_LABEL.len() + info.organization.chars().count();
+        let footer_w = FOOTER.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+        let content_w = [HEADING.chars().count(), user_w, org_w, footer_w]
+            .into_iter()
+            .max()
+            .unwrap_or(0) as u16;
+        let block_w = content_w.min(area.width.saturating_sub(4));
+        let block_x = area.x + area.width.saturating_sub(block_w) / 2;
 
         let heading = Paragraph::new(Line::from(Span::styled(
-            "LICENSING INFORMATION:",
+            HEADING,
             Style::default()
                 .bg(TEAL)
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )))
         .alignment(ratatui::layout::Alignment::Center);
-        heading.render(Rect::new(licensing_x, licensing_y, licensing_w, 1), buf);
+        heading.render(Rect::new(block_x, licensing_y, block_w, 1), buf);
 
         let label_style = Style::default().bg(TEAL).fg(BLACK);
         let value_style = Style::default()
@@ -3951,18 +4233,16 @@ impl App {
             .add_modifier(Modifier::BOLD);
         let rows = [
             Line::from(vec![
-                Span::styled("User name:     ", label_style),
+                Span::styled(USER_LABEL, label_style),
                 Span::styled(info.user.clone(), value_style),
             ]),
             Line::from(vec![
-                Span::styled("Organization:  ", label_style),
+                Span::styled(ORG_LABEL, label_style),
                 Span::styled(info.organization.clone(), value_style),
             ]),
         ];
-        Paragraph::new(rows.to_vec()).render(
-            Rect::new(licensing_x, licensing_y + 2, licensing_w, 2),
-            buf,
-        );
+        Paragraph::new(rows.to_vec())
+            .render(Rect::new(block_x, licensing_y + 2, block_w, 2), buf);
 
         // Bottom legal notice, in black on teal to match the 1-2-3
         // R3.4a welcome screen. Rendered only when there is room
@@ -3971,17 +4251,9 @@ impl App {
         if footer_y + 3 >= area.y + area.height {
             return;
         }
-        let footer = Paragraph::new(vec![
-            Line::from(
-                "Use, duplication, or sale of this product, except as described",
-            ),
-            Line::from(
-                "in the project's license agreement, is strictly prohibited.",
-            ),
-            Line::from("Violators may be prosecuted."),
-        ])
-        .style(Style::default().bg(TEAL).fg(BLACK));
-        footer.render(Rect::new(licensing_x, footer_y, licensing_w, 3), buf);
+        let footer = Paragraph::new(FOOTER.iter().map(|s| Line::from(*s)).collect::<Vec<_>>())
+            .style(Style::default().bg(TEAL).fg(BLACK));
+        footer.render(Rect::new(block_x, footer_y, block_w, 3), buf);
     }
 
     /// The v3.1 manual shows the icon panel occupying the right edge
@@ -4026,8 +4298,12 @@ impl App {
 
     /// Mouse handler. For now, only the icon panel is clickable.
     pub fn handle_mouse(&mut self, m: MouseEvent) {
-        let MouseEventKind::Down(MouseButton::Left) = m.kind else { return };
-        let Some(area) = self.icon_panel_area.get() else { return };
+        let MouseEventKind::Down(MouseButton::Left) = m.kind else {
+            return;
+        };
+        let Some(area) = self.icon_panel_area.get() else {
+            return;
+        };
         if m.column < area.x
             || m.column >= area.x + area.width
             || m.row < area.y
@@ -4146,7 +4422,11 @@ impl App {
         // display). Lower band: the environment readout.
         let band = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(6), Constraint::Length(1), Constraint::Min(1)])
+            .constraints([
+                Constraint::Length(6),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ])
             .split(outer_inner);
         let split = Layout::default()
             .direction(Direction::Horizontal)
@@ -4277,12 +4557,16 @@ impl App {
             )
         };
         let mode_str = self.mode.indicator();
-        let pad = (area.width as usize)
-            .saturating_sub(left.chars().count() + mode_str.len() + 1);
+        let pad = (area.width as usize).saturating_sub(left.chars().count() + mode_str.len() + 1);
         let line1 = Line::from(vec![
             Span::raw(left),
             Span::raw(" ".repeat(pad)),
-            Span::styled(mode_str, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                mode_str,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" "),
         ]);
 
@@ -4348,7 +4632,9 @@ impl App {
     /// file name and, when available, its size (in bytes). Highlighted
     /// row is reverse-video.
     fn render_file_list_overlay(&self, area: Rect, buf: &mut Buffer) {
-        let Some(fl) = self.file_list.as_ref() else { return };
+        let Some(fl) = self.file_list.as_ref() else {
+            return;
+        };
         let width = area.width as usize;
         let rows = area.height as usize;
         if rows == 0 || width == 0 {
@@ -4359,13 +4645,7 @@ impl App {
         let name_col_width = width.saturating_sub(size_col_width + 3);
 
         // Header row.
-        let header = format_file_list_row(
-            "NAME",
-            "SIZE",
-            name_col_width,
-            size_col_width,
-            width,
-        );
+        let header = format_file_list_row("NAME", "SIZE", name_col_width, size_col_width, width);
         set_line(buf, area.x, area.y, &header, area.width, Style::default());
 
         if fl.entries.is_empty() {
@@ -4396,13 +4676,7 @@ impl App {
             let size = std::fs::metadata(path)
                 .map(|m| format_size(m.len()))
                 .unwrap_or_default();
-            let row = format_file_list_row(
-                &name,
-                &size,
-                name_col_width,
-                size_col_width,
-                width,
-            );
+            let row = format_file_list_row(&name, &size, name_col_width, size_col_width, width);
             let style = if idx == fl.highlight {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
@@ -4502,7 +4776,8 @@ impl App {
     }
 
     fn cell_readout_for_line1(&self) -> String {
-        self.wb().cells
+        self.wb()
+            .cells
             .get(&self.wb().pointer)
             .map(|c| c.control_panel_readout())
             .unwrap_or_default()
@@ -4512,11 +4787,12 @@ impl App {
     /// cell. Empty for labels, empty cells, or cells using `Reset` format.
     fn format_tag_for_line1(&self) -> String {
         match self.wb().cells.get(&self.wb().pointer) {
-            Some(CellContents::Constant(Value::Number(_)))
-            | Some(CellContents::Formula { .. }) => match self.format_for_cell(self.wb().pointer).tag() {
-                Some(s) => format!("({s})"),
-                None => String::new(),
-            },
+            Some(CellContents::Constant(Value::Number(_))) | Some(CellContents::Formula { .. }) => {
+                match self.format_for_cell(self.wb().pointer).tag() {
+                    Some(s) => format!("({s})"),
+                    None => String::new(),
+                }
+            }
             _ => String::new(),
         }
     }
@@ -4524,7 +4800,8 @@ impl App {
     /// Resolve the format for a given cell — the per-cell override if set,
     /// else General.
     fn format_for_cell(&self, addr: Address) -> Format {
-        self.wb().cell_formats
+        self.wb()
+            .cell_formats
             .get(&addr)
             .copied()
             .unwrap_or(Format::GENERAL)
@@ -4583,6 +4860,7 @@ impl App {
     }
 
     fn render_grid(&self, area: Rect, buf: &mut Buffer) {
+        self.last_grid_area.set(Some(area));
         if area.width <= ROW_GUTTER || area.height < 2 {
             return;
         }
@@ -4681,8 +4959,7 @@ impl App {
         } else {
             format!("{indicator_str}  {hint}")
         };
-        let pad = (area.width as usize)
-            .saturating_sub(left.len() + right_chunk.len() + 1);
+        let pad = (area.width as usize).saturating_sub(left.len() + right_chunk.len() + 1);
         let line = format!("{left}{}{right_chunk} ", " ".repeat(pad));
         for (i, ch) in line.chars().enumerate().take(area.width as usize) {
             buf[(area.x + i as u16, area.y)]
@@ -4748,8 +5025,7 @@ fn shift_sheets_from(
             a
         }
     };
-    let mut affected: Vec<Address> =
-        cells.keys().filter(|a| a.sheet.0 >= at).copied().collect();
+    let mut affected: Vec<Address> = cells.keys().filter(|a| a.sheet.0 >= at).copied().collect();
     affected.sort_by_key(|a| std::cmp::Reverse(a.sheet.0));
     for addr in affected {
         let contents = cells.remove(&addr).expect("present");
@@ -4765,12 +5041,15 @@ fn shift_sheets_from(
         let f = cell_formats.remove(&addr).expect("present");
         cell_formats.insert(shift_addr(addr), f);
     }
-    let mut cw_affected: Vec<(SheetId, u16)> =
-        col_widths.keys().filter(|(s, _)| s.0 >= at).copied().collect();
+    let mut cw_affected: Vec<(SheetId, u16)> = col_widths
+        .keys()
+        .filter(|(s, _)| s.0 >= at)
+        .copied()
+        .collect();
     cw_affected.sort_by_key(|(s, _)| std::cmp::Reverse(s.0));
     for key in cw_affected {
         let w = col_widths.remove(&key).expect("present");
-        col_widths.insert((SheetId(key.0.0 + delta), key.1), w);
+        col_widths.insert((SheetId(key.0 .0 + delta), key.1), w);
     }
 }
 
@@ -4833,18 +5112,52 @@ fn draw_cell_contents(
             Some(s) => s,
             None => return,
         },
-        CellContents::Formula { cached_value: Some(v), .. } => {
-            match render_value_in_cell(v, w, format) {
-                Some(s) => s,
-                None => return,
-            }
-        }
+        CellContents::Formula {
+            cached_value: Some(v),
+            ..
+        } => match render_value_in_cell(v, w, format) {
+            Some(s) => s,
+            None => return,
+        },
         // Unevaluated formula: leave blank.
-        CellContents::Formula { cached_value: None, .. } => return,
+        CellContents::Formula {
+            cached_value: None, ..
+        } => return,
     };
     for (i, ch) in rendered.chars().enumerate().take(w) {
         buf[(x + i as u16, y)].set_char(ch).set_style(style);
     }
+}
+
+/// Mirrors ratatui-image's own `iterm2_from_env` list of hosts that
+/// speak the OSC 1337 inline-image protocol. We re-check the same
+/// environment in [`App::probe_image_picker`] as a workaround for a
+/// quirk in `Picker::from_query_stdio`: when the font-size probe
+/// fails (common in iTerm2), the library drops back to a default
+/// Halfblocks picker and discards its own iTerm2 env hint.
+fn is_iterm2_compatible_env(term_program: Option<&str>, lc_terminal: Option<&str>) -> bool {
+    const HINTS: &[&str] = &[
+        "iTerm",
+        "WezTerm",
+        "mintty",
+        "vscode",
+        "Tabby",
+        "Hyper",
+        "rio",
+        "Bobcat",
+        "WarpTerminal",
+    ];
+    if let Some(tp) = term_program {
+        if HINTS.iter().any(|h| tp.contains(h)) {
+            return true;
+        }
+    }
+    if let Some(lc) = lc_terminal {
+        if lc.contains("iTerm") {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -4879,6 +5192,56 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(app.wb().pointer, Address::A1);
+    }
+
+    #[test]
+    fn down_past_visible_area_advances_row_offset() {
+        let mut app = App::new();
+        // Render an 80x25 frame so scroll_into_view has a cached
+        // grid rect to consult on the next move.
+        let _ = app.render_to_buffer(80, 25);
+        for _ in 0..25 {
+            app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        assert_eq!(app.wb().pointer.row, 25);
+        assert!(
+            app.wb().viewport_row_offset > 0,
+            "viewport_row_offset should advance to keep pointer visible, got 0",
+        );
+        assert!(
+            app.wb().pointer.row >= app.wb().viewport_row_offset,
+            "pointer must be at or below the new top of viewport",
+        );
+    }
+
+    #[test]
+    fn right_past_visible_area_advances_col_offset() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        for _ in 0..12 {
+            app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        }
+        assert_eq!(app.wb().pointer.col, 12);
+        assert!(
+            app.wb().viewport_col_offset > 0,
+            "viewport_col_offset should advance to keep pointer visible, got 0",
+        );
+    }
+
+    #[test]
+    fn up_after_scroll_pulls_viewport_back() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        for _ in 0..30 {
+            app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        assert!(app.wb().viewport_row_offset > 0);
+        // Press UP enough to drop above the current viewport top.
+        for _ in 0..30 {
+            app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        }
+        assert_eq!(app.wb().pointer.row, 0);
+        assert_eq!(app.wb().viewport_row_offset, 0);
     }
 
     #[test]
@@ -4924,7 +5287,10 @@ mod tests {
     }
 
     fn make_label(text: &str) -> CellContents {
-        CellContents::Label { prefix: LabelPrefix::Apostrophe, text: text.into() }
+        CellContents::Label {
+            prefix: LabelPrefix::Apostrophe,
+            text: text.into(),
+        }
     }
 
     fn press(app: &mut App, code: KeyCode) {
@@ -4943,7 +5309,10 @@ mod tests {
         assert_eq!(app.mode, Mode::Point);
         let anchor = app.point.as_ref().unwrap().anchor.unwrap();
         assert_eq!(anchor, Address::new(SheetId::A, 1, 1));
-        assert_eq!(app.highlight_range(), Range::single(Address::new(SheetId::A, 1, 1)));
+        assert_eq!(
+            app.highlight_range(),
+            Range::single(Address::new(SheetId::A, 1, 1))
+        );
     }
 
     #[test]
@@ -4998,7 +5367,7 @@ mod tests {
         // which the code treats as "BR → BL", moving pointer to BL (A2).
         press_ch(&mut app, '.');
         assert_eq!(app.wb().pointer, Address::new(SheetId::A, 0, 1)); // BL
-        // Range unchanged.
+                                                                      // Range unchanged.
         assert_eq!(app.highlight_range(), before);
         // Next `.` from BL → TL.
         press_ch(&mut app, '.');
@@ -5034,7 +5403,9 @@ mod tests {
         assert_eq!(app.mode, Mode::Ready);
         for row in 0..3 {
             assert!(
-                !app.wb().cells.contains_key(&Address::new(SheetId::A, 0, row)),
+                !app.wb()
+                    .cells
+                    .contains_key(&Address::new(SheetId::A, 0, row)),
                 "A{} should be empty",
                 row + 1
             );
@@ -5049,9 +5420,18 @@ mod tests {
         cells.insert(Address::new(SheetId::A, 0, 2), make_label("r2"));
         // Insert 1 row at row 1 — r1 and r2 move down by 1.
         shift_cells_rows(&mut cells, SheetId::A, 1, 1);
-        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 0)), Some(&make_label("r0")));
-        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 2)), Some(&make_label("r1")));
-        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 3)), Some(&make_label("r2")));
+        assert_eq!(
+            cells.get(&Address::new(SheetId::A, 0, 0)),
+            Some(&make_label("r0"))
+        );
+        assert_eq!(
+            cells.get(&Address::new(SheetId::A, 0, 2)),
+            Some(&make_label("r1"))
+        );
+        assert_eq!(
+            cells.get(&Address::new(SheetId::A, 0, 3)),
+            Some(&make_label("r2"))
+        );
         assert!(!cells.contains_key(&Address::new(SheetId::A, 0, 1)));
     }
 
@@ -5062,8 +5442,14 @@ mod tests {
         cells.insert(Address::new(SheetId::A, 0, 2), make_label("r2"));
         // Simulate delete of row 1: remove it (already absent here) then pull.
         shift_cells_rows(&mut cells, SheetId::A, 2, -1);
-        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 0)), Some(&make_label("r0")));
-        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 1)), Some(&make_label("r2")));
+        assert_eq!(
+            cells.get(&Address::new(SheetId::A, 0, 0)),
+            Some(&make_label("r0"))
+        );
+        assert_eq!(
+            cells.get(&Address::new(SheetId::A, 0, 1)),
+            Some(&make_label("r2"))
+        );
     }
 
     #[test]
@@ -5072,8 +5458,14 @@ mod tests {
         cells.insert(Address::new(SheetId::A, 0, 0), make_label("A1"));
         cells.insert(Address::new(SheetId::A, 1, 0), make_label("B1"));
         shift_cells_cols(&mut cells, SheetId::A, 1, 1);
-        assert_eq!(cells.get(&Address::new(SheetId::A, 0, 0)), Some(&make_label("A1")));
-        assert_eq!(cells.get(&Address::new(SheetId::A, 2, 0)), Some(&make_label("B1")));
+        assert_eq!(
+            cells.get(&Address::new(SheetId::A, 0, 0)),
+            Some(&make_label("A1"))
+        );
+        assert_eq!(
+            cells.get(&Address::new(SheetId::A, 2, 0)),
+            Some(&make_label("B1"))
+        );
         assert!(!cells.contains_key(&Address::new(SheetId::A, 1, 0)));
     }
 
@@ -5134,7 +5526,10 @@ mod tests {
         let mut app = App::new();
         let buf = app.render_to_buffer(80, 25);
         let status_line = App::line_text(&buf, 24);
-        assert!(!status_line.contains("CALC"), "should be absent: {status_line:?}");
+        assert!(
+            !status_line.contains("CALC"),
+            "should be absent: {status_line:?}"
+        );
 
         app.set_recalc_mode(RecalcMode::Manual);
         // Type a formula to get CALC to light up.
@@ -5144,12 +5539,18 @@ mod tests {
 
         let buf = app.render_to_buffer(80, 25);
         let status_line = App::line_text(&buf, 24);
-        assert!(status_line.contains("CALC"), "should contain CALC: {status_line:?}");
+        assert!(
+            status_line.contains("CALC"),
+            "should contain CALC: {status_line:?}"
+        );
 
         app.handle_key(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE));
         let buf = app.render_to_buffer(80, 25);
         let status_line = App::line_text(&buf, 24);
-        assert!(!status_line.contains("CALC"), "should be cleared: {status_line:?}");
+        assert!(
+            !status_line.contains("CALC"),
+            "should be cleared: {status_line:?}"
+        );
     }
 
     #[test]
@@ -5193,7 +5594,8 @@ mod tests {
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
-            app.wb().cells
+            app.wb()
+                .cells
                 .get(&Address::new(SheetId::A, 0, 1))
                 .and_then(|c| match c {
                     CellContents::Formula { cached_value, .. } => cached_value.clone(),
@@ -5206,7 +5608,8 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
-            app.wb().cells
+            app.wb()
+                .cells
                 .get(&Address::new(SheetId::A, 0, 1))
                 .and_then(|c| match c {
                     CellContents::Formula { cached_value, .. } => cached_value.clone(),
@@ -5387,12 +5790,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "l123_test_{}_{}_{}",
-            tag,
-            process::id(),
-            nanos,
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("l123_test_{}_{}_{}", tag, process::id(), nanos,));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -5618,8 +6017,7 @@ mod tests {
             fl.view_offset
         );
         assert!(
-            fl.highlight >= fl.view_offset
-                && fl.highlight < fl.view_offset + FILE_LIST_PAGE_SIZE,
+            fl.highlight >= fl.view_offset && fl.highlight < fl.view_offset + FILE_LIST_PAGE_SIZE,
             "highlight {} out of window starting at {}",
             fl.highlight,
             fl.view_offset
@@ -5725,7 +6123,10 @@ mod tests {
         assert_eq!(app.mode, Mode::Ready);
         assert!(app.wb().cells.is_empty(), "cells should be cleared");
         assert_eq!(app.wb().pointer, Address::A1);
-        assert!(app.wb().active_path.is_none(), "active_path should be cleared");
+        assert!(
+            app.wb().active_path.is_none(),
+            "active_path should be cleared"
+        );
     }
 
     /// /FIN drops the CSV rows into the grid starting at the pointer.
@@ -5791,9 +6192,10 @@ mod tests {
         app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(app2.mode, Mode::Ready);
-        let stored = app2.wb().cells.get(&Address::A1).unwrap_or_else(|| {
-            panic!("A1 not populated after /FR — have: {:?}", app2.wb().cells)
-        });
+        let stored =
+            app2.wb().cells.get(&Address::A1).unwrap_or_else(|| {
+                panic!("A1 not populated after /FR — have: {:?}", app2.wb().cells)
+            });
         match stored {
             CellContents::Constant(Value::Number(n)) => assert_eq!(n, &42.0),
             other => panic!("expected Constant(42), got {other:?}"),
@@ -5843,11 +6245,21 @@ mod tests {
 
     /// Standard fixture panel: 17 icons × 3 rows each = 51 rows, so
     /// slot N starts at local row N * 3.
-    const TEST_PANEL: Rect = Rect { x: 80, y: 4, width: 3, height: 51 };
+    const TEST_PANEL: Rect = Rect {
+        x: 80,
+        y: 4,
+        width: 3,
+        height: 51,
+    };
 
     fn click_slot(app: &mut App, slot: u16) {
         // Click the middle row of the given slot.
-        click(app, TEST_PANEL, TEST_PANEL.x + 1, TEST_PANEL.y + slot * 3 + 1);
+        click(
+            app,
+            TEST_PANEL,
+            TEST_PANEL.x + 1,
+            TEST_PANEL.y + slot * 3 + 1,
+        );
     }
 
     #[test]
@@ -6026,5 +6438,28 @@ mod tests {
         let header_y = PANEL_HEIGHT;
         let b_header = buf[(ROW_GUTTER + 15 + 4, header_y)].symbol(); // center of 9-wide slot
         assert_eq!(b_header, "B");
+    }
+
+    #[test]
+    fn iterm2_env_hint_matches_term_program_variants() {
+        // Apple's iTerm2 sets TERM_PROGRAM=iTerm.app.
+        assert!(is_iterm2_compatible_env(Some("iTerm.app"), None));
+        // SSH into a shell from iTerm2: TERM_PROGRAM is whatever the
+        // remote shell wants (often tmux / Apple_Terminal), but
+        // LC_TERMINAL is forwarded.
+        assert!(is_iterm2_compatible_env(Some("tmux"), Some("iTerm2")));
+        // Other hosts that speak the OSC 1337 image protocol.
+        assert!(is_iterm2_compatible_env(Some("WezTerm"), None));
+        assert!(is_iterm2_compatible_env(Some("mintty"), None));
+        assert!(is_iterm2_compatible_env(Some("WarpTerminal"), None));
+    }
+
+    #[test]
+    fn iterm2_env_hint_rejects_other_terminals() {
+        assert!(!is_iterm2_compatible_env(Some("ghostty"), None));
+        assert!(!is_iterm2_compatible_env(Some("Apple_Terminal"), None));
+        assert!(!is_iterm2_compatible_env(Some("xterm-kitty"), None));
+        assert!(!is_iterm2_compatible_env(None, None));
+        assert!(!is_iterm2_compatible_env(None, Some("")));
     }
 }

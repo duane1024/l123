@@ -14,11 +14,11 @@ use l123_core::Range;
 
 pub mod icon_data;
 pub mod icons;
-pub mod render;
 pub mod raster;
+pub mod render;
 pub use icons::{icon_action, render_panel_png, IconAction, Panel, SysAction};
-pub use render::{render as render_unicode, GraphValues};
 pub use raster::{render_png, render_png_sized, render_svg, render_svg_sized};
+pub use render::{render as render_unicode, GraphValues};
 
 /// The seven graph types 1-2-3 R3.4a supports.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
@@ -116,8 +116,16 @@ mod tests {
 
     fn r(c0: u16, r0: u32, c1: u16, r1: u32) -> Range {
         Range {
-            start: Address { sheet: SheetId(0), col: c0, row: r0 },
-            end: Address { sheet: SheetId(0), col: c1, row: r1 },
+            start: Address {
+                sheet: SheetId(0),
+                col: c0,
+                row: r0,
+            },
+            end: Address {
+                sheet: SheetId(0),
+                col: c1,
+                row: r1,
+            },
         }
     }
 
@@ -145,9 +153,16 @@ mod tests {
     #[test]
     fn set_a_through_f_independent_slots() {
         let mut g = GraphDef::default();
-        for (i, s) in [Series::A, Series::B, Series::C, Series::D, Series::E, Series::F]
-            .iter()
-            .enumerate()
+        for (i, s) in [
+            Series::A,
+            Series::B,
+            Series::C,
+            Series::D,
+            Series::E,
+            Series::F,
+        ]
+        .iter()
+        .enumerate()
         {
             g.set(*s, r(i as u16, 0, i as u16, 9));
         }
@@ -173,7 +188,10 @@ mod tests {
 
     #[test]
     fn reset_restores_default_type_and_clears_ranges() {
-        let mut g = GraphDef { graph_type: GraphType::Bar, ..Default::default() };
+        let mut g = GraphDef {
+            graph_type: GraphType::Bar,
+            ..Default::default()
+        };
         g.set(Series::X, r(0, 0, 0, 5));
         g.set(Series::A, r(1, 0, 1, 5));
         g.set(Series::F, r(5, 0, 5, 5));

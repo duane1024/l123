@@ -182,10 +182,7 @@ pub fn resolve(path: &[char]) -> Option<&'static MenuItem> {
 /// Like [`resolve`] but starts from an arbitrary menu slice — used by
 /// nested menus (e.g. the `/Print File` submenu rooted at
 /// [`PRINT_FILE_MENU`]).
-pub fn resolve_within(
-    root: &'static [MenuItem],
-    path: &[char],
-) -> Option<&'static MenuItem> {
+pub fn resolve_within(root: &'static [MenuItem], path: &[char]) -> Option<&'static MenuItem> {
     let mut items: &[MenuItem] = root;
     let mut last: Option<&MenuItem> = None;
     for &letter in path {
@@ -218,10 +215,7 @@ pub fn current_level(path: &[char]) -> &'static [MenuItem] {
 
 /// Nested variant of [`current_level`]: starts from `root` rather
 /// than [`ROOT`].
-pub fn current_level_within(
-    root: &'static [MenuItem],
-    path: &[char],
-) -> &'static [MenuItem] {
+pub fn current_level_within(root: &'static [MenuItem], path: &[char]) -> &'static [MenuItem] {
     if path.is_empty() {
         return root;
     }
@@ -1734,8 +1728,17 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "Worksheet", "Range", "Copy", "Move", "File", "Print", "Graph", "Data",
-                "System", "Add-In", "Quit"
+                "Worksheet",
+                "Range",
+                "Copy",
+                "Move",
+                "File",
+                "Print",
+                "Graph",
+                "Data",
+                "System",
+                "Add-In",
+                "Quit"
             ]
         );
     }

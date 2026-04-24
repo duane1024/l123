@@ -47,15 +47,17 @@ fn main() {
     println!("Default panel ({count} icons):");
     println!();
     for (slot, &id) in ids.iter().enumerate() {
-        let desc = strings.get(id as usize).map(String::as_str).unwrap_or("<out of range>");
-        let off = ptr_mono + u16::from_le_bytes([
-            dat[ptr_mono + (id as usize) * 2],
-            dat[ptr_mono + (id as usize) * 2 + 1],
-        ]) as usize;
+        let desc = strings
+            .get(id as usize)
+            .map(String::as_str)
+            .unwrap_or("<out of range>");
+        let off = ptr_mono
+            + u16::from_le_bytes([
+                dat[ptr_mono + (id as usize) * 2],
+                dat[ptr_mono + (id as usize) * 2 + 1],
+            ]) as usize;
         let bits = &dat[off..off + BITMAP_BYTES];
-        println!(
-            "slot {slot:2}  id {id:3}  {desc}"
-        );
+        println!("slot {slot:2}  id {id:3}  {desc}");
         for y in 0..DIM {
             let mut row = String::new();
             for x in 0..DIM {

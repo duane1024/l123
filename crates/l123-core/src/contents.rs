@@ -89,7 +89,10 @@ impl CellContents {
             None => CellContents::Empty,
             Some(c) if matches!(c, '\'' | '"' | '^' | '\\') => {
                 let prefix = LabelPrefix::from_char(c).expect("matched above");
-                CellContents::Label { prefix, text: chars.collect() }
+                CellContents::Label {
+                    prefix,
+                    text: chars.collect(),
+                }
             }
             Some(c) if is_value_starter(c) => match s.parse::<f64>() {
                 Ok(n) => CellContents::Constant(Value::Number(n)),
@@ -112,7 +115,13 @@ fn render_value_source(v: &Value) -> String {
     match v {
         Value::Number(n) => format_number_general(*n),
         Value::Text(s) => s.clone(),
-        Value::Bool(b) => if *b { "TRUE".into() } else { "FALSE".into() },
+        Value::Bool(b) => {
+            if *b {
+                "TRUE".into()
+            } else {
+                "FALSE".into()
+            }
+        }
         Value::Error(e) => e.lotus_tag().into(),
         Value::Empty => String::new(),
     }
@@ -236,7 +245,10 @@ mod tests {
             let got = CellContents::from_source(src, LabelPrefix::Apostrophe);
             assert_eq!(
                 got,
-                CellContents::Label { prefix: want_prefix, text: want_text.into() },
+                CellContents::Label {
+                    prefix: want_prefix,
+                    text: want_text.into()
+                },
                 "source {src:?}"
             );
         }

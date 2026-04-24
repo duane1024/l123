@@ -48,7 +48,11 @@ pub struct PdfOptions {
 
 impl Default for PdfOptions {
     fn default() -> Self {
-        Self { page_size: PageSize::default(), cpi: 10, lpi: 6 }
+        Self {
+            page_size: PageSize::default(),
+            cpi: 10,
+            lpi: 6,
+        }
     }
 }
 

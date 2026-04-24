@@ -1,0 +1,38 @@
+# Authenticity Contract — moving the cell pointer past the bottom edge
+# of the visible grid scrolls the viewport so the active cell stays on
+# screen. Default 80x25 fits roughly 19 body rows; pressing DOWN 25
+# times from A1 lands on A26, which only renders if the viewport
+# scrolled.
+
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1
+
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+
+ASSERT_POINTER     A:A26
+ASSERT_CELL        A:A26
+ASSERT_CELL_HIDDEN A:A1

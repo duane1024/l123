@@ -1,0 +1,25 @@
+# Authenticity Contract — moving the cell pointer past the right edge
+# of the visible grid scrolls the viewport so the active cell stays on
+# screen. At default 80x25 with 9-char columns, ~8 columns (A..H) fit;
+# pressing RIGHT 12 times from A1 lands on M1, which only renders if
+# the viewport scrolled.
+
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1
+
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+
+ASSERT_POINTER     A:M1
+ASSERT_CELL        A:M1
+ASSERT_CELL_HIDDEN A:A1

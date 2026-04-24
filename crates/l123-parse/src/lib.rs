@@ -249,10 +249,7 @@ mod tests {
     fn sheet_qualified_range_same_sheet() {
         // LHS qualified, RHS bare → single-sheet range anchored on LHS.
         let s = sheets();
-        assert_eq!(
-            to_engine_source("@SUM(A:B3..D5)", &s),
-            "=SUM(Sheet1!B3:D5)"
-        );
+        assert_eq!(to_engine_source("@SUM(A:B3..D5)", &s), "=SUM(Sheet1!B3:D5)");
     }
 
     #[test]

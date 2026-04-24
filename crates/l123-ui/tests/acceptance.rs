@@ -48,12 +48,10 @@ fn run_transcript(path: &Path) {
         .unwrap_or("transcript");
     let tmp = std::env::temp_dir().join(format!("l123_accept_{test_name}"));
     let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp)
-        .unwrap_or_else(|e| panic!("mkdir {}: {e}", tmp.display()));
+    std::fs::create_dir_all(&tmp).unwrap_or_else(|e| panic!("mkdir {}: {e}", tmp.display()));
     let tmp_str = tmp.to_string_lossy().into_owned();
 
-    let body = fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let body = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
     let mut app = App::new();
     let mut width: u16 = 80;
@@ -79,27 +77,17 @@ fn run_transcript(path: &Path) {
             "ENTER" => app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             "ESC" => app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             "TAB" => app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-            "BACKSPACE" => {
-                app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
-            }
+            "BACKSPACE" => app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
             "UP" => app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
             "DOWN" => app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
             "LEFT" => app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
             "RIGHT" => app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
             "HOME" => app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
             "END" => app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
-            "PGUP" => {
-                app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE))
-            }
-            "PGDN" => {
-                app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE))
-            }
-            "CTRL_PGUP" => {
-                app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL))
-            }
-            "CTRL_PGDN" => {
-                app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL))
-            }
+            "PGUP" => app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
+            "PGDN" => app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
+            "CTRL_PGUP" => app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL)),
+            "CTRL_PGDN" => app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL)),
             "CTRL_END" => app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
             "F" => {
                 let n: u8 = rest.parse().expect("F directive needs number");
@@ -122,7 +110,8 @@ fn run_transcript(path: &Path) {
             "ASSERT_POINTER" => {
                 let got = app.pointer().display_full();
                 assert_eq!(
-                    got, rest,
+                    got,
+                    rest,
                     "{}:{line_no}: pointer expected {rest} got {got}",
                     path.display()
                 );
@@ -130,7 +119,8 @@ fn run_transcript(path: &Path) {
             "ASSERT_MODE" => {
                 let got = app.mode().indicator();
                 assert_eq!(
-                    got, rest,
+                    got,
+                    rest,
                     "{}:{line_no}: mode expected {rest} got {got}",
                     path.display()
                 );
@@ -174,14 +164,15 @@ fn run_transcript(path: &Path) {
                 let addr = parts.next().unwrap_or("");
                 let want = parts.next().unwrap_or("").trim();
                 let buf = app.render_to_buffer(width, height);
-                let got = app
-                    .cell_rendered_text(&buf, addr)
-                    .unwrap_or_else(|| panic!(
+                let got = app.cell_rendered_text(&buf, addr).unwrap_or_else(|| {
+                    panic!(
                         "{}:{line_no}: address {addr:?} not in viewport",
                         path.display()
-                    ));
+                    )
+                });
                 assert_eq!(
-                    got.trim(), want,
+                    got.trim(),
+                    want,
                     "{}:{line_no}: cell {addr} expected {want:?} got {got:?}",
                     path.display()
                 );
@@ -204,7 +195,8 @@ fn run_transcript(path: &Path) {
             "ASSERT_GRAPH_TYPE" => {
                 let got = app.graph_type_str();
                 assert_eq!(
-                    got, rest,
+                    got,
+                    rest,
                     "{}:{line_no}: graph type expected {rest} got {got}",
                     path.display()
                 );
@@ -216,10 +208,15 @@ fn run_transcript(path: &Path) {
                 let mut parts = rest.splitn(2, char::is_whitespace);
                 let slot = parts.next().unwrap_or("").chars().next().unwrap_or(' ');
                 let want_raw = parts.next().unwrap_or("").trim();
-                let want = if want_raw.eq_ignore_ascii_case("none") { "" } else { want_raw };
+                let want = if want_raw.eq_ignore_ascii_case("none") {
+                    ""
+                } else {
+                    want_raw
+                };
                 let got = app.graph_series_str(slot);
                 assert_eq!(
-                    got, want,
+                    got,
+                    want,
                     "{}:{line_no}: graph series {slot} expected {want:?} got {got:?}",
                     path.display()
                 );
@@ -235,7 +232,8 @@ fn run_transcript(path: &Path) {
                 };
                 let got = app.is_running();
                 assert_eq!(
-                    got, want,
+                    got,
+                    want,
                     "{}:{line_no}: running expected {want}, got {got}",
                     path.display()
                 );
@@ -269,9 +267,8 @@ fn run_transcript(path: &Path) {
                 let fpath = parts.next().unwrap_or("");
                 let raw = parts.next().unwrap_or("").trim();
                 let want = unescape(raw);
-                let body = std::fs::read_to_string(fpath).unwrap_or_else(|e| {
-                    panic!("{}:{line_no}: read {fpath}: {e}", path.display())
-                });
+                let body = std::fs::read_to_string(fpath)
+                    .unwrap_or_else(|e| panic!("{}:{line_no}: read {fpath}: {e}", path.display()));
                 assert!(
                     body.contains(&want),
                     "{}:{line_no}: file {fpath:?} does not contain {want:?}; got {body:?}",
@@ -283,9 +280,8 @@ fn run_transcript(path: &Path) {
                 let fpath = parts.next().unwrap_or("");
                 let raw = parts.next().unwrap_or("").trim();
                 let want = unescape(raw);
-                let body = std::fs::read_to_string(fpath).unwrap_or_else(|e| {
-                    panic!("{}:{line_no}: read {fpath}: {e}", path.display())
-                });
+                let body = std::fs::read_to_string(fpath)
+                    .unwrap_or_else(|e| panic!("{}:{line_no}: read {fpath}: {e}", path.display()));
                 assert!(
                     !body.contains(&want),
                     "{}:{line_no}: file {fpath:?} unexpectedly contains {want:?}; got {body:?}",
@@ -302,9 +298,8 @@ fn run_transcript(path: &Path) {
                 let raw = parts.next().unwrap_or("").trim();
                 let want = unescape(raw);
                 let want_bytes = want.as_bytes();
-                let body = std::fs::read(fpath).unwrap_or_else(|e| {
-                    panic!("{}:{line_no}: read {fpath}: {e}", path.display())
-                });
+                let body = std::fs::read(fpath)
+                    .unwrap_or_else(|e| panic!("{}:{line_no}: read {fpath}: {e}", path.display()));
                 let found = want_bytes.len() <= body.len()
                     && body.windows(want_bytes.len()).any(|w| w == want_bytes);
                 assert!(
@@ -314,10 +309,7 @@ fn run_transcript(path: &Path) {
                 );
             }
             other => {
-                panic!(
-                    "{}:{line_no}: unknown directive {other:?}",
-                    path.display()
-                );
+                panic!("{}:{line_no}: unknown directive {other:?}", path.display());
             }
         }
     }
@@ -430,6 +422,8 @@ macro_rules! transcripts {
 
 transcripts! {
     m0_arrow_nav    => "M0_arrow_nav.tsv",
+    m0_scroll_down  => "M0_scroll_down.tsv",
+    m0_scroll_right => "M0_scroll_right.tsv",
     m0_quit         => "M0_quit.tsv",
     m1_label_entry  => "M1_label_entry.tsv",
     m1_value_entry  => "M1_value_entry.tsv",

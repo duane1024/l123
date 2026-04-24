@@ -43,7 +43,11 @@ pub fn render<V: WorkbookView + ?Sized>(
     let mut rows: Vec<String> = Vec::new();
     for row in r.start.row..=r.end.row {
         let first = Address::new(r.start.sheet, r.start.col, row);
-        if let Some(CellContents::Label { prefix: LabelPrefix::Pipe, .. }) = view.cell(first) {
+        if let Some(CellContents::Label {
+            prefix: LabelPrefix::Pipe,
+            ..
+        }) = view.cell(first)
+        {
             continue;
         }
         let mut line = String::new();
@@ -130,7 +134,10 @@ pub fn render<V: WorkbookView + ?Sized>(
         });
     }
 
-    PageGrid { pages, page_width: page_width as u16 }
+    PageGrid {
+        pages,
+        page_width: page_width as u16,
+    }
 }
 
 /// Substitute 1-2-3 header/footer tokens:
@@ -162,8 +169,7 @@ fn today_ddmmmyy() -> String {
     let days = secs.div_euclid(86_400);
     let (y, m, d) = days_to_ymd(days);
     let month_name = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ][(m - 1) as usize];
     format!("{d:02}-{month_name}-{:02}", (y % 100 + 100) % 100)
 }

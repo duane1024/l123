@@ -3,8 +3,8 @@
 
 use std::path::Path;
 
-use thiserror::Error;
 use l123_core::{Address, Range, SheetId, Value};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -37,7 +37,11 @@ pub struct CellView {
 
 impl CellView {
     pub fn empty() -> Self {
-        Self { value: Value::Empty, formula: None, formatted: None }
+        Self {
+            value: Value::Empty,
+            formula: None,
+            formatted: None,
+        }
     }
 }
 

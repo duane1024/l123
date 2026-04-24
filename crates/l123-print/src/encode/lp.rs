@@ -40,11 +40,7 @@ pub fn lp_args(opts: &LpOptions) -> Vec<String> {
 
 /// Write the bytes that go to `lp`'s stdin: optional setup string,
 /// then the ASCII rendering of `grid`.
-pub fn write_lp_stream<W: Write>(
-    grid: &PageGrid,
-    opts: &LpOptions,
-    w: &mut W,
-) -> io::Result<()> {
+pub fn write_lp_stream<W: Write>(grid: &PageGrid, opts: &LpOptions, w: &mut W) -> io::Result<()> {
     if let Some(s) = &opts.setup_string {
         w.write_all(s.as_bytes())?;
     }
@@ -97,20 +93,32 @@ mod tests {
 
     #[test]
     fn lp_args_emits_destination() {
-        let opts = LpOptions { destination: Some("Office_HP".into()), ..Default::default() };
+        let opts = LpOptions {
+            destination: Some("Office_HP".into()),
+            ..Default::default()
+        };
         assert_eq!(lp_args(&opts), vec!["-d", "Office_HP"]);
     }
 
     #[test]
     fn lp_args_emits_copies_when_gt_one() {
-        let opts = LpOptions { copies: 3, ..Default::default() };
+        let opts = LpOptions {
+            copies: 3,
+            ..Default::default()
+        };
         assert_eq!(lp_args(&opts), vec!["-n", "3"]);
     }
 
     #[test]
     fn lp_args_suppresses_copies_at_one_or_zero() {
-        let one = LpOptions { copies: 1, ..Default::default() };
-        let zero = LpOptions { copies: 0, ..Default::default() };
+        let one = LpOptions {
+            copies: 1,
+            ..Default::default()
+        };
+        let zero = LpOptions {
+            copies: 0,
+            ..Default::default()
+        };
         assert!(lp_args(&one).is_empty());
         assert!(lp_args(&zero).is_empty());
     }
@@ -136,7 +144,10 @@ mod tests {
     #[test]
     fn stream_prepends_setup_string() {
         let grid = one_page_grid();
-        let opts = LpOptions { setup_string: Some("\x1bE".into()), ..Default::default() };
+        let opts = LpOptions {
+            setup_string: Some("\x1bE".into()),
+            ..Default::default()
+        };
         let mut buf = Vec::new();
         write_lp_stream(&grid, &opts, &mut buf).unwrap();
         assert_eq!(buf, b"\x1bEhello\n");

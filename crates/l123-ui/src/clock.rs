@@ -30,7 +30,13 @@ pub fn local_from_unix(secs: i64) -> DateTime {
     unsafe {
         let mut tm: MaybeUninit<libc::tm> = MaybeUninit::zeroed();
         if libc::localtime_r(&t, tm.as_mut_ptr()).is_null() {
-            return DateTime { year: 1970, month: 1, day: 1, hour: 0, minute: 0 };
+            return DateTime {
+                year: 1970,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+            };
         }
         let tm = tm.assume_init();
         DateTime {
