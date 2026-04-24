@@ -54,6 +54,16 @@ Open an existing workbook:
 l123 financials.xlsx
 ```
 
+Inspect or initialize configuration:
+
+```bash
+l123 config            # show effective settings and their sources
+l123 config --init     # write a sample ~/.l123/L123.CNF
+```
+
+See [`docs/CONFIG.md`](docs/CONFIG.md) for the full list of keys and
+environment variables.
+
 ---
 
 ## ✦ Keyboard, the short version
