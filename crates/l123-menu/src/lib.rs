@@ -110,6 +110,25 @@ pub enum Action {
     FileDir,
     FileListWorksheet,
     FileListActive,
+    GraphTypeLine,
+    GraphTypeBar,
+    GraphTypeXY,
+    GraphTypeStack,
+    GraphTypePie,
+    GraphTypeHLCO,
+    GraphTypeMixed,
+    GraphX,
+    GraphA,
+    GraphB,
+    GraphC,
+    GraphD,
+    GraphE,
+    GraphF,
+    /// `/Graph Reset Graph` — clear every range and restore the
+    /// default type.
+    GraphResetGraph,
+    /// `/Graph Quit` — close the `/Graph` menu back to READY.
+    GraphQuit,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -1204,18 +1223,180 @@ const PRINT_MENU: &[MenuItem] = &[
     },
 ];
 
+const GRAPH_TYPE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'L',
+        name: "Line",
+        help: "Line graph",
+        body: MenuBody::Action(Action::GraphTypeLine),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "Bar",
+        help: "Bar graph",
+        body: MenuBody::Action(Action::GraphTypeBar),
+    },
+    MenuItem {
+        letter: 'X',
+        name: "XY",
+        help: "XY (scatter) graph",
+        body: MenuBody::Action(Action::GraphTypeXY),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Stack-Bar",
+        help: "Stacked-bar graph",
+        body: MenuBody::Action(Action::GraphTypeStack),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Pie",
+        help: "Pie chart",
+        body: MenuBody::Action(Action::GraphTypePie),
+    },
+    MenuItem {
+        letter: 'H',
+        name: "HLCO",
+        help: "High/Low/Close/Open chart",
+        body: MenuBody::Action(Action::GraphTypeHLCO),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Mixed",
+        help: "Mixed (bar + line) chart",
+        body: MenuBody::Action(Action::GraphTypeMixed),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Features",
+        help: "Type features (stacked, 100%, 2Y, Y-ranges)",
+        body: MenuBody::NotImplemented("gt-features"),
+    },
+];
+
+const GRAPH_RESET_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'G',
+        name: "Graph",
+        help: "Clear every range and restore default type",
+        body: MenuBody::Action(Action::GraphResetGraph),
+    },
+    MenuItem {
+        letter: 'X',
+        name: "X",
+        help: "Clear X-axis range",
+        body: MenuBody::NotImplemented("gr-x"),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "A",
+        help: "Clear A range",
+        body: MenuBody::NotImplemented("gr-a"),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "B",
+        help: "Clear B range",
+        body: MenuBody::NotImplemented("gr-b"),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "C",
+        help: "Clear C range",
+        body: MenuBody::NotImplemented("gr-c"),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "D",
+        help: "Clear D range",
+        body: MenuBody::NotImplemented("gr-d"),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "E",
+        help: "Clear E range",
+        body: MenuBody::NotImplemented("gr-e"),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "F",
+        help: "Clear F range",
+        body: MenuBody::NotImplemented("gr-f"),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Ranges",
+        help: "Clear X and A..F together (keep options)",
+        body: MenuBody::NotImplemented("gr-ranges"),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Options",
+        help: "Reset graph options (keep ranges)",
+        body: MenuBody::NotImplemented("gr-options"),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to /Graph menu",
+        body: MenuBody::NotImplemented("gr-quit"),
+    },
+];
+
 const GRAPH_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'T',
         name: "Type",
         help: "Select graph type",
-        body: MenuBody::NotImplemented("g-type"),
+        body: MenuBody::Submenu(GRAPH_TYPE_MENU),
     },
     MenuItem {
         letter: 'X',
         name: "X",
         help: "Set X-axis range",
-        body: MenuBody::NotImplemented("g-x"),
+        body: MenuBody::Action(Action::GraphX),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "A",
+        help: "Set A data range",
+        body: MenuBody::Action(Action::GraphA),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "B",
+        help: "Set B data range",
+        body: MenuBody::Action(Action::GraphB),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "C",
+        help: "Set C data range",
+        body: MenuBody::Action(Action::GraphC),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "D",
+        help: "Set D data range",
+        body: MenuBody::Action(Action::GraphD),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "E",
+        help: "Set E data range",
+        body: MenuBody::Action(Action::GraphE),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "F",
+        help: "Set F data range",
+        body: MenuBody::Action(Action::GraphF),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Reset graph / ranges / options",
+        body: MenuBody::Submenu(GRAPH_RESET_MENU),
     },
     MenuItem {
         letter: 'V',
@@ -1224,10 +1405,34 @@ const GRAPH_MENU: &[MenuItem] = &[
         body: MenuBody::NotImplemented("g-view"),
     },
     MenuItem {
+        letter: 'S',
+        name: "Save",
+        help: "Save graph to a file",
+        body: MenuBody::NotImplemented("g-save"),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Options",
+        help: "Legend, Titles, Grid, Scale, Color, …",
+        body: MenuBody::NotImplemented("g-options"),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Name",
+        help: "Create, use, delete, reset named graphs",
+        body: MenuBody::NotImplemented("g-name"),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Group",
+        help: "Columnwise / Rowwise auto-assign",
+        body: MenuBody::NotImplemented("g-group"),
+    },
+    MenuItem {
         letter: 'Q',
         name: "Quit",
         help: "Return to READY",
-        body: MenuBody::NotImplemented("g-quit"),
+        body: MenuBody::Action(Action::GraphQuit),
     },
 ];
 

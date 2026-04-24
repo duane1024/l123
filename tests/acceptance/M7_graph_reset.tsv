@@ -1,0 +1,37 @@
+# M7 slice 3a — /Graph Reset Graph clears every range and restores
+# the default type.
+
+# Seed A1..A3.
+KEYS 1
+ENTER
+KEYS 2
+ENTER
+KEYS 3
+ENTER
+HOME
+
+# /GTB sets Bar.
+KEY /
+KEY G
+KEY T
+KEY B
+ASSERT_GRAPH_TYPE  BAR
+
+# /GX A1..A3.
+KEY /
+KEY G
+KEY X
+DOWN
+DOWN
+ENTER
+ASSERT_GRAPH_SERIES X  A:A1..A:A3
+
+# /GRG clears everything back to default.
+KEY /
+KEY G
+KEY R
+KEY G
+ASSERT_MODE        READY
+ASSERT_GRAPH_TYPE  LINE
+ASSERT_GRAPH_SERIES X  none
+ASSERT_GRAPH_SERIES A  none

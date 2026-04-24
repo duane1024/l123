@@ -1,0 +1,57 @@
+# M7 slice 3a — /Graph Type submenu cycles through all 7 graph types.
+# Each selection closes the menu, leaving the workbook's current_graph
+# with that type and the app back in READY.
+
+# Default is Line.
+ASSERT_MODE        READY
+ASSERT_GRAPH_TYPE  LINE
+
+# /GTB — Bar.
+KEY /
+KEY G
+KEY T
+KEY B
+ASSERT_MODE        READY
+ASSERT_GRAPH_TYPE  BAR
+
+# /GTL — Line (back to default, but via an explicit selection).
+KEY /
+KEY G
+KEY T
+KEY L
+ASSERT_GRAPH_TYPE  LINE
+
+# /GTX — XY.
+KEY /
+KEY G
+KEY T
+KEY X
+ASSERT_GRAPH_TYPE  XY
+
+# /GTS — Stack-Bar.
+KEY /
+KEY G
+KEY T
+KEY S
+ASSERT_GRAPH_TYPE  STACK
+
+# /GTP — Pie.
+KEY /
+KEY G
+KEY T
+KEY P
+ASSERT_GRAPH_TYPE  PIE
+
+# /GTH — HLCO.
+KEY /
+KEY G
+KEY T
+KEY H
+ASSERT_GRAPH_TYPE  HLCO
+
+# /GTM — Mixed.
+KEY /
+KEY G
+KEY T
+KEY M
+ASSERT_GRAPH_TYPE  MIXED

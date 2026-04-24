@@ -30,7 +30,7 @@ use l123_core::{
     LabelPrefix, Mode, Range, SheetId, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
-use l123_graph::GraphDef;
+use l123_graph::{GraphDef, GraphType, Series};
 use l123_menu::{self as menu, Action, MenuBody, MenuItem};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
@@ -76,11 +76,10 @@ struct Workbook {
     journal: Vec<JournalEntry>,
     /// The unnamed working graph — target of every `/Graph` menu
     /// command until `/Graph Name Create` snapshots it by name.
-    #[allow(dead_code)] // read in slice 3 (menu wiring)
     current_graph: GraphDef,
     /// Named graphs defined via `/Graph Name Create`. `Use` restores
     /// one into `current_graph`; `Delete` drops it; `Reset` wipes all.
-    #[allow(dead_code)] // read in slice 3 (menu wiring)
+    #[allow(dead_code)] // wired by `/Graph Name Create` in a later slice
     graphs: BTreeMap<String, GraphDef>,
 }
 
@@ -697,6 +696,10 @@ enum PendingCommand {
     /// POINT step of `/Range Search`: on commit, prompt for the
     /// search string.
     RangeSearchRange { scope: SearchScope },
+    /// POINT step of `/Graph X` and `/Graph A`..`F`: on commit, the
+    /// selected range is written into the named slot of the workbook's
+    /// current graph and the menu returns to READY.
+    GraphSeries { series: Series },
 }
 
 impl PendingCommand {
@@ -713,6 +716,7 @@ impl PendingCommand {
             PendingCommand::FileXtractRange { .. } => "Enter range to extract:",
             PendingCommand::PrintFileRange => "Enter range to print:",
             PendingCommand::RangeSearchRange { .. } => "Enter search range:",
+            PendingCommand::GraphSeries { .. } => "Enter graph range:",
         }
     }
 }
@@ -857,6 +861,40 @@ impl App {
 
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    /// Current graph's type as an ASCII all-caps token, for use in
+    /// `ASSERT_GRAPH_TYPE` transcript directives.
+    pub fn graph_type_str(&self) -> &'static str {
+        match self.wb().current_graph.graph_type {
+            GraphType::Line => "LINE",
+            GraphType::Bar => "BAR",
+            GraphType::XY => "XY",
+            GraphType::Stack => "STACK",
+            GraphType::Pie => "PIE",
+            GraphType::HLCO => "HLCO",
+            GraphType::Mixed => "MIXED",
+        }
+    }
+
+    /// Current graph's range for a given series slot, formatted like
+    /// `A:A1..A:A3`. Empty string when the slot is unset. `slot` is
+    /// one of `X A B C D E F` (case-insensitive).
+    pub fn graph_series_str(&self, slot: char) -> String {
+        let s = match slot.to_ascii_uppercase() {
+            'X' => Series::X,
+            'A' => Series::A,
+            'B' => Series::B,
+            'C' => Series::C,
+            'D' => Series::D,
+            'E' => Series::E,
+            'F' => Series::F,
+            _ => return String::new(),
+        };
+        match self.wb().current_graph.get(s) {
+            None => String::new(),
+            Some(r) => format!("{}..{}", r.start.display_full(), r.end.display_full()),
+        }
     }
 
     pub fn render_to_buffer(&self, width: u16, height: u16) -> Buffer {
@@ -1263,6 +1301,11 @@ impl App {
         self.mode = Mode::Ready;
     }
 
+    fn set_graph_type(&mut self, t: GraphType) {
+        self.wb_mut().current_graph.graph_type = t;
+        self.close_menu();
+    }
+
     fn handle_key_menu(&mut self, k: KeyEvent) {
         let Some(state) = self.menu.as_mut() else {
             self.mode = Mode::Ready;
@@ -1472,6 +1515,25 @@ impl App {
             Action::FileDir => self.start_file_dir_prompt(),
             Action::FileListWorksheet => self.open_file_list(FileListKind::Worksheet),
             Action::FileListActive => self.open_file_list(FileListKind::Active),
+            Action::GraphTypeLine => self.set_graph_type(GraphType::Line),
+            Action::GraphTypeBar => self.set_graph_type(GraphType::Bar),
+            Action::GraphTypeXY => self.set_graph_type(GraphType::XY),
+            Action::GraphTypeStack => self.set_graph_type(GraphType::Stack),
+            Action::GraphTypePie => self.set_graph_type(GraphType::Pie),
+            Action::GraphTypeHLCO => self.set_graph_type(GraphType::HLCO),
+            Action::GraphTypeMixed => self.set_graph_type(GraphType::Mixed),
+            Action::GraphX => self.begin_point(PendingCommand::GraphSeries { series: Series::X }),
+            Action::GraphA => self.begin_point(PendingCommand::GraphSeries { series: Series::A }),
+            Action::GraphB => self.begin_point(PendingCommand::GraphSeries { series: Series::B }),
+            Action::GraphC => self.begin_point(PendingCommand::GraphSeries { series: Series::C }),
+            Action::GraphD => self.begin_point(PendingCommand::GraphSeries { series: Series::D }),
+            Action::GraphE => self.begin_point(PendingCommand::GraphSeries { series: Series::E }),
+            Action::GraphF => self.begin_point(PendingCommand::GraphSeries { series: Series::F }),
+            Action::GraphResetGraph => {
+                self.wb_mut().current_graph.reset();
+                self.close_menu();
+            }
+            Action::GraphQuit => self.close_menu(),
             // Subsequent cycles wire these. For now, descent is a no-op.
             _ => self.close_menu(),
         }
@@ -2465,6 +2527,10 @@ impl App {
             }
             PendingCommand::RangeSearchRange { scope } => {
                 self.start_range_search_string_prompt(scope, range);
+            }
+            PendingCommand::GraphSeries { series } => {
+                self.wb_mut().current_graph.set(series, range);
+                self.mode = Mode::Ready;
             }
         }
     }

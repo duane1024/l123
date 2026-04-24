@@ -177,6 +177,31 @@ fn run_transcript(path: &Path) {
                     path.display()
                 );
             }
+            // Current (unnamed) graph's type. Use an ASCII all-caps
+            // token: LINE | BAR | XY | STACK | PIE | HLCO | MIXED.
+            "ASSERT_GRAPH_TYPE" => {
+                let got = app.graph_type_str();
+                assert_eq!(
+                    got, rest,
+                    "{}:{line_no}: graph type expected {rest} got {got}",
+                    path.display()
+                );
+            }
+            // "ASSERT_GRAPH_SERIES X  A:A1..A:A3" — slot letter, then
+            // expected range text. Use the literal word `none` (or an
+            // empty trailer) to assert the slot is unset.
+            "ASSERT_GRAPH_SERIES" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let slot = parts.next().unwrap_or("").chars().next().unwrap_or(' ');
+                let want_raw = parts.next().unwrap_or("").trim();
+                let want = if want_raw.eq_ignore_ascii_case("none") { "" } else { want_raw };
+                let got = app.graph_series_str(slot);
+                assert_eq!(
+                    got, want,
+                    "{}:{line_no}: graph series {slot} expected {want:?} got {got:?}",
+                    path.display()
+                );
+            }
             "ASSERT_RUNNING" => {
                 let want = match rest {
                     "true" => true,
@@ -400,4 +425,7 @@ transcripts! {
     m6_print_header_tokens  => "M6_print_header_tokens.tsv",
     m6_print_align_clear    => "M6_print_align_clear.tsv",
     m6_range_search_find    => "M6_range_search_find.tsv",
+    m7_graph_type       => "M7_graph_type.tsv",
+    m7_graph_series     => "M7_graph_series.tsv",
+    m7_graph_reset      => "M7_graph_reset.tsv",
 }

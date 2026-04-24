@@ -1,0 +1,63 @@
+# M7 slice 3a — /Graph X and /Graph A..F use POINT to pick ranges.
+# Each successful POINT stores the range in the current graph's
+# corresponding slot and returns to READY. /GQ also returns to READY.
+
+# Seed A1..A5 and B1..B5 so the viewport shows them (though the
+# actual values don't matter — only the range does).
+KEYS 1
+ENTER
+KEYS 2
+ENTER
+KEYS 3
+ENTER
+KEYS 4
+ENTER
+KEYS 5
+ENTER
+
+HOME
+ASSERT_POINTER     A:A1
+
+# Before any Graph command, all slots are empty.
+ASSERT_GRAPH_SERIES X  none
+ASSERT_GRAPH_SERIES A  none
+
+# /GX enters POINT at A1; DOWN x4 extends to A5; Enter commits.
+KEY /
+KEY G
+KEY X
+ASSERT_MODE        POINT
+ASSERT_PANEL_L3    Enter graph range
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+ASSERT_MODE        READY
+ASSERT_GRAPH_SERIES X  A:A1..A:A5
+
+# Move pointer to B1 then /GA selects B1..B5 for series A.
+HOME
+RIGHT
+ASSERT_POINTER     A:B1
+KEY /
+KEY G
+KEY A
+ASSERT_MODE        POINT
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+ASSERT_MODE        READY
+ASSERT_GRAPH_SERIES A  A:B1..A:B5
+# X is still set from before.
+ASSERT_GRAPH_SERIES X  A:A1..A:A5
+
+# /GQ exits the /Graph menu to READY without changing state.
+KEY /
+KEY G
+KEY Q
+ASSERT_MODE        READY
+ASSERT_GRAPH_SERIES X  A:A1..A:A5
+ASSERT_GRAPH_SERIES A  A:B1..A:B5
