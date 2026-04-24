@@ -159,6 +159,15 @@ fn run_transcript(path: &Path) {
                     path.display()
                 );
             }
+            "ASSERT_SCREEN_NOT_CONTAINS" => {
+                let buf = app.render_to_buffer(width, height);
+                let hit = (0..height).find(|y| App::line_text(&buf, *y).contains(rest));
+                assert!(
+                    hit.is_none(),
+                    "{}:{line_no}: screen unexpectedly contains {rest:?} on row {hit:?}",
+                    path.display(),
+                );
+            }
             "ASSERT_CELL" => {
                 // "A:A1  hello" — address then expected trimmed-cell text.
                 let mut parts = rest.splitn(2, char::is_whitespace);
@@ -174,6 +183,19 @@ fn run_transcript(path: &Path) {
                 assert_eq!(
                     got.trim(), want,
                     "{}:{line_no}: cell {addr} expected {want:?} got {got:?}",
+                    path.display()
+                );
+            }
+            // Assert a cell is not visible in the grid (hidden column or
+            // off-viewport). `cell_rendered_text` returns None only for
+            // cells that the visible-column layout skipped or that are
+            // outside the rendered area.
+            "ASSERT_CELL_HIDDEN" => {
+                let buf = app.render_to_buffer(width, height);
+                let got = app.cell_rendered_text(&buf, rest);
+                assert!(
+                    got.is_none(),
+                    "{}:{line_no}: expected {rest} hidden, got {got:?}",
                     path.display()
                 );
             }
@@ -222,6 +244,15 @@ fn run_transcript(path: &Path) {
                 let mut parts = rest.split_ascii_whitespace();
                 width = parts.next().unwrap().parse().unwrap();
                 height = parts.next().unwrap().parse().unwrap();
+            }
+            // "SPLASH <user>|<organization>" — flip the startup splash on
+            // with test-controlled identity text. The pipe lets user
+            // names carry whitespace without a tabs-vs-spaces footgun.
+            "SPLASH" => {
+                let mut parts = rest.splitn(2, '|');
+                let user = parts.next().unwrap_or("").trim().to_string();
+                let org = parts.next().unwrap_or("").trim().to_string();
+                app.show_splash(user, org);
             }
             // Pre-clean a file on disk so the transcript starts from a
             // known state. Errors (e.g. not-present) are ignored.
@@ -401,6 +432,10 @@ transcripts! {
     m3_ws_col_reset_width       => "M3_ws_col_reset_width.tsv",
     m3_ws_col_range_set_width   => "M3_ws_col_range_set_width.tsv",
     m3_ws_col_range_reset_width => "M3_ws_col_range_reset_width.tsv",
+    m3_ws_col_hide     => "M3_ws_col_hide.tsv",
+    m3_ws_col_display  => "M3_ws_col_display.tsv",
+    m3_ws_erase_confirm => "M3_ws_erase_confirm.tsv",
+    m3_range_format_date => "M3_range_format_date.tsv",
     m3_range_name      => "M3_range_name.tsv",
     m4_file_save       => "M4_file_save.tsv",
     m4_file_save_replace => "M4_file_save_replace.tsv",
@@ -427,10 +462,12 @@ transcripts! {
     m6_print_pagination     => "M6_print_pagination.tsv",
     m6_print_header_tokens  => "M6_print_header_tokens.tsv",
     m6_print_align_clear    => "M6_print_align_clear.tsv",
+    m6_print_printer_menu   => "M6_print_printer_menu.tsv",
     m6_range_search_find    => "M6_range_search_find.tsv",
     m7_graph_type       => "M7_graph_type.tsv",
     m7_graph_series     => "M7_graph_series.tsv",
     m7_graph_reset      => "M7_graph_reset.tsv",
     m7_graph_view_f10   => "M7_graph_view_f10.tsv",
     m7_graph_save       => "M7_graph_save.tsv",
+    m10_startup_splash  => "M10_startup_splash.tsv",
 }

@@ -1,0 +1,38 @@
+# /Worksheet Column Display — POINT for a range of columns; every
+# hidden column in the range becomes visible again. Columns outside
+# the range that were hidden stay hidden.
+
+KEYS a
+ENTER
+RIGHT
+KEYS b
+ENTER
+RIGHT
+KEYS c
+ENTER
+
+# Hide A and B.
+HOME
+KEY /
+KEY W
+KEY C
+KEY H
+RIGHT
+ENTER
+ASSERT_CELL_HIDDEN  A:A1
+ASSERT_CELL_HIDDEN  A:B1
+
+# Display only A.
+HOME
+KEY /
+KEY W
+KEY C
+KEY D
+ASSERT_MODE       POINT
+ENTER
+
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  a
+# B is still hidden — Display only unhid A's range.
+ASSERT_CELL_HIDDEN  A:B1
+ASSERT_CELL       A:C1  c

@@ -1,0 +1,41 @@
+# /Worksheet Column Hide — POINT for a range of columns; each column
+# in the range is removed from the on-screen layout until displayed
+# again. Hidden columns are still addressable in formulas; the
+# pointer can traverse them invisibly. Alt-F4 undoes the hide.
+
+ASSERT_POINTER    A:A1
+KEYS a
+ENTER
+RIGHT
+KEYS b
+ENTER
+RIGHT
+KEYS c
+ENTER
+
+# Baseline: all three columns render.
+HOME
+ASSERT_CELL       A:A1  a
+ASSERT_CELL       A:B1  b
+ASSERT_CELL       A:C1  c
+
+# /WCH → POINT → paint A..A → Enter hides column A.
+KEY /
+KEY W
+KEY C
+KEY H
+ASSERT_MODE       POINT
+ENTER
+
+ASSERT_MODE       READY
+# Column A is now skipped in the rendered layout.
+ASSERT_CELL_HIDDEN  A:A1
+# B and C still render.
+ASSERT_CELL       A:B1  b
+ASSERT_CELL       A:C1  c
+
+# Undo restores A.
+ALT_F 4
+ASSERT_CELL       A:A1  a
+ASSERT_CELL       A:B1  b
+ASSERT_CELL       A:C1  c

@@ -1,0 +1,23 @@
+# Startup splash — mirrors the 1-2-3 R3.4a welcome screen with our branding.
+# The app announces itself, shows licensing info (user + organization) and
+# waits for any key before dropping into READY. Passing a file on the CLI
+# skips this screen (covered by unit tests on App::new_with_file).
+
+SPLASH  Duane Moore|Zarkov
+
+ASSERT_SCREEN  l123
+ASSERT_SCREEN  Release
+ASSERT_SCREEN  Copyright
+ASSERT_SCREEN  Duane Moore
+ASSERT_SCREEN  LICENSING INFORMATION
+ASSERT_SCREEN  User name
+ASSERT_SCREEN  Organization
+ASSERT_SCREEN  Zarkov
+
+# Any key dismisses the splash and drops straight into READY without
+# dispatching the keystroke (so the 'a' does NOT start a LABEL entry).
+KEY a
+ASSERT_MODE    READY
+ASSERT_SCREEN_NOT_CONTAINS  Copyright
+ASSERT_SCREEN_NOT_CONTAINS  LICENSING INFORMATION
+ASSERT_POINTER A:A1

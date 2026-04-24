@@ -1,0 +1,31 @@
+# /Worksheet Erase Yes — clear every cell in the workbook and return
+# the pointer to A:A1. The "No" leaf cancels without side effect.
+
+ASSERT_POINTER    A:A1
+KEYS 42
+ENTER
+RIGHT
+KEYS hello
+ENTER
+HOME
+ASSERT_CELL       A:A1  42
+ASSERT_CELL       A:B1  hello
+
+# /WE then N cancels — nothing changes.
+KEY /
+KEY W
+KEY E
+KEY N
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  42
+ASSERT_CELL       A:B1  hello
+
+# /WEY wipes the workbook back to a blank.
+KEY /
+KEY W
+KEY E
+KEY Y
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1
+ASSERT_CELL       A:B1

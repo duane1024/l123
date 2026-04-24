@@ -7,7 +7,7 @@
 //! - Three-line control panel, mode indicator, cell readout.
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -30,13 +30,16 @@ use ratatui::{
     Terminal,
 };
 use l123_core::{
-    address::col_to_letters, label::is_value_starter, Address, CellContents, Format, FormatKind,
-    LabelPrefix, Mode, Range, SheetId, Value,
+    address::col_to_letters, label::is_value_starter, render_label, render_value_in_cell, Address,
+    CellContents, Format, FormatKind, LabelPrefix, Mode, Range, SheetId, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
 use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
 use l123_menu::{self as menu, Action, MenuBody, MenuItem};
+use l123_print::{
+    encode::lp::LpOptions, PrintContentMode, PrintFormatMode, PrintSettings, WorkbookView,
+};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
@@ -68,6 +71,11 @@ struct Workbook {
     cells: HashMap<Address, CellContents>,
     cell_formats: HashMap<Address, Format>,
     col_widths: HashMap<(SheetId, u16), u8>,
+    /// Columns marked hidden by `/Worksheet Column Hide`. Skipped by
+    /// the grid renderer; pointer and formulas can still address them.
+    /// Not persisted through xlsx today — IronCalc 0.7 doesn't model
+    /// a per-column hidden flag.
+    hidden_cols: HashSet<(SheetId, u16)>,
     /// Last-saved-to path. Prefilled into `/FS` prompts so re-save is
     /// a single Enter. `None` until the file has been saved at least
     /// once.
@@ -94,6 +102,7 @@ impl Workbook {
             cells: HashMap::new(),
             cell_formats: HashMap::new(),
             col_widths: HashMap::new(),
+            hidden_cols: HashSet::new(),
             active_path: None,
             pointer: Address::A1,
             viewport_col_offset: 0,
@@ -102,6 +111,20 @@ impl Workbook {
             current_graph: GraphDef::default(),
             graphs: BTreeMap::new(),
         }
+    }
+}
+
+impl WorkbookView for Workbook {
+    fn cell(&self, addr: Address) -> Option<&CellContents> {
+        self.cells.get(&addr)
+    }
+
+    fn col_width(&self, sheet: SheetId, col: u16) -> u8 {
+        self.col_widths.get(&(sheet, col)).copied().unwrap_or(9)
+    }
+
+    fn format_for_cell(&self, addr: Address) -> Format {
+        self.cell_formats.get(&addr).copied().unwrap_or(Format::GENERAL)
     }
 }
 
@@ -177,6 +200,20 @@ pub struct App {
     /// clicks can hit-test against it without recomputing the layout.
     /// Cleared at the top of each frame; re-set by `render_icon_panel`.
     icon_panel_area: Cell<Option<Rect>>,
+    /// Startup welcome screen. `Some` while the splash is up; any
+    /// keypress consumes the state and drops to READY without
+    /// dispatching. Always `None` for `App::new()` so existing
+    /// transcripts aren't blocked on a dismiss keystroke.
+    splash: Option<SplashInfo>,
+}
+
+/// User-visible identity shown on the startup splash. The renderer
+/// prints `user` after "User name:" and `organization` after
+/// "Organization:", matching the 1-2-3 R3.4a licensing block.
+#[derive(Debug, Clone)]
+pub struct SplashInfo {
+    pub user: String,
+    pub organization: String,
 }
 
 /// State kept for the duration of a [`Mode::Graph`] overlay.
@@ -215,9 +252,19 @@ struct SearchSession {
 /// Live state of a `/Print File` session between filename commit and
 /// final Go. Holds the destination path, the chosen range, and the
 /// current page-decoration settings.
+/// Where the Go step sends its output.
+#[derive(Debug, Clone)]
+enum PrintDestination {
+    /// `/Print File`: write the ASCII stream to this path.
+    File(PathBuf),
+    /// `/Print Printer`: pipe the ASCII stream (plus setup string) to
+    /// CUPS `lp` with these options.
+    Printer(LpOptions),
+}
+
 #[derive(Debug, Clone)]
 struct PrintSession {
-    path: PathBuf,
+    destination: PrintDestination,
     range: Option<Range>,
     /// Three-part header string (`L|C|R`). Empty means no header.
     header: String,
@@ -247,9 +294,17 @@ struct PrintSession {
 }
 
 impl PrintSession {
-    fn new(path: PathBuf) -> Self {
+    fn new_file(path: PathBuf) -> Self {
+        Self::with_destination(PrintDestination::File(path))
+    }
+
+    fn new_printer() -> Self {
+        Self::with_destination(PrintDestination::Printer(LpOptions::default()))
+    }
+
+    fn with_destination(destination: PrintDestination) -> Self {
         Self {
-            path,
+            destination,
             range: None,
             header: String::new(),
             footer: String::new(),
@@ -277,57 +332,6 @@ impl PrintSession {
         self.margin_top = 0;
         self.margin_bottom = 0;
         self.pg_length = 0;
-    }
-}
-
-/// How cell contents are rendered into the print file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrintContentMode {
-    /// Default — render each cell as it appears on the screen.
-    AsDisplayed,
-    /// Render formula cells as their source expression; labels and
-    /// constants unchanged.
-    CellFormulas,
-}
-
-/// Whether page decorations (headers, footers, …) wrap the output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrintFormatMode {
-    Formatted,
-    Unformatted,
-}
-
-/// Pre-resolved snapshot of the [`PrintSession`] fields the renderer
-/// needs. Built at Go-time so the render helper doesn't re-borrow
-/// `self.print`.
-struct PrintSettings {
-    header: String,
-    footer: String,
-    content_mode: PrintContentMode,
-    format_mode: PrintFormatMode,
-    margin_left: u16,
-    margin_right: u16,
-    margin_top: u16,
-    margin_bottom: u16,
-    pg_length: u16,
-    /// Starting page number for the first page of this Go.
-    start_page: u32,
-}
-
-impl Default for PrintSettings {
-    fn default() -> Self {
-        Self {
-            header: String::new(),
-            footer: String::new(),
-            content_mode: PrintContentMode::AsDisplayed,
-            format_mode: PrintFormatMode::Formatted,
-            margin_left: 0,
-            margin_right: 0,
-            margin_top: 0,
-            margin_bottom: 0,
-            pg_length: 0,
-            start_page: 1,
-        }
     }
 }
 
@@ -379,6 +383,13 @@ enum JournalEntry {
         sheet: SheetId,
         col: u16,
         prev_width: Option<u8>,
+    },
+    /// Restore one column's hidden flag. Used by `/Worksheet Column
+    /// Hide` and `/Worksheet Column Display`.
+    ColHidden {
+        sheet: SheetId,
+        col: u16,
+        prev_hidden: bool,
     },
     /// Group of entries popped and applied together — used when
     /// GROUP propagated a single command to multiple sheets.
@@ -752,6 +763,12 @@ enum PendingCommand {
     /// commit, clear width overrides for every column in the selected
     /// range.
     ColumnRangeResetWidth,
+    /// POINT step of `/Worksheet Column Hide`. On commit, mark every
+    /// column in the selected range as hidden.
+    ColumnHide,
+    /// POINT step of `/Worksheet Column Display`. On commit, unhide
+    /// every column in the selected range.
+    ColumnDisplay,
 }
 
 impl PendingCommand {
@@ -771,6 +788,8 @@ impl PendingCommand {
             PendingCommand::GraphSeries { .. } => "Enter graph range:",
             PendingCommand::ColumnRangeSetWidth { .. } => "Enter range of columns to set:",
             PendingCommand::ColumnRangeResetWidth => "Enter range of columns to reset:",
+            PendingCommand::ColumnHide => "Enter range of columns to hide:",
+            PendingCommand::ColumnDisplay => "Enter range of columns to display:",
         }
     }
 }
@@ -848,7 +867,38 @@ impl App {
             icon_panel: None,
             current_panel: l123_graph::Panel::One,
             icon_panel_area: Cell::new(None),
+            splash: None,
         }
+    }
+
+    /// Construct an app with the startup splash active. Normal
+    /// [`App::run`] uses this; tests and [`App::new_with_file`] stay
+    /// splashless so they can get straight to work.
+    pub fn new_with_splash(user: String, organization: String) -> Self {
+        let mut app = Self::new();
+        app.splash = Some(SplashInfo { user, organization });
+        app
+    }
+
+    /// Construct an app pre-loaded from `path`, skipping the splash —
+    /// mirrors the `l123 file.xlsx` CLI invocation where the user has
+    /// already told us which file they want.
+    pub fn new_with_file(path: PathBuf) -> Self {
+        let mut app = Self::new();
+        app.load_workbook_from(path);
+        app
+    }
+
+    /// Flip the startup splash on with the given identity strings.
+    /// Acceptance transcripts use this via the `SPLASH` directive so
+    /// they don't have to re-create the app mid-run.
+    pub fn show_splash(&mut self, user: String, organization: String) {
+        self.splash = Some(SplashInfo { user, organization });
+    }
+
+    /// True while the startup splash is up.
+    pub fn splash_active(&self) -> bool {
+        self.splash.is_some()
     }
 
     fn wb(&self) -> &Workbook {
@@ -872,13 +922,26 @@ impl App {
     }
 
     pub fn run() -> anyhow::Result<()> {
+        Self::run_with_file(None)
+    }
+
+    /// CLI entry point. When `path` is set the app opens that workbook
+    /// and skips the splash; when `None` it greets the user with the
+    /// licensing block until the first keypress.
+    pub fn run_with_file(path: Option<PathBuf>) -> anyhow::Result<()> {
         let mut stdout = io::stdout();
         enable_raw_mode()?;
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        let mut app = App::new();
+        let mut app = match path {
+            Some(p) => App::new_with_file(p),
+            None => {
+                let id = crate::identity::Identity::resolve();
+                App::new_with_splash(id.user, id.organization)
+            }
+        };
         app.probe_image_picker();
         let result = app.event_loop(&mut terminal);
 
@@ -1002,6 +1065,13 @@ impl App {
         // Ctrl-C (Ctrl-Break alias) always exits.
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
             self.running = false;
+            return;
+        }
+        // Startup splash consumes the first keystroke and drops to
+        // READY without dispatching — matches the 1-2-3 R3.4a behavior
+        // where any key clears the welcome screen.
+        if self.splash.is_some() {
+            self.splash = None;
             return;
         }
         // /File List overlay takes precedence when active — it owns the
@@ -1344,6 +1414,14 @@ impl App {
                     }
                 }
             }
+            JournalEntry::ColHidden { sheet, col, prev_hidden } => {
+                let key = (sheet, col);
+                if prev_hidden {
+                    self.wb_mut().hidden_cols.insert(key);
+                } else {
+                    self.wb_mut().hidden_cols.remove(&key);
+                }
+            }
             JournalEntry::Batch(entries) => {
                 // Apply in reverse order so the "outer" state restores
                 // after the "inner" details.
@@ -1596,12 +1674,15 @@ impl App {
                 self.undo_enabled = false;
                 self.close_menu();
             }
+            Action::WorksheetEraseConfirm => self.execute_worksheet_erase(),
             Action::WorksheetColumnSetWidth => self.start_col_width_prompt(),
             Action::WorksheetColumnResetWidth => self.execute_col_reset_width(),
             Action::WorksheetColumnRangeSetWidth => self.start_col_range_width_prompt(),
             Action::WorksheetColumnRangeResetWidth => {
                 self.begin_point(PendingCommand::ColumnRangeResetWidth)
             }
+            Action::WorksheetColumnHide => self.begin_point(PendingCommand::ColumnHide),
+            Action::WorksheetColumnDisplay => self.begin_point(PendingCommand::ColumnDisplay),
             Action::RangeNameCreate => self.start_name_prompt(
                 "Enter name:",
                 PromptNext::RangeNameCreate,
@@ -1633,6 +1714,21 @@ impl App {
             Action::RangeFormatText => self.begin_point(PendingCommand::RangeFormat {
                 format: Format { kind: FormatKind::Text, decimals: 0 },
             }),
+            Action::RangeFormatDateDmy => self.begin_point(PendingCommand::RangeFormat {
+                format: Format { kind: FormatKind::DateDmy, decimals: 0 },
+            }),
+            Action::RangeFormatDateDm => self.begin_point(PendingCommand::RangeFormat {
+                format: Format { kind: FormatKind::DateDm, decimals: 0 },
+            }),
+            Action::RangeFormatDateMy => self.begin_point(PendingCommand::RangeFormat {
+                format: Format { kind: FormatKind::DateMy, decimals: 0 },
+            }),
+            Action::RangeFormatDateLongIntl => self.begin_point(PendingCommand::RangeFormat {
+                format: Format { kind: FormatKind::DateLongIntl, decimals: 0 },
+            }),
+            Action::RangeFormatDateShortIntl => self.begin_point(PendingCommand::RangeFormat {
+                format: Format { kind: FormatKind::DateShortIntl, decimals: 0 },
+            }),
             Action::FileSave => self.start_file_save_prompt(),
             Action::FileRetrieve => self.start_file_retrieve_prompt(),
             Action::FileXtractFormulas => self.start_file_xtract_prompt(XtractKind::Formulas),
@@ -1642,8 +1738,9 @@ impl App {
             Action::FileOpenBefore => self.start_file_open_prompt(true),
             Action::FileOpenAfter => self.start_file_open_prompt(false),
             Action::PrintFile => self.start_print_file_prompt(),
+            Action::PrintPrinter => self.start_print_printer(),
             Action::PrintFileRange => self.begin_point(PendingCommand::PrintFileRange),
-            Action::PrintFileGo => self.execute_print_file_go(),
+            Action::PrintFileGo => self.execute_print_go(),
             Action::PrintFileQuit => self.finish_print_session(),
             Action::PrintFileAlign => {
                 if let Some(s) = self.print.as_mut() {
@@ -1729,8 +1826,6 @@ impl App {
             Action::GraphView => self.enter_graph_view(),
             Action::GraphSave => self.start_graph_save_prompt(),
             Action::GraphQuit => self.close_menu(),
-            // Subsequent cycles wire these. For now, descent is a no-op.
-            _ => self.close_menu(),
         }
     }
 
@@ -1827,12 +1922,32 @@ impl App {
     }
 
     /// /FN — wipe the current workbook back to a blank slate. Both the
+    /// `/Worksheet Erase Yes` — drop every active file and replace the
+    /// workspace with a single blank workbook. Session-level prompts,
+    /// menus, and modal overlays are also cleared so the user lands in
+    /// a predictable READY state on A:A1.
+    fn execute_worksheet_erase(&mut self) {
+        self.entry = None;
+        self.menu = None;
+        self.prompt = None;
+        self.point = None;
+        self.save_confirm = None;
+        self.pending_name = None;
+        self.pending_xtract_path = None;
+        self.file_list = None;
+        self.active_files = vec![Workbook::new()];
+        self.current = 0;
+        self.recalc_pending = false;
+        self.mode = Mode::Ready;
+    }
+
     /// Before and After branches collapse to this same reset for now;
     /// true multi-file insertion is M5.
     fn execute_file_new(&mut self) {
         self.wb_mut().cells.clear();
         self.wb_mut().cell_formats.clear();
         self.wb_mut().col_widths.clear();
+        self.wb_mut().hidden_cols.clear();
         self.entry = None;
         self.menu = None;
         self.prompt = None;
@@ -1860,6 +1975,14 @@ impl App {
             fresh: false,
         });
         self.mode = Mode::Menu;
+    }
+
+    /// `/Print Printer`: open a printer session straight away — no path
+    /// prompt. Shares the submenu with `/Print File`; the Go branch
+    /// sends output through CUPS `lp` instead of writing a file.
+    fn start_print_printer(&mut self) {
+        self.print = Some(PrintSession::new_printer());
+        self.enter_print_file_menu();
     }
 
     fn enter_print_file_menu(&mut self) {
@@ -1978,7 +2101,7 @@ impl App {
         self.close_menu();
     }
 
-    fn execute_print_file_go(&mut self) {
+    fn execute_print_go(&mut self) {
         let Some(session) = self.print.as_ref() else {
             self.close_menu();
             return;
@@ -1990,12 +2113,6 @@ impl App {
             self.enter_print_file_menu();
             return;
         };
-        let path = session.path.clone();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-        }
         let settings = PrintSettings {
             header: session.header.clone(),
             footer: session.footer.clone(),
@@ -2008,8 +2125,28 @@ impl App {
             pg_length: session.pg_length,
             start_page: session.next_page,
         };
-        let (body, pages) = self.render_print_body(range, &settings);
-        let _ = std::fs::write(&path, body);
+        let grid = l123_print::render(self.wb(), range, &settings);
+        let pages = grid.pages.len() as u32;
+        match &session.destination {
+            PrintDestination::File(path) => {
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                }
+                let _ = std::fs::write(path, l123_print::to_ascii(&grid));
+            }
+            PrintDestination::Printer(lp_opts) => {
+                #[cfg(unix)]
+                {
+                    let _ = l123_print::encode::lp::to_lp(&grid, lp_opts);
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = lp_opts; // hold field live on non-unix
+                }
+            }
+        }
         // Session stays alive so the user can issue further commands
         // (Options, another Go, Align, Clear, …). Quit is the way
         // out. Advance the page counter for the next Go.
@@ -2017,138 +2154,6 @@ impl App {
             s.next_page = s.next_page.saturating_add(pages);
         }
         self.enter_print_file_menu();
-    }
-
-    /// Render the selected range as plain ASCII, one line per row.
-    /// Each cell gets its configured column width; trailing spaces
-    /// are trimmed per row. Optional `header` / `footer` surround
-    /// the body as `|`-split L|C|R strings.
-    /// Returns the rendered body and the number of pages written so
-    /// the caller can advance its page counter.
-    fn render_print_body(&self, range: Range, settings: &PrintSettings) -> (String, u32) {
-        let r = range.normalized();
-        // Page width = sum of column widths in the selected range.
-        let page_width: usize = (r.start.col..=r.end.col)
-            .map(|c| self.col_width_of(r.start.sheet, c) as usize)
-            .sum();
-        let page_width = page_width.max(1);
-        // Right margin trims content lines (after the left pad) down
-        // to `page_width - margin_right`. `0` = no limit.
-        let effective_width = if settings.margin_right == 0 {
-            page_width
-        } else {
-            page_width.saturating_sub(settings.margin_right as usize)
-        };
-        let (header, footer) = match settings.format_mode {
-            PrintFormatMode::Formatted => (settings.header.as_str(), settings.footer.as_str()),
-            PrintFormatMode::Unformatted => ("", ""),
-        };
-        let content_mode = settings.content_mode;
-        let left_pad: String = " ".repeat(settings.margin_left as usize);
-
-        // Collect content rows (after pipe-row suppression, content-
-        // mode rendering, and right-margin truncation). Each entry
-        // already has `left_pad` prepended and a trailing `\n`.
-        let mut rows: Vec<String> = Vec::new();
-        for row in r.start.row..=r.end.row {
-            let first = Address::new(r.start.sheet, r.start.col, row);
-            if let Some(CellContents::Label { prefix: LabelPrefix::Pipe, .. }) =
-                self.wb().cells.get(&first)
-            {
-                continue;
-            }
-            let mut line = String::new();
-            for col in r.start.col..=r.end.col {
-                let addr = Address::new(r.start.sheet, col, row);
-                let w = self.col_width_of(r.start.sheet, col) as usize;
-                let piece = match self.wb().cells.get(&addr) {
-                    Some(CellContents::Empty) | None => " ".repeat(w),
-                    Some(CellContents::Label { prefix, text }) => {
-                        render_label(*prefix, text, w)
-                    }
-                    Some(CellContents::Constant(v)) => {
-                        let fmt = self.format_for_cell(addr);
-                        render_value_in_cell(v, w, fmt).unwrap_or_else(|| " ".repeat(w))
-                    }
-                    Some(CellContents::Formula { expr, cached_value }) => {
-                        match content_mode {
-                            PrintContentMode::CellFormulas => {
-                                let src = format!("@{expr}");
-                                let pad = w.saturating_sub(src.chars().count());
-                                let mut s = src;
-                                s.extend(std::iter::repeat_n(' ', pad));
-                                s
-                            }
-                            PrintContentMode::AsDisplayed => match cached_value {
-                                Some(v) => {
-                                    let fmt = self.format_for_cell(addr);
-                                    render_value_in_cell(v, w, fmt)
-                                        .unwrap_or_else(|| " ".repeat(w))
-                                }
-                                None => " ".repeat(w),
-                            },
-                        }
-                    }
-                };
-                line.push_str(&piece);
-            }
-            let truncated: String = line.chars().take(effective_width).collect();
-            let trimmed: String = truncated.trim_end().to_string();
-            let mut entry = String::with_capacity(left_pad.len() + trimmed.len() + 1);
-            entry.push_str(&left_pad);
-            entry.push_str(&trimmed);
-            entry.push('\n');
-            rows.push(entry);
-        }
-
-        // Chunk into pages. pg_length == 0 means no pagination — one
-        // page with every row.
-        let per_page = if settings.pg_length == 0 {
-            rows.len().max(1)
-        } else {
-            settings.pg_length as usize
-        };
-        let pages: Vec<&[String]> = if rows.is_empty() {
-            vec![&[]]
-        } else {
-            rows.chunks(per_page).collect()
-        };
-
-        let today = today_ddmmmyy();
-        let mut out = String::new();
-        for (i, page) in pages.iter().enumerate() {
-            let page_no = settings.start_page as usize + i;
-            // Top margin.
-            for _ in 0..settings.margin_top {
-                out.push('\n');
-            }
-            if !header.is_empty() {
-                let substituted = substitute_tokens(header, page_no, &today);
-                out.push_str(&left_pad);
-                out.push_str(&format_three_part(&substituted, page_width));
-                out.push('\n');
-                out.push('\n');
-            }
-            for row in page.iter() {
-                out.push_str(row);
-            }
-            if !footer.is_empty() {
-                let substituted = substitute_tokens(footer, page_no, &today);
-                out.push('\n');
-                out.push_str(&left_pad);
-                out.push_str(&format_three_part(&substituted, page_width));
-                out.push('\n');
-            }
-            // Bottom margin.
-            for _ in 0..settings.margin_bottom {
-                out.push('\n');
-            }
-            // Form feed between pages (not after the last).
-            if i + 1 < pages.len() {
-                out.push('\x0c');
-            }
-        }
-        (out, pages.len() as u32)
     }
 
     fn start_file_open_prompt(&mut self, before: bool) {
@@ -2191,6 +2196,7 @@ impl App {
             cells,
             cell_formats: HashMap::new(),
             col_widths,
+            hidden_cols: HashSet::new(),
             active_path: Some(path),
             pointer: Address::A1,
             viewport_col_offset: 0,
@@ -2334,6 +2340,7 @@ impl App {
         self.wb_mut().cells.clear();
         self.wb_mut().cell_formats.clear();
         self.wb_mut().col_widths.clear();
+        self.wb_mut().hidden_cols.clear();
         self.entry = None;
         self.wb_mut().pointer = Address::A1;
         self.wb_mut().viewport_col_offset = 0;
@@ -2745,6 +2752,14 @@ impl App {
                 self.execute_col_range_width(range, None);
                 self.mode = Mode::Ready;
             }
+            PendingCommand::ColumnHide => {
+                self.execute_col_hide_display(range, true);
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::ColumnDisplay => {
+                self.execute_col_hide_display(range, false);
+                self.mode = Mode::Ready;
+            }
         }
     }
 
@@ -2942,6 +2957,29 @@ impl App {
         self.close_menu();
     }
 
+    /// Toggle the hidden flag for every column in `range` across every
+    /// target sheet. `hide == true` hides (`/Worksheet Column Hide`);
+    /// `hide == false` unhides (`/Worksheet Column Display`). Journal
+    /// entries capture the prior state per (sheet, col) so Alt-F4 can
+    /// invert the whole batch in one step.
+    fn execute_col_hide_display(&mut self, range: Range, hide: bool) {
+        let r = range.normalized();
+        let mut batch: Vec<JournalEntry> = Vec::new();
+        for sheet in self.target_sheets() {
+            for col in r.start.col..=r.end.col {
+                let key = (sheet, col);
+                let prev_hidden = self.wb().hidden_cols.contains(&key);
+                if hide {
+                    self.wb_mut().hidden_cols.insert(key);
+                } else {
+                    self.wb_mut().hidden_cols.remove(&key);
+                }
+                batch.push(JournalEntry::ColHidden { sheet, col, prev_hidden });
+            }
+        }
+        self.push_journal_batch(batch);
+    }
+
     /// Apply a width change to every column in `range` across every
     /// target sheet. `new_width == None` resets to the default; `Some(w)`
     /// sets an explicit width. Batched as a single journal entry so
@@ -3135,7 +3173,7 @@ impl App {
                     return;
                 }
                 let path = PathBuf::from(&p.buffer);
-                self.print = Some(PrintSession::new(path));
+                self.print = Some(PrintSession::new_file(path));
                 self.enter_print_file_menu();
             }
             PromptNext::PrintFileHeader => {
@@ -3559,6 +3597,13 @@ impl App {
     // ---------------- rendering ----------------
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        // Startup splash is full-screen — no control panel, no grid,
+        // no status line. Draws until the first keystroke dismisses it.
+        if let Some(info) = self.splash.as_ref() {
+            self.render_splash(area, buf, info);
+            return;
+        }
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -3589,6 +3634,90 @@ impl App {
             }
         }
         self.render_status(chunks[2], buf);
+    }
+
+    fn render_splash(&self, area: Rect, buf: &mut Buffer, info: &SplashInfo) {
+        // Teal field matches the 1-2-3 R3.4a startup screen. Rendering
+        // is best-effort on narrow terminals — text is centered and
+        // truncated by the Paragraph widget if it doesn't fit.
+        let teal = Style::default().bg(Color::Cyan);
+        for y in 0..area.height {
+            for x in 0..area.width {
+                buf[(area.x + x, area.y + y)].set_style(teal);
+            }
+        }
+
+        let banner = [
+            Line::from(""),
+            Line::from(Span::styled(
+                "l123",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(format!("Release {}", env!("CARGO_PKG_VERSION"))),
+            Line::from(""),
+            Line::from("A terminal spreadsheet in the 1-2-3 tradition."),
+            Line::from(""),
+            Line::from("Copyright 2026 Duane Moore"),
+            Line::from("All Rights Reserved."),
+            Line::from(""),
+        ];
+
+        let banner_w = 60.min(area.width.saturating_sub(4));
+        let banner_h = banner.len() as u16 + 2;
+        if area.width < banner_w + 2 || area.height < banner_h + 6 {
+            return;
+        }
+
+        let banner_x = area.x + (area.width - banner_w) / 2;
+        let banner_y = area.y + 2;
+        let banner_rect = Rect::new(banner_x, banner_y, banner_w, banner_h);
+        let banner_block = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Color::Black).fg(Color::Cyan));
+        let banner_inner = banner_block.inner(banner_rect);
+        banner_block.render(banner_rect, buf);
+        Paragraph::new(banner.to_vec())
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(Style::default().bg(Color::Black).fg(Color::Cyan))
+            .render(banner_inner, buf);
+
+        let licensing_y = banner_y + banner_h + 2;
+        if licensing_y + 4 >= area.y + area.height {
+            return;
+        }
+
+        let licensing_x = area.x + 4;
+        let licensing_w = area.width.saturating_sub(8);
+
+        let heading = Paragraph::new(Line::from(Span::styled(
+            "LICENSING INFORMATION:",
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .alignment(ratatui::layout::Alignment::Center);
+        heading.render(Rect::new(licensing_x, licensing_y, licensing_w, 1), buf);
+
+        let label_style = Style::default().bg(Color::Cyan).fg(Color::Black);
+        let value_style = Style::default()
+            .bg(Color::Cyan)
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
+        let rows = [
+            Line::from(vec![
+                Span::styled("User name:     ", label_style),
+                Span::styled(info.user.clone(), value_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Organization:  ", label_style),
+                Span::styled(info.organization.clone(), value_style),
+            ]),
+        ];
+        Paragraph::new(rows.to_vec()).render(
+            Rect::new(licensing_x, licensing_y + 2, licensing_w, 2),
+            buf,
+        );
     }
 
     /// The v3.1 manual shows the icon panel occupying the right edge
@@ -4021,11 +4150,13 @@ impl App {
     }
 
     /// Lay out the visible columns starting at `viewport_col_offset`,
-    /// honoring per-column width overrides from `col_widths`. Returns
-    /// `(col_0b, x_offset, drawn_width)` for each column that has any
-    /// on-screen footprint. `x_offset` is measured from the start of
-    /// the content area (after `ROW_GUTTER`). The last entry may be
-    /// truncated to fit `content_width`.
+    /// honoring per-column width overrides from `col_widths` and the
+    /// `hidden_cols` set. Returns `(col_0b, x_offset, drawn_width)` for
+    /// each column that has any on-screen footprint. Hidden columns are
+    /// skipped entirely — the next visible column takes the slot.
+    /// `x_offset` is measured from the start of the content area
+    /// (after `ROW_GUTTER`). The last entry may be truncated to fit
+    /// `content_width`.
     fn visible_column_layout(&self, content_width: u16) -> Vec<(u16, u16, u16)> {
         let mut out = Vec::new();
         if content_width == 0 {
@@ -4035,8 +4166,9 @@ impl App {
         let mut x_off: u16 = 0;
         let mut col = self.wb().viewport_col_offset;
         loop {
+            let hidden = self.wb().hidden_cols.contains(&(sheet, col));
             let w = self.col_width_of(sheet, col) as u16;
-            if w == 0 {
+            if hidden || w == 0 {
                 col = col.saturating_add(1);
                 if col == u16::MAX {
                     break;
@@ -4265,91 +4397,6 @@ fn shift_cells_cols(
     }
 }
 
-/// Substitute 1-2-3 header/footer tokens:
-///   `#` → `page_no` (as a decimal number)
-///   `@` → `today` (pre-formatted DD-MMM-YY date string)
-/// Other characters pass through untouched. `\name` (named-range
-/// substitution) is a later milestone.
-fn substitute_tokens(s: &str, page_no: usize, today: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '#' => out.push_str(&page_no.to_string()),
-            '@' => out.push_str(today),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// Today's date formatted as `DD-MMM-YY` (1-2-3's default D1 date
-/// format). Falls back to an empty string if the system clock is
-/// somehow earlier than the Unix epoch.
-fn today_ddmmmyy() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(d) => d.as_secs() as i64,
-        Err(_) => return String::new(),
-    };
-    // Convert Unix seconds to (year, month, day) via the civil
-    // from-days algorithm from Howard Hinnant's date paper.
-    let days = secs.div_euclid(86_400);
-    let (y, m, d) = days_to_ymd(days);
-    let month_name = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ][(m - 1) as usize];
-    format!("{d:02}-{month_name}-{:02}", (y % 100 + 100) % 100)
-}
-
-/// Days since Unix epoch (1970-01-01) → (year, month [1..12],
-/// day-of-month [1..31]). Hinnant's civil-from-days algorithm.
-fn days_to_ymd(z: i64) -> (i32, u32, u32) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = y + if m <= 2 { 1 } else { 0 };
-    (y as i32, m, d)
-}
-
-/// Format a `|`-split three-part header/footer line to `width`
-/// characters. Parts past the third are ignored; missing parts are
-/// treated as empty. Left-aligned | centered | right-aligned,
-/// truncated to width if over.
-fn format_three_part(s: &str, width: usize) -> String {
-    let mut parts = s.splitn(3, '|');
-    let left = parts.next().unwrap_or("");
-    let center = parts.next().unwrap_or("");
-    let right = parts.next().unwrap_or("");
-    let lcount = left.chars().count();
-    let ccount = center.chars().count();
-    let rcount = right.chars().count();
-    // Lay out Left..padL..Center..padR..Right within `width`.
-    if lcount + ccount + rcount >= width {
-        // Truncate: concatenate without alignment, cut to width.
-        let joined = format!("{left}{center}{right}");
-        return joined.chars().take(width).collect();
-    }
-    let c_start = (width.saturating_sub(ccount)) / 2;
-    let c_end = c_start + ccount;
-    let r_start = width - rcount;
-    let mut out = String::with_capacity(width);
-    out.push_str(left);
-    let pad1 = c_start.saturating_sub(lcount);
-    out.extend(std::iter::repeat_n(' ', pad1));
-    out.push_str(center);
-    let pad2 = r_start.saturating_sub(c_end);
-    out.extend(std::iter::repeat_n(' ', pad2));
-    out.push_str(right);
-    out
-}
-
 fn write_centered(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
     let w = width as usize;
     let t: String = if text.chars().count() >= w {
@@ -4398,109 +4445,10 @@ fn draw_cell_contents(
     }
 }
 
-fn render_value_in_cell(v: &Value, width: usize, format: Format) -> Option<String> {
-    match v {
-        Value::Number(n) => {
-            let s = l123_core::format_number(*n, format);
-            // Overflow: if the number doesn't fit the column, fill with
-            // asterisks (Authenticity Contract §20.9). General format
-            // would normally switch to scientific first; for M3 we
-            // short-circuit to asterisks as the visible failure.
-            if s.chars().count() > width && !matches!(format.kind, FormatKind::General) {
-                Some("*".repeat(width))
-            } else {
-                Some(right_pad(&s, width, true))
-            }
-        }
-        Value::Text(s) => Some(right_pad(s, width, false)),
-        Value::Bool(b) => Some(right_pad(if *b { "TRUE" } else { "FALSE" }, width, true)),
-        Value::Error(e) => Some(right_pad(e.lotus_tag(), width, true)),
-        Value::Empty => None,
-    }
-}
-
-fn render_label(prefix: LabelPrefix, text: &str, width: usize) -> String {
-    if text.is_empty() {
-        return " ".repeat(width);
-    }
-    match prefix {
-        LabelPrefix::Apostrophe | LabelPrefix::Pipe => right_pad(text, width, false),
-        LabelPrefix::Quote => right_pad(text, width, true),
-        LabelPrefix::Caret => center_pad(text, width),
-        LabelPrefix::Backslash => repeat_to_width(text, width),
-    }
-}
-
-/// Left-pad (right_align=true) or right-pad with spaces to `width`, or
-/// truncate to `width`.
-fn right_pad(text: &str, width: usize, right_align: bool) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() >= width {
-        return chars.into_iter().take(width).collect();
-    }
-    let pad = width - chars.len();
-    if right_align {
-        format!("{}{text}", " ".repeat(pad))
-    } else {
-        format!("{text}{}", " ".repeat(pad))
-    }
-}
-
-fn center_pad(text: &str, width: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() >= width {
-        return chars.into_iter().take(width).collect();
-    }
-    let pad = width - chars.len();
-    let left = pad / 2;
-    let right = pad - left;
-    format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
-}
-
-fn repeat_to_width(pattern: &str, width: usize) -> String {
-    if pattern.is_empty() {
-        return " ".repeat(width);
-    }
-    let mut out = String::with_capacity(width);
-    let pattern_chars: Vec<char> = pattern.chars().collect();
-    while out.chars().count() < width {
-        for ch in &pattern_chars {
-            if out.chars().count() == width {
-                break;
-            }
-            out.push(*ch);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
-
-    #[test]
-    fn days_to_ymd_known_dates() {
-        // Fixtures cover epoch, leap year, century non-leap, and
-        // post-2000 leap dates to cross-check the civil algorithm.
-        assert_eq!(days_to_ymd(0), (1970, 1, 1));
-        assert_eq!(days_to_ymd(31), (1970, 2, 1));
-        assert_eq!(days_to_ymd(365), (1971, 1, 1));
-        // 2000-02-29 is 11016 days past 1970-01-01.
-        assert_eq!(days_to_ymd(11016), (2000, 2, 29));
-        assert_eq!(days_to_ymd(11017), (2000, 3, 1));
-        // 2026-04-23
-        assert_eq!(days_to_ymd(20566), (2026, 4, 23));
-    }
-
-    #[test]
-    fn substitute_tokens_expands_hash_and_at() {
-        assert_eq!(
-            substitute_tokens("Page # of 5 (@)", 3, "23-Apr-26"),
-            "Page 3 of 5 (23-Apr-26)"
-        );
-        assert_eq!(substitute_tokens("no tokens", 7, "X"), "no tokens");
-    }
 
     #[test]
     fn starts_at_a1() {
@@ -4980,16 +4928,6 @@ mod tests {
             );
             assert_eq!(e.buffer, "", "buffer should be empty after prefix char");
         }
-    }
-
-    #[test]
-    fn render_label_alignments() {
-        assert_eq!(render_label(LabelPrefix::Apostrophe, "hi", 9), "hi       ");
-        assert_eq!(render_label(LabelPrefix::Quote, "hi", 9), "       hi");
-        assert_eq!(render_label(LabelPrefix::Caret, "hi", 9), "   hi    ");
-        assert_eq!(render_label(LabelPrefix::Backslash, "-", 9), "---------");
-        assert_eq!(render_label(LabelPrefix::Backslash, "ab", 9), "ababababa");
-        assert_eq!(render_label(LabelPrefix::Backslash, "abc", 9), "abcabcabc");
     }
 
     #[test]

@@ -1,0 +1,31 @@
+# /Print Printer — menu descent only.
+#
+# Unlike /PF there is no filename prompt; /PP goes straight into the
+# same submenu (Range|Line|Page|Options|Clear|Align|Go|Quit) as /PF.
+# Actually piping bytes to CUPS `lp` requires a real printer, so Go
+# is not exercised here — that path is covered by unit tests in
+# l123-print::encode::lp.
+
+# Seed a cell so the session has something to act on.
+KEYS 'Hello
+ENTER
+
+HOME
+KEY /
+KEY P
+KEY P
+# Straight into the shared session menu — no path prompt.
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Range
+ASSERT_PANEL_L2   Go
+ASSERT_PANEL_L2   Quit
+
+# Range point-select A1..A1 round-trips fine.
+KEY R
+ASSERT_MODE       POINT
+ENTER
+ASSERT_PANEL_L2   Go
+
+# Quit ends the session and returns to READY.
+KEY Q
+ASSERT_MODE       READY

@@ -55,6 +55,8 @@ pub enum Action {
     WorksheetColumnResetWidth,
     WorksheetColumnRangeSetWidth,
     WorksheetColumnRangeResetWidth,
+    WorksheetColumnHide,
+    WorksheetColumnDisplay,
     WorksheetGlobalRecalcAutomatic,
     WorksheetGlobalRecalcManual,
     WorksheetGlobalGroupEnable,
@@ -73,7 +75,11 @@ pub enum Action {
     RangeFormatComma,
     RangeFormatGeneral,
     RangeFormatPercent,
-    RangeFormatDate,
+    RangeFormatDateDmy,
+    RangeFormatDateDm,
+    RangeFormatDateMy,
+    RangeFormatDateLongIntl,
+    RangeFormatDateShortIntl,
     RangeFormatText,
     RangeFormatReset,
     Copy,
@@ -87,6 +93,10 @@ pub enum Action {
     FileOpenBefore,
     FileOpenAfter,
     PrintFile,
+    /// `/Print Printer` — start a printer session. Shares the session
+    /// submenu (`PRINT_FILE_MENU`) with `/Print File`; Go branches on
+    /// the session destination.
+    PrintPrinter,
     PrintFileRange,
     PrintFileGo,
     PrintFileQuit,
@@ -297,13 +307,13 @@ const WS_COLUMN_MENU: &[MenuItem] = &[
         letter: 'H',
         name: "Hide",
         help: "Hide columns",
-        body: MenuBody::NotImplemented("ws-col-hide"),
+        body: MenuBody::Action(Action::WorksheetColumnHide),
     },
     MenuItem {
         letter: 'D',
         name: "Display",
         help: "Redisplay hidden columns",
-        body: MenuBody::NotImplemented("ws-col-display"),
+        body: MenuBody::Action(Action::WorksheetColumnDisplay),
     },
     MenuItem {
         letter: 'C',
@@ -680,8 +690,8 @@ const RANGE_FORMAT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'D',
         name: "Date",
-        help: "Date format (select D1..D5)",
-        body: MenuBody::Action(Action::RangeFormatDate),
+        help: "Date format (select D1..D5, Time for D6..D9)",
+        body: MenuBody::Submenu(RANGE_FORMAT_DATE_MENU),
     },
     MenuItem {
         letter: 'T',
@@ -700,6 +710,45 @@ const RANGE_FORMAT_MENU: &[MenuItem] = &[
         name: "Reset",
         help: "Revert to global format",
         body: MenuBody::Action(Action::RangeFormatReset),
+    },
+];
+
+const RANGE_FORMAT_DATE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: '1',
+        name: "1",
+        help: "DD-MMM-YY",
+        body: MenuBody::Action(Action::RangeFormatDateDmy),
+    },
+    MenuItem {
+        letter: '2',
+        name: "2",
+        help: "DD-MMM",
+        body: MenuBody::Action(Action::RangeFormatDateDm),
+    },
+    MenuItem {
+        letter: '3',
+        name: "3",
+        help: "MMM-YY",
+        body: MenuBody::Action(Action::RangeFormatDateMy),
+    },
+    MenuItem {
+        letter: '4',
+        name: "4",
+        help: "Long international (MM/DD/YY)",
+        body: MenuBody::Action(Action::RangeFormatDateLongIntl),
+    },
+    MenuItem {
+        letter: '5',
+        name: "5",
+        help: "Short international (MM/DD)",
+        body: MenuBody::Action(Action::RangeFormatDateShortIntl),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Time",
+        help: "Time format (D6..D9)",
+        body: MenuBody::NotImplemented("rf-date-time"),
     },
 ];
 
@@ -1225,7 +1274,7 @@ const PRINT_MENU: &[MenuItem] = &[
         letter: 'P',
         name: "Printer",
         help: "Print to printer",
-        body: MenuBody::NotImplemented("p-printer"),
+        body: MenuBody::Action(Action::PrintPrinter),
     },
     MenuItem {
         letter: 'F',

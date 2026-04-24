@@ -1,0 +1,32 @@
+# /Range Format Date — submenu into D1..D5 (and a Time sub-sub that
+# is still stubbed). Each variant applies a date format to the POINT
+# range; the control-panel tag matches the D-number.
+
+KEYS 35000
+ENTER
+HOME
+
+# /RFD → Date submenu; D1..D5 accelerators, plus Time.
+KEY /
+KEY R
+KEY F
+KEY D
+ASSERT_PANEL_L2   1
+ASSERT_PANEL_L2   2
+ASSERT_PANEL_L2   5
+
+# Pick 1 → D1 (DD-MMM-YY) → POINT → commit on A1.
+KEY 1
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (D1) 35000
+
+# Re-apply D3 to overwrite the format.
+KEY /
+KEY R
+KEY F
+KEY D
+KEY 3
+ENTER
+ASSERT_PANEL_L1   A:A1: (D3) 35000
