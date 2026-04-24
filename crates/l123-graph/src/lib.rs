@@ -12,8 +12,10 @@ use std::collections::BTreeMap;
 
 use l123_core::Range;
 
+pub mod icons;
 pub mod render;
 pub mod raster;
+pub use icons::render_icon_panel_png;
 pub use render::{render as render_unicode, GraphValues};
 pub use raster::{render_png, render_png_sized, render_svg, render_svg_sized};
 

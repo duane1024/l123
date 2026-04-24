@@ -162,6 +162,12 @@ pub struct App {
     /// live session where the query fails) — the renderer falls back
     /// to the unicode path in that case.
     image_picker: Option<Picker>,
+    /// Pre-decoded icon panel, populated at startup iff the picker is
+    /// graphical. Rendered as a right-edge vertical strip in READY-ish
+    /// modes. On halfblocks / headless this stays `None` and the
+    /// panel is simply not drawn — per user direction that we only
+    /// show the panel where the terminal can render it well.
+    icon_panel: Option<image::DynamicImage>,
 }
 
 /// State kept for the duration of a [`Mode::Graph`] overlay.
@@ -817,6 +823,7 @@ impl App {
             search: None,
             graph_view: None,
             image_picker: None,
+            icon_panel: None,
         }
     }
 
@@ -1375,9 +1382,15 @@ impl App {
     /// Called once by [`App::run`] after raw mode is enabled. Queries
     /// the terminal for its graphics-protocol capability; if the query
     /// fails (tmux, legacy terminals, redirected stdio) the picker is
-    /// left as `None` and F10 uses the unicode renderer.
+    /// left as `None` and F10 uses the unicode renderer. When the
+    /// picker reports a non-halfblocks protocol, also pre-decode the
+    /// v3.1 WYSIWYG icon panel PNG so it's ready at first draw.
     pub fn probe_image_picker(&mut self) {
         self.image_picker = Picker::from_query_stdio().ok();
+        if self.picker_is_graphical() {
+            let bytes = l123_graph::render_icon_panel_png();
+            self.icon_panel = image::load_from_memory(&bytes).ok();
+        }
     }
 
     fn start_graph_save_prompt(&mut self) {
@@ -3435,14 +3448,61 @@ impl App {
             .split(area);
 
         self.render_control_panel(chunks[0], buf);
+        // Split the middle area horizontally when the v3.1 WYSIWYG icon
+        // panel is live. File-list and graph-view overlays take the full
+        // width; everything else (grid, menu, point) keeps room for the
+        // panel on the right.
+        let (main_area, icon_area) = self.split_for_icon_panel(chunks[1]);
         if self.file_list.is_some() {
             self.render_file_list_overlay(chunks[1], buf);
         } else if self.mode == Mode::Graph {
             self.render_graph_overlay(chunks[1], buf);
         } else {
-            self.render_grid(chunks[1], buf);
+            self.render_grid(main_area, buf);
+            if let Some(area) = icon_area {
+                self.render_icon_panel(area, buf);
+            }
         }
         self.render_status(chunks[2], buf);
+    }
+
+    /// The v3.1 manual shows the icon panel occupying the right edge
+    /// of the worksheet area. Three columns is enough for readable
+    /// icons at terminal resolution; less than 20 columns of grid
+    /// would be awkward, so very narrow terminals hide the panel.
+    const ICON_PANEL_COLS: u16 = 3;
+    const ICON_PANEL_MIN_GRID_COLS: u16 = 20;
+
+    fn split_for_icon_panel(&self, area: Rect) -> (Rect, Option<Rect>) {
+        if self.icon_panel.is_none()
+            || self.mode == Mode::Graph
+            || self.file_list.is_some()
+            || area.width < Self::ICON_PANEL_MIN_GRID_COLS + Self::ICON_PANEL_COLS
+        {
+            return (area, None);
+        }
+        let main_width = area.width - Self::ICON_PANEL_COLS;
+        let main = Rect::new(area.x, area.y, main_width, area.height);
+        let icons = Rect::new(
+            area.x + main_width,
+            area.y,
+            Self::ICON_PANEL_COLS,
+            area.height,
+        );
+        (main, Some(icons))
+    }
+
+    fn render_icon_panel(&self, area: Rect, buf: &mut Buffer) {
+        let (Some(picker), Some(img)) = (self.image_picker.as_ref(), self.icon_panel.as_ref())
+        else {
+            return;
+        };
+        if picker.protocol_type() == ProtocolType::Halfblocks {
+            return;
+        }
+        if let Ok(protocol) = picker.new_protocol(img.clone(), area, Resize::Fit(None)) {
+            Image::new(&protocol).render(area, buf);
+        }
     }
 
     fn render_graph_overlay(&self, area: Rect, buf: &mut Buffer) {
