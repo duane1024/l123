@@ -1461,6 +1461,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "l123-print"
+version = "0.0.1"
+dependencies = [
+ "l123-core",
+]
+
+[[package]]
 name = "l123-ui"
 version = "0.0.1"
 dependencies = [
@@ -1473,6 +1480,7 @@ dependencies = [
  "l123-io",
  "l123-menu",
  "l123-parse",
+ "l123-print",
  "ratatui",
  "ratatui-image",
 ]

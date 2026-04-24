@@ -1,0 +1,58 @@
+# /Worksheet Column Column-Range Reset-Width — POINT for a range of
+# columns, restore each to the default width. Tags on those columns
+# disappear; columns outside the range are untouched.
+
+ASSERT_POINTER    A:A1
+KEYS a
+ENTER
+
+# Seed: set A, B, C to different non-default widths so the reset has
+# something to clear.
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 5
+ENTER
+RIGHT
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 2
+ENTER
+RIGHT
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 4
+ENTER
+
+# /WCCR then paint A..B → those reset, C stays.
+HOME
+KEY /
+KEY W
+KEY C
+KEY C
+KEY R
+ASSERT_MODE       POINT
+RIGHT
+ENTER
+
+ASSERT_MODE       READY
+ASSERT_POINTER    A:B1
+ASSERT_PANEL_L1   A:B1:
+
+# A is also reset — no [W15] tag.
+LEFT
+ASSERT_PANEL_L1   A:A1: 'a
+
+# Column C keeps its [W14] width — it was outside the reset range.
+RIGHT
+RIGHT
+ASSERT_POINTER    A:C1
+ASSERT_PANEL_L1   A:C1: [W14]

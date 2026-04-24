@@ -4,6 +4,7 @@
 //! Everything here is pure data types + pure functions.
 
 pub mod address;
+pub mod cell_render;
 pub mod contents;
 pub mod format;
 pub mod label;
@@ -11,6 +12,9 @@ pub mod mode;
 pub mod value;
 
 pub use address::{Address, Range, SheetId};
+pub use cell_render::{
+    center_pad, render_label, render_value_in_cell, repeat_to_width, right_pad,
+};
 pub use contents::{format_number_general, CellContents};
 pub use format::{format_number, Format, FormatKind};
 pub use label::LabelPrefix;

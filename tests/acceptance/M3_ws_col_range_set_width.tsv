@@ -1,0 +1,48 @@
+# /Worksheet Column Column-Range Set-Width — prompt for a width, then
+# POINT for the range of columns. Every column in the range picks up
+# the new width; the [Wn] tag surfaces on each.
+
+ASSERT_POINTER    A:A1
+KEYS a
+ENTER
+RIGHT
+KEYS b
+ENTER
+RIGHT
+KEYS c
+ENTER
+
+# /WCCS opens the width prompt. Default seed is 9.
+HOME
+KEY /
+KEY W
+KEY C
+KEY C
+KEY S
+ASSERT_PANEL_L3   column width
+ASSERT_PANEL_L2   9
+
+# Type 12 and Enter → POINT for the column range.
+KEY 1
+KEY 2
+ENTER
+ASSERT_MODE       POINT
+
+# Paint A..B (pointer starts at A1; anchor sticks and RIGHT extends).
+RIGHT
+ENTER
+
+# Back to READY at B1 (the POINT end-corner).
+ASSERT_MODE       READY
+ASSERT_POINTER    A:B1
+ASSERT_PANEL_L1   A:B1: [W12] 'b
+
+# A is also [W12].
+LEFT
+ASSERT_PANEL_L1   A:A1: [W12] 'a
+
+# Column C (outside the range) keeps the default width — no tag.
+RIGHT
+RIGHT
+ASSERT_POINTER    A:C1
+ASSERT_PANEL_L1   A:C1: 'c

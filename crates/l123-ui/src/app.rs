@@ -40,7 +40,6 @@ use l123_menu::{self as menu, Action, MenuBody, MenuItem};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
-const COL_WIDTH: u16 = 9;
 const PANEL_HEIGHT: u16 = 4; // 3 content lines + 1 bottom border
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -166,12 +165,14 @@ pub struct App {
     /// live session where the query fails) — the renderer falls back
     /// to the unicode path in that case.
     image_picker: Option<Picker>,
-    /// Pre-decoded icon panel, populated at startup iff the picker is
-    /// graphical. Rendered as a right-edge vertical strip in READY-ish
-    /// modes. On halfblocks / headless this stays `None` and the
-    /// panel is simply not drawn — per user direction that we only
-    /// show the panel where the terminal can render it well.
+    /// Pre-decoded icon panel for `current_panel`, populated at startup
+    /// iff the picker is graphical and re-rendered when the user pages
+    /// through panels via the slot-16 navigator. On halfblocks /
+    /// headless this stays `None` and the panel isn't drawn.
     icon_panel: Option<image::DynamicImage>,
+    /// Which of the seven icon panels is currently displayed. The
+    /// pager at slot 16 cycles through these.
+    current_panel: l123_graph::Panel,
     /// Rect the icon panel last occupied on screen, stashed so mouse
     /// clicks can hit-test against it without recomputing the layout.
     /// Cleared at the top of each frame; re-set by `render_icon_panel`.
@@ -420,6 +421,9 @@ enum PromptNext {
     RangeFormat { kind: FormatKind },
     /// Set the current column's width to the buffered number.
     WorksheetColumnSetWidth,
+    /// After the user types a width, enter POINT to pick the range of
+    /// columns to apply it to.
+    WorksheetColumnRangeSetWidth,
     /// After the user types a name, stash it and go to POINT for the range.
     RangeNameCreate,
     /// After the user types a name, delete it from the engine.
@@ -506,9 +510,9 @@ const FILE_LIST_PAGE_SIZE: usize = 10;
 impl PromptNext {
     fn accepts_char(self, c: char) -> bool {
         match self {
-            PromptNext::RangeFormat { .. } | PromptNext::WorksheetColumnSetWidth => {
-                c.is_ascii_digit()
-            }
+            PromptNext::RangeFormat { .. }
+            | PromptNext::WorksheetColumnSetWidth
+            | PromptNext::WorksheetColumnRangeSetWidth => c.is_ascii_digit(),
             PromptNext::RangeNameCreate | PromptNext::RangeNameDelete => {
                 c.is_ascii_alphanumeric() || c == '_'
             }
@@ -740,6 +744,14 @@ enum PendingCommand {
     /// selected range is written into the named slot of the workbook's
     /// current graph and the menu returns to READY.
     GraphSeries { series: Series },
+    /// POINT step of `/Worksheet Column Column-Range Set-Width`. The
+    /// width was captured from the prompt; on commit, apply it to every
+    /// column in the selected range.
+    ColumnRangeSetWidth { width: u8 },
+    /// POINT step of `/Worksheet Column Column-Range Reset-Width`. On
+    /// commit, clear width overrides for every column in the selected
+    /// range.
+    ColumnRangeResetWidth,
 }
 
 impl PendingCommand {
@@ -757,6 +769,8 @@ impl PendingCommand {
             PendingCommand::PrintFileRange => "Enter range to print:",
             PendingCommand::RangeSearchRange { .. } => "Enter search range:",
             PendingCommand::GraphSeries { .. } => "Enter graph range:",
+            PendingCommand::ColumnRangeSetWidth { .. } => "Enter range of columns to set:",
+            PendingCommand::ColumnRangeResetWidth => "Enter range of columns to reset:",
         }
     }
 }
@@ -832,6 +846,7 @@ impl App {
             graph_view: None,
             image_picker: None,
             icon_panel: None,
+            current_panel: l123_graph::Panel::One,
             icon_panel_area: Cell::new(None),
         }
     }
@@ -965,15 +980,17 @@ impl App {
         if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
             return None;
         }
-        let dc = a.col - self.wb().viewport_col_offset;
         let dr = (a.row - self.wb().viewport_row_offset) as u16;
-        let x0 = ROW_GUTTER + dc * COL_WIDTH;
         let y = PANEL_HEIGHT + 1 + dr; // +1 skips column header row
-        if x0 + COL_WIDTH > buf.area.width || y >= buf.area.height {
+        if y >= buf.area.height {
             return None;
         }
-        let mut s = String::with_capacity(COL_WIDTH as usize);
-        for i in 0..COL_WIDTH {
+        let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
+        let layout = self.visible_column_layout(content_width);
+        let (_, x_off, w) = *layout.iter().find(|(c, _, _)| *c == a.col)?;
+        let x0 = ROW_GUTTER + x_off;
+        let mut s = String::with_capacity(w as usize);
+        for i in 0..w {
             s.push_str(buf[(x0 + i, y)].symbol());
         }
         Some(s)
@@ -1397,9 +1414,16 @@ impl App {
     pub fn probe_image_picker(&mut self) {
         self.image_picker = Picker::from_query_stdio().ok();
         if self.picker_is_graphical() {
-            let bytes = l123_graph::render_icon_panel_png();
-            self.icon_panel = image::load_from_memory(&bytes).ok();
+            self.refresh_icon_panel();
         }
+    }
+
+    /// Re-rasterize the current panel into a [`DynamicImage`] ready
+    /// for ratatui-image. Called at startup and whenever the user
+    /// pages to a different panel via the slot-16 navigator.
+    fn refresh_icon_panel(&mut self) {
+        let bytes = l123_graph::render_panel_png(self.current_panel);
+        self.icon_panel = image::load_from_memory(&bytes).ok();
     }
 
     fn start_graph_save_prompt(&mut self) {
@@ -1573,6 +1597,11 @@ impl App {
                 self.close_menu();
             }
             Action::WorksheetColumnSetWidth => self.start_col_width_prompt(),
+            Action::WorksheetColumnResetWidth => self.execute_col_reset_width(),
+            Action::WorksheetColumnRangeSetWidth => self.start_col_range_width_prompt(),
+            Action::WorksheetColumnRangeResetWidth => {
+                self.begin_point(PendingCommand::ColumnRangeResetWidth)
+            }
             Action::RangeNameCreate => self.start_name_prompt(
                 "Enter name:",
                 PromptNext::RangeNameCreate,
@@ -2153,11 +2182,15 @@ impl App {
                 cells.insert(addr, contents);
             }
         }
+        let mut col_widths: HashMap<(SheetId, u16), u8> = HashMap::new();
+        for (addr, w) in engine.used_column_widths() {
+            col_widths.insert((addr.sheet, addr.col), w);
+        }
         let new_file = Workbook {
             engine,
             cells,
             cell_formats: HashMap::new(),
-            col_widths: HashMap::new(),
+            col_widths,
             active_path: Some(path),
             pointer: Address::A1,
             viewport_col_offset: 0,
@@ -2313,6 +2346,9 @@ impl App {
                 self.wb_mut().cells.insert(addr, contents);
             }
         }
+        for (addr, w) in self.wb_mut().engine.used_column_widths() {
+            self.wb_mut().col_widths.insert((addr.sheet, addr.col), w);
+        }
 
         self.wb_mut().active_path = Some(path);
         self.mode = Mode::Ready;
@@ -2325,6 +2361,15 @@ impl App {
             if !parent.as_os_str().is_empty() {
                 let _ = std::fs::create_dir_all(parent);
             }
+        }
+        // Push UI-side column-width overrides into the engine so they
+        // land in the xlsx. `col_widths` only contains non-default
+        // entries; the engine default is preserved for every other
+        // column.
+        let widths: Vec<((SheetId, u16), u8)> =
+            self.wb().col_widths.iter().map(|(k, v)| (*k, *v)).collect();
+        for ((sheet, col), w) in widths {
+            let _ = self.wb_mut().engine.set_column_width(sheet, col, w);
         }
         if self.wb_mut().engine.save_xlsx(&path).is_ok() {
             self.wb_mut().active_path = Some(path);
@@ -2692,6 +2737,14 @@ impl App {
                 self.wb_mut().current_graph.set(series, range);
                 self.mode = Mode::Ready;
             }
+            PendingCommand::ColumnRangeSetWidth { width } => {
+                self.execute_col_range_width(range, Some(width));
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::ColumnRangeResetWidth => {
+                self.execute_col_range_width(range, None);
+                self.mode = Mode::Ready;
+            }
         }
     }
 
@@ -2859,6 +2912,61 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    /// `/Worksheet Column Column-Range Set-Width` — prompt for the new
+    /// width first; on Enter, enter POINT to pick the column range.
+    fn start_col_range_width_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter column width (1..240):".into(),
+            buffer: "9".into(),
+            next: PromptNext::WorksheetColumnRangeSetWidth,
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Worksheet Column Reset-Width` — clear any width override on
+    /// the current column (every target sheet when GROUP is on).
+    fn execute_col_reset_width(&mut self) {
+        let col = self.wb().pointer.col;
+        let mut batch: Vec<JournalEntry> = Vec::new();
+        for sheet in self.target_sheets() {
+            let key = (sheet, col);
+            let prev = self.wb().col_widths.get(&key).copied();
+            if prev.is_some() {
+                self.wb_mut().col_widths.remove(&key);
+            }
+            batch.push(JournalEntry::ColWidth { sheet, col, prev_width: prev });
+        }
+        self.push_journal_batch(batch);
+        self.close_menu();
+    }
+
+    /// Apply a width change to every column in `range` across every
+    /// target sheet. `new_width == None` resets to the default; `Some(w)`
+    /// sets an explicit width. Batched as a single journal entry so
+    /// Alt-F4 undoes the whole range in one step.
+    fn execute_col_range_width(&mut self, range: Range, new_width: Option<u8>) {
+        let r = range.normalized();
+        let mut batch: Vec<JournalEntry> = Vec::new();
+        for sheet in self.target_sheets() {
+            for col in r.start.col..=r.end.col {
+                let key = (sheet, col);
+                let prev = self.wb().col_widths.get(&key).copied();
+                match new_width {
+                    Some(w) if w != 9 => {
+                        self.wb_mut().col_widths.insert(key, w);
+                    }
+                    _ => {
+                        self.wb_mut().col_widths.remove(&key);
+                    }
+                }
+                batch.push(JournalEntry::ColWidth { sheet, col, prev_width: prev });
+            }
+        }
+        self.push_journal_batch(batch);
+    }
+
     fn start_name_prompt(&mut self, label: &str, next: PromptNext) {
         self.menu = None;
         self.prompt = Some(PromptState {
@@ -2941,6 +3049,10 @@ impl App {
                 }
                 self.push_journal_batch(batch);
                 self.mode = Mode::Ready;
+            }
+            PromptNext::WorksheetColumnRangeSetWidth => {
+                let width: u8 = p.buffer.parse().unwrap_or(9).clamp(1, 240);
+                self.begin_point(PendingCommand::ColumnRangeSetWidth { width });
             }
             PromptNext::RangeNameCreate => {
                 if p.buffer.is_empty() {
@@ -3530,49 +3642,67 @@ impl App {
         {
             return;
         }
-        self.dispatch_icon_click(m.row - area.y, area.height);
+        self.dispatch_icon_click(area, m.column, m.row);
     }
 
-    /// Map a local row inside the icon panel to the icon slot it
-    /// belongs to, then fire that slot's action. Icons are stacked
-    /// evenly top-to-bottom in the panel area, matching the PNG
-    /// produced by `l123_graph::icons`.
-    fn dispatch_icon_click(&mut self, local_row: u16, panel_height: u16) {
-        if panel_height == 0 {
+    /// Map a mouse click on the icon panel to a slot and fire that
+    /// slot's action. Slot 16 is the panel navigator; clicks on its
+    /// left half go to the previous panel, right half to the next.
+    fn dispatch_icon_click(&mut self, area: Rect, column: u16, row: u16) {
+        if area.height == 0 || row < area.y {
             return;
         }
-        let per_icon = (panel_height as usize).max(1) / (l123_graph::icons::ICON_COUNT as usize);
-        if per_icon == 0 {
+        let local_row = row - area.y;
+        let per_slot = (area.height as usize).max(1) / 17;
+        if per_slot == 0 {
             return;
         }
-        let index = (local_row as usize) / per_icon;
-        use l123_graph::icons::IconKind;
-        let kinds = IconKind::ORDER;
-        let Some(kind) = kinds.get(index.min(kinds.len() - 1)) else { return };
-        match kind {
-            IconKind::SaveFile => self.start_file_save_prompt(),
-            IconKind::RetrieveFile => self.start_file_retrieve_prompt(),
-            IconKind::FileOpenAfter => self.start_file_open_prompt(false),
-            IconKind::NextSheet => self.move_sheet(1),
-            IconKind::PrevSheet => self.move_sheet(-1),
-            IconKind::GraphView => self.enter_graph_view(),
-            IconKind::Print => self.start_print_file_prompt(),
-            // Remaining slots hit features we haven't implemented
-            // (WYSIWYG bold/italic/underline/font, perspective,
-            // print-preview, @SUM insertion, add-graph, help). A click
-            // is a safe no-op — no feedback for now, like clicking on
-            // an inert menu item.
-            IconKind::Perspective
-            | IconKind::Sum
-            | IconKind::AddGraph
-            | IconKind::PrintPreview
-            | IconKind::Bold
-            | IconKind::Italic
-            | IconKind::UnderlineSingle
-            | IconKind::FontCycle
-            | IconKind::Help
-            | IconKind::UserDefined => {}
+        let slot = ((local_row as usize) / per_slot).min(16);
+
+        if slot == 16 {
+            // Pager: left half → previous panel, right half → next.
+            let half = area.x + area.width / 2;
+            self.current_panel = if column < half {
+                self.current_panel.prev()
+            } else {
+                self.current_panel.next()
+            };
+            self.refresh_icon_panel();
+            return;
         }
+
+        let ids = self.current_panel.icon_ids();
+        let id = ids[slot];
+        match l123_graph::icon_action(id) {
+            l123_graph::IconAction::MenuPath(path) => self.dispatch_menu_path(path),
+            l123_graph::IconAction::SysKey(act) => self.dispatch_sys_action(act),
+            l123_graph::IconAction::PageNav => {} // reached only via slot 16
+            l123_graph::IconAction::Noop => {}
+        }
+    }
+
+    /// Open the slash menu and descend via the given accelerator
+    /// letters — equivalent to the user typing "/" then each char.
+    fn dispatch_menu_path(&mut self, path: &str) {
+        self.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        for c in path.chars() {
+            self.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    fn dispatch_sys_action(&mut self, action: l123_graph::SysAction) {
+        use l123_graph::SysAction;
+        let (code, mods) = match action {
+            SysAction::GraphView => (KeyCode::F(10), KeyModifiers::NONE),
+            SysAction::Undo => (KeyCode::F(4), KeyModifiers::ALT),
+            SysAction::Home => (KeyCode::Home, KeyModifiers::NONE),
+            SysAction::Recalc => (KeyCode::F(9), KeyModifiers::NONE),
+            SysAction::Edit => (KeyCode::F(2), KeyModifiers::NONE),
+            SysAction::Goto => (KeyCode::F(5), KeyModifiers::NONE),
+            SysAction::NextSheet => (KeyCode::PageDown, KeyModifiers::CONTROL),
+            SysAction::PrevSheet => (KeyCode::PageUp, KeyModifiers::CONTROL),
+        };
+        self.handle_key(KeyEvent::new(code, mods));
     }
 
     fn render_graph_overlay(&self, area: Rect, buf: &mut Buffer) {
@@ -3890,28 +4020,65 @@ impl App {
         }
     }
 
+    /// Lay out the visible columns starting at `viewport_col_offset`,
+    /// honoring per-column width overrides from `col_widths`. Returns
+    /// `(col_0b, x_offset, drawn_width)` for each column that has any
+    /// on-screen footprint. `x_offset` is measured from the start of
+    /// the content area (after `ROW_GUTTER`). The last entry may be
+    /// truncated to fit `content_width`.
+    fn visible_column_layout(&self, content_width: u16) -> Vec<(u16, u16, u16)> {
+        let mut out = Vec::new();
+        if content_width == 0 {
+            return out;
+        }
+        let sheet = self.wb().pointer.sheet;
+        let mut x_off: u16 = 0;
+        let mut col = self.wb().viewport_col_offset;
+        loop {
+            let w = self.col_width_of(sheet, col) as u16;
+            if w == 0 {
+                col = col.saturating_add(1);
+                if col == u16::MAX {
+                    break;
+                }
+                continue;
+            }
+            let remaining = content_width - x_off;
+            let drawn = w.min(remaining);
+            out.push((col, x_off, drawn));
+            x_off = x_off.saturating_add(drawn);
+            if x_off >= content_width {
+                break;
+            }
+            if col == u16::MAX {
+                break;
+            }
+            col += 1;
+        }
+        out
+    }
+
     fn render_grid(&self, area: Rect, buf: &mut Buffer) {
         if area.width <= ROW_GUTTER || area.height < 2 {
             return;
         }
 
-        let visible_cols = ((area.width - ROW_GUTTER) / COL_WIDTH).max(1);
+        let content_width = area.width - ROW_GUTTER;
+        let layout = self.visible_column_layout(content_width);
         let visible_rows = area.height - 1;
 
         // Column header row
-        for i in 0..visible_cols {
-            let c = self.wb().viewport_col_offset + i;
-            let letters = col_to_letters(c);
-            let x = area.x + ROW_GUTTER + i * COL_WIDTH;
-            let y = area.y;
-            let style = Style::default().add_modifier(Modifier::REVERSED);
-            write_centered(buf, x, y, COL_WIDTH, &letters, style);
+        let header_style = Style::default().add_modifier(Modifier::REVERSED);
+        for &(col_idx, x_off, w) in &layout {
+            let letters = col_to_letters(col_idx);
+            let x = area.x + ROW_GUTTER + x_off;
+            write_centered(buf, x, area.y, w, &letters, header_style);
         }
         // Top-left gutter corner
         for k in 0..ROW_GUTTER {
             buf[(area.x + k, area.y)]
                 .set_char(' ')
-                .set_style(Style::default().add_modifier(Modifier::REVERSED));
+                .set_style(header_style);
         }
 
         // Body rows
@@ -3934,9 +4101,8 @@ impl App {
             } else {
                 Range::single(self.wb().pointer)
             };
-            for c in 0..visible_cols {
-                let col_idx = self.wb().viewport_col_offset + c;
-                let x = area.x + ROW_GUTTER + c * COL_WIDTH;
+            for &(col_idx, x_off, w) in &layout {
+                let x = area.x + ROW_GUTTER + x_off;
                 let addr = Address::new(self.wb().pointer.sheet, col_idx, row_idx);
                 let highlighted = highlight.contains(addr);
                 let cell_style = if highlighted {
@@ -3945,13 +4111,13 @@ impl App {
                     Style::default()
                 };
                 // Blank background first
-                for k in 0..COL_WIDTH {
+                for k in 0..w {
                     buf[(x + k, y)].set_char(' ').set_style(cell_style);
                 }
                 // Content
                 if let Some(contents) = self.wb().cells.get(&addr) {
                     let fmt = self.format_for_cell(addr);
-                    draw_cell_contents(buf, x, y, COL_WIDTH, contents, cell_style, fmt);
+                    draw_cell_contents(buf, x, y, w, contents, cell_style, fmt);
                 }
             }
         }
@@ -5433,5 +5599,92 @@ mod tests {
         });
         assert_eq!(app.mode, Mode::Ready);
         assert!(app.prompt.is_none());
+    }
+
+    #[test]
+    fn pager_right_half_advances_panel() {
+        let mut app = App::new();
+        assert_eq!(app.current_panel, l123_graph::Panel::One);
+        let mid_col = TEST_PANEL.x + TEST_PANEL.width / 2;
+        click(&mut app, TEST_PANEL, mid_col + 1, TEST_PANEL.y + 49);
+        assert_eq!(app.current_panel, l123_graph::Panel::Two);
+    }
+
+    #[test]
+    fn pager_left_half_retreats_panel() {
+        let mut app = App::new();
+        let left_col = TEST_PANEL.x;
+        click(&mut app, TEST_PANEL, left_col, TEST_PANEL.y + 49);
+        // From panel 1, prev wraps to panel 7.
+        assert_eq!(app.current_panel, l123_graph::Panel::Seven);
+    }
+
+    #[test]
+    fn pager_full_cycle_returns_to_panel_one() {
+        let mut app = App::new();
+        let mid_col = TEST_PANEL.x + TEST_PANEL.width / 2;
+        for _ in 0..7 {
+            click(&mut app, TEST_PANEL, mid_col + 1, TEST_PANEL.y + 49);
+        }
+        assert_eq!(app.current_panel, l123_graph::Panel::One);
+    }
+
+    /// Drive the `/Worksheet Column Set-Width` menu path, typing `width`
+    /// at the prompt and pressing Enter.
+    fn drive_set_col_width(app: &mut App, width: u8) {
+        for c in ['/', 'W', 'C', 'S'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        // The prompt seeds the current width and is `fresh` — any digit
+        // replaces the seed; subsequent digits append.
+        for c in width.to_string().chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    /// After /WCS 15 on column A, the grid must actually draw column A
+    /// at 15 characters wide — pushing the B-column header and B1's
+    /// content to x = ROW_GUTTER + 15.
+    #[test]
+    fn set_col_width_widens_column_on_screen() {
+        let mut app = App::new();
+        // A1 = "alpha", B1 = "beta".
+        for c in "alpha".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        for c in "beta".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // Widen column A back at the A1 pointer.
+        app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        drive_set_col_width(&mut app, 15);
+        assert_eq!(app.col_width_of(SheetId::A, 0), 15);
+
+        let buf = app.render_to_buffer(80, 25);
+        // The body row for row 1 sits one line below the column-header
+        // row (PANEL_HEIGHT + 1).
+        let body_y = PANEL_HEIGHT + 1;
+        // Column A's contents must start at x = ROW_GUTTER and run 15
+        // chars; "alpha" is left-aligned (apostrophe prefix) and padded
+        // with spaces to the full column width.
+        let a_slot: String = (0..15)
+            .map(|i| buf[(ROW_GUTTER + i, body_y)].symbol().to_string())
+            .collect();
+        assert_eq!(a_slot, "alpha          ");
+        // Column B must start 15 characters later — not 9.
+        let b_slot: String = (0..9)
+            .map(|i| buf[(ROW_GUTTER + 15 + i, body_y)].symbol().to_string())
+            .collect();
+        assert_eq!(b_slot, "beta     ");
+
+        // And the header row reflects the same geometry.
+        let header_y = PANEL_HEIGHT;
+        let b_header = buf[(ROW_GUTTER + 15 + 4, header_y)].symbol(); // center of 9-wide slot
+        assert_eq!(b_header, "B");
     }
 }

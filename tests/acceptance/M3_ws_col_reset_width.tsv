@@ -1,0 +1,29 @@
+# /Worksheet Column Reset-Width — restore the current column to the
+# default width. The [Wn] tag disappears immediately; Alt-F4 undoes
+# back to the prior width.
+
+ASSERT_POINTER    A:A1
+KEYS 42
+ENTER
+
+# First set A to 15 so there is something to reset.
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 5
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) [W15] 42
+
+# /WCR resets the current column back to default — the tag vanishes.
+KEY /
+KEY W
+KEY C
+KEY R
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (G) 42
+
+# Undo restores the previous [W15] width.
+ALT_F 4
+ASSERT_PANEL_L1   A:A1: (G) [W15] 42

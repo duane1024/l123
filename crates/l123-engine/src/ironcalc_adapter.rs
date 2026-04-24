@@ -218,13 +218,71 @@ impl Engine for IronCalcEngine {
         self.model = model;
         Ok(())
     }
+
+    fn set_column_width(&mut self, sheet: SheetId, col: u16, width: u8) -> Result<()> {
+        self.extend_sheets_to(sheet)?;
+        // IronCalc's `set_column_width` expects pixels; 1 Excel character
+        // width = `COLUMN_WIDTH_FACTOR` (12) pixels in IronCalc's model.
+        let pixels = (width as f64) * COLUMN_WIDTH_FACTOR;
+        self.model
+            .set_column_width(self.sheet_index(sheet), (col as i32) + 1, pixels)
+            .map_err(EngineError::Backend)
+    }
+
+    fn get_column_width(&self, sheet: SheetId, col: u16) -> Result<Option<u8>> {
+        let idx = self.sheet_index(sheet) as usize;
+        let Some(ws) = self.model.workbook.worksheets.get(idx) else {
+            return Ok(None);
+        };
+        let col_1b = (col as i32) + 1;
+        for c in &ws.cols {
+            if c.min <= col_1b && col_1b <= c.max {
+                if !c.custom_width {
+                    return Ok(None);
+                }
+                // `c.width` is already stored in character units
+                // (`pixels / COLUMN_WIDTH_FACTOR`).
+                let chars = c.width.round().clamp(0.0, 240.0) as u8;
+                return Ok(Some(chars));
+            }
+        }
+        Ok(None)
+    }
 }
+
+/// IronCalc stores column widths internally in character units; the
+/// `set_column_width` / `get_column_width` APIs take and return pixels
+/// via this factor.
+const COLUMN_WIDTH_FACTOR: f64 = 12.0;
 
 impl IronCalcEngine {
     /// All sheet names in workbook order, ready to index by SheetId.0.
     /// Used by the formula translator to expand sheet-qualified refs.
     pub fn all_sheet_names(&self) -> Vec<String> {
         self.model.workbook.get_worksheet_names()
+    }
+
+    /// Enumerate every column that carries a custom width override, in
+    /// L123 character units. Used after `load_xlsx` to repopulate the
+    /// UI's `col_widths` cache.
+    pub fn used_column_widths(&self) -> Vec<(Address, u8)> {
+        let mut out = Vec::new();
+        for (sheet_idx, ws) in self.model.workbook.worksheets.iter().enumerate() {
+            let sheet = SheetId(sheet_idx as u16);
+            for c in &ws.cols {
+                if !c.custom_width {
+                    continue;
+                }
+                let chars = c.width.round().clamp(0.0, 240.0) as u8;
+                for col_1b in c.min.max(1)..=c.max {
+                    let col_0b = (col_1b - 1) as u16;
+                    // Address's row field is unused here; we key by
+                    // (sheet, col) in the UI — supply row 0 for shape.
+                    out.push((Address::new(sheet, col_0b, 0), chars));
+                }
+            }
+        }
+        out
     }
 
     /// Enumerate every non-empty cell in the workbook. Used after
@@ -435,6 +493,37 @@ mod tests {
         e.recalc();
         let cv = e.get_cell(Address::new(SheetId::A, 2, 0)).unwrap();
         assert_eq!(cv.value, Value::Number(150.0));
+    }
+
+    #[test]
+    fn column_width_round_trips_through_xlsx() {
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "l123_engine_colw_{}_{}",
+            process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("colw.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        // Column A → 15 chars wide (L123 character units).
+        e.set_column_width(SheetId::A, 0, 15).unwrap();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        assert_eq!(e2.get_column_width(SheetId::A, 0).unwrap(), Some(15));
+        // Untouched column reads as None (i.e. default).
+        assert_eq!(e2.get_column_width(SheetId::A, 1).unwrap(), None);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

@@ -109,4 +109,15 @@ pub trait Engine {
     fn load_xlsx(&mut self, _path: &Path) -> Result<()> {
         Err(EngineError::Unsupported("load_xlsx"))
     }
+    /// Set a column's width in L123 character units (1..240). Stored so
+    /// `save_xlsx` round-trips it; UI layers mirror it for on-screen
+    /// geometry.
+    fn set_column_width(&mut self, _sheet: SheetId, _col: u16, _width: u8) -> Result<()> {
+        Err(EngineError::Unsupported("set_column_width"))
+    }
+    /// Read an explicit column-width override in L123 character units.
+    /// Returns `None` when the column inherits the backend default.
+    fn get_column_width(&self, _sheet: SheetId, _col: u16) -> Result<Option<u8>> {
+        Err(EngineError::Unsupported("get_column_width"))
+    }
 }

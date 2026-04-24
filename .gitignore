@@ -18,6 +18,7 @@ Cargo.lock.bak
 
 # Claude Code per-user overrides (shared settings.json stays committed)
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # Env / secrets
 .env

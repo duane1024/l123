@@ -52,6 +52,9 @@ pub enum Action {
     WorksheetDeleteRow,
     WorksheetDeleteColumn,
     WorksheetColumnSetWidth,
+    WorksheetColumnResetWidth,
+    WorksheetColumnRangeSetWidth,
+    WorksheetColumnRangeResetWidth,
     WorksheetGlobalRecalcAutomatic,
     WorksheetGlobalRecalcManual,
     WorksheetGlobalGroupEnable,
@@ -288,7 +291,7 @@ const WS_COLUMN_MENU: &[MenuItem] = &[
         letter: 'R',
         name: "Reset-Width",
         help: "Reset column width to the global default",
-        body: MenuBody::NotImplemented("ws-col-reset"),
+        body: MenuBody::Action(Action::WorksheetColumnResetWidth),
     },
     MenuItem {
         letter: 'H',
@@ -305,8 +308,23 @@ const WS_COLUMN_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'C',
         name: "Column-Range",
-        help: "Set width for a range of columns",
-        body: MenuBody::NotImplemented("ws-col-range"),
+        help: "Set/reset width for a range of columns",
+        body: MenuBody::Submenu(WS_COLUMN_RANGE_MENU),
+    },
+];
+
+const WS_COLUMN_RANGE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'S',
+        name: "Set-Width",
+        help: "Set a new width for each column in a range",
+        body: MenuBody::Action(Action::WorksheetColumnRangeSetWidth),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset-Width",
+        help: "Reset each column in a range to the global default",
+        body: MenuBody::Action(Action::WorksheetColumnRangeResetWidth),
     },
 ];
 
