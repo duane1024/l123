@@ -1,0 +1,32 @@
+# /File Retrieve dispatches by extension: `.csv` loads the file as a
+# fresh workbook starting at A1 (not an overlay onto the pointer like
+# /File Import Numbers), wiping the in-memory workbook first.
+#
+# Uses the existing fixture at tests/acceptance/fixtures/m4_import.csv:
+#   10,20,30
+#   "foo","bar","baz"
+
+# Dirty A1 and move the pointer so we can prove the retrieve wipes
+# state and lands at A1 regardless of where the pointer was.
+KEYS 99
+ENTER
+RIGHT
+RIGHT
+DOWN
+ASSERT_POINTER   A:C2
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/m4_import.csv
+ENTER
+
+ASSERT_MODE      READY
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1  10
+ASSERT_CELL      A:B1  20
+ASSERT_CELL      A:C1  30
+ASSERT_CELL      A:A2  foo
+ASSERT_CELL      A:C2  baz

@@ -32,6 +32,12 @@ OPTIONS:
     -h, --help       Print this help and exit
     -V, --version    Print version and exit
 
+ENVIRONMENT:
+    L123_LOG    Path to a log file. When set, events are appended to
+                this file; when unset, no logging is performed.
+    RUST_LOG    Standard tracing env filter (e.g. `l123=debug`).
+                Defaults to `info` when L123_LOG is set.
+
 Inside the program:
     /         Open the 1-2-3 slash menu
     F1        Help
@@ -40,11 +46,13 @@ Inside the program:
 ";
 
 fn main() -> ExitCode {
+    let _log_guard = init_tracing();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match parse(&args) {
         Action::Run(path) => match run(path) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
+                tracing::error!(error = %e, "l123 run failed");
                 eprintln!("l123: {e:#}");
                 ExitCode::FAILURE
             }
@@ -90,6 +98,42 @@ fn parse(args: &[OsString]) -> Action {
 
 fn run(path: Option<PathBuf>) -> Result<()> {
     l123_ui::App::run_with_file(path)
+}
+
+/// Install a tracing subscriber that appends to the file named by
+/// `L123_LOG`. When the env var is unset, no subscriber is installed
+/// and `tracing::*!` macros compile down to no-ops — zero overhead for
+/// users who don't opt in.
+///
+/// The returned `WorkerGuard` flushes the async appender on drop; keep
+/// it alive until the process exits.
+fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    let path = PathBuf::from(std::env::var_os("L123_LOG")?);
+    let file_name = path.file_name()?.to_os_string();
+    let dir = path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(PathBuf::new);
+    if !dir.as_os_str().is_empty() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+    let appender = tracing_appender::rolling::never(
+        if dir.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            dir
+        },
+        file_name,
+    );
+    let (nb, guard) = tracing_appender::non_blocking(appender);
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(nb)
+        .with_ansi(false)
+        .try_init();
+    Some(guard)
 }
 
 #[cfg(test)]

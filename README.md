@@ -10,6 +10,8 @@ round-trip.
 Its interaction model targets **Lotus 1-2-3 Release 3.4a for DOS**
 (1993). Its compute and I/O layers are Rust, IronCalc, and UTF-8.
 
+![l123 running in iTerm](docs/iterm-screenshot.png)
+
 ---
 
 ## ✦ Status
@@ -40,7 +42,7 @@ API, keybindings, and file paths may still change before v1.0.
 Requires Rust stable (pinned via `rust-toolchain.toml`).
 
 ```bash
-git clone https://github.com/ddmoore/l123
+git clone git@github.com:duane1024/l123.git
 cd l123
 cargo build --release
 ./target/release/l123            # or: cargo run -p l123

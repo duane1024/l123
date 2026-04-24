@@ -18,8 +18,8 @@ members = [
 version = "0.0.1"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/ddmoore/l123"
-rust-version = "1.90"
+repository = "https://github.com/duane1024/l123"
+rust-version = "1.95"
 
 [workspace.dependencies]
 # internal
@@ -46,6 +46,9 @@ image          = { version = "0.25", default-features = false, features = ["png"
 ratatui-image  = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
 libc           = "0.2"
 pdf-writer     = "0.14"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender   = "0.2"
 
 [profile.dev]
 opt-level = 0

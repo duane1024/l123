@@ -25,11 +25,13 @@
 //!   43 C7 28 10    → planes 0, 1, 6 populated (5 cols white, 2 black, 1 grey)
 //! ```
 //!
-//! Palette semantics (inferred from icon 5 and friends): colour 0 is
-//! the panel background, colour 1 is the primary ink / outline, and
-//! the remaining indices are intermediate shades. See
-//! [`PALETTE_INTENSITY`] for how the renderer folds them back down to
-//! a single accent-on-tint rendering.
+//! ## Palette
+//!
+//! The 8 palette slots were recovered by sampling a DOSBox-X
+//! screenshot of the original WYSIWYG panel at positions the decoder
+//! says carry each plane. The result is a specific subset of the EGA
+//! 16-colour palette, in plane order: light-grey, black, yellow,
+//! blue, cyan, red, magenta, bright-green. See [`LOTUS_PALETTE_RGB`].
 
 use thiserror::Error;
 
@@ -41,14 +43,32 @@ pub const ICON_PIXELS: usize = ICON_DIM * ICON_DIM;
 /// 3-byte mono row, 24 rows.
 pub const OPCODES_PER_RECORD: usize = ICON_DIM * 3;
 
-/// Rendering weight for each palette index, used to blend a category
-/// ink colour toward the panel background.
+/// The 8 colours Lotus 1-2-3 R3.4a WYSIWYG draws its icon panel in.
 ///
-/// Hand-picked from catalog observation: index 0 is pure background,
-/// index 1 is the crisp outline, 3 and 4 are the common interior
-/// shades, and the rarely-seen 5–7 bias toward ink so they stay
-/// visible on dense fills.
-pub const PALETTE_INTENSITY: [f32; 8] = [0.0, 1.0, 0.25, 0.55, 0.45, 0.70, 0.35, 0.85];
+/// Derived by sampling a DOSBox-X screenshot of the panel at pixel
+/// positions the decoder says carry each plane. Values are IBM
+/// EGA/VGA defaults, in `[R, G, B]` order:
+///
+/// | Plane | EGA # | Colour                |
+/// |------:|------:|-----------------------|
+/// | 0     | 7     | light grey (panel bg) |
+/// | 1     | 0     | black (outline / ink) |
+/// | 2     | 14    | yellow                |
+/// | 3     | 1     | blue                  |
+/// | 4     | 3     | cyan                  |
+/// | 5     | 4     | red                   |
+/// | 6     | 5     | magenta               |
+/// | 7     | 10    | bright green          |
+pub const LOTUS_PALETTE_RGB: [[u8; 3]; 8] = [
+    [0xAA, 0xAA, 0xAA],
+    [0x00, 0x00, 0x00],
+    [0xFF, 0xFF, 0x55],
+    [0x00, 0x00, 0xAA],
+    [0x00, 0xAA, 0xAA],
+    [0xAA, 0x00, 0x00],
+    [0xAA, 0x00, 0xAA],
+    [0x00, 0xFF, 0x00],
+];
 
 /// 24×24 bitmap of palette indices, one byte per pixel.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -329,17 +349,17 @@ mod tests {
     }
 
     #[test]
-    fn palette_intensities_are_monotonic_enough() {
-        // Sanity on the renderer-facing weight table: index 0 must
-        // stay at zero (pure bg), index 1 at one (pure ink), and no
-        // entry may fall outside [0, 1].
-        assert_eq!(PALETTE_INTENSITY[0], 0.0);
-        assert_eq!(PALETTE_INTENSITY[1], 1.0);
-        for (i, w) in PALETTE_INTENSITY.iter().enumerate() {
-            assert!(
-                (0.0..=1.0).contains(w),
-                "palette[{i}] = {w} is out of range"
-            );
-        }
+    fn palette_pinned_to_canonical_ega_subset() {
+        // These RGB values were read straight off a DOSBox-X screenshot of
+        // the real WYSIWYG panel (see reverse-engineering notes). If the
+        // table drifts, the rendered panel stops looking like 1-2-3.
+        assert_eq!(LOTUS_PALETTE_RGB[0], [0xAA, 0xAA, 0xAA]); // panel bg
+        assert_eq!(LOTUS_PALETTE_RGB[1], [0x00, 0x00, 0x00]); // outline
+        assert_eq!(LOTUS_PALETTE_RGB[2], [0xFF, 0xFF, 0x55]); // yellow
+        assert_eq!(LOTUS_PALETTE_RGB[3], [0x00, 0x00, 0xAA]); // blue
+        assert_eq!(LOTUS_PALETTE_RGB[4], [0x00, 0xAA, 0xAA]); // cyan
+        assert_eq!(LOTUS_PALETTE_RGB[5], [0xAA, 0x00, 0x00]); // red
+        assert_eq!(LOTUS_PALETTE_RGB[6], [0xAA, 0x00, 0xAA]); // magenta
+        assert_eq!(LOTUS_PALETTE_RGB[7], [0x00, 0xFF, 0x00]); // bright green
     }
 }

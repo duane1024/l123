@@ -1,0 +1,21 @@
+# /File Retrieve of a nonexistent file surfaces the failure in ERROR mode
+# with the offending path on control-panel line 2, instead of silently
+# returning to READY. Esc or Enter dismisses.
+
+# Wider buffer so the full temp-dir path fits on the assertion line.
+SIZE 200 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS $TMPDIR/does_not_exist.xlsx
+ENTER
+
+ASSERT_MODE      ERROR
+ASSERT_PANEL_L2  does_not_exist.xlsx
+
+# Any key dismisses → back to READY with the in-memory workbook intact.
+ESC
+ASSERT_MODE      READY

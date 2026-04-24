@@ -457,6 +457,8 @@ transcripts! {
     m4_file_save       => "M4_file_save.tsv",
     m4_file_save_replace => "M4_file_save_replace.tsv",
     m4_file_retrieve   => "M4_file_retrieve.tsv",
+    m4_file_retrieve_error => "M4_file_retrieve_error.tsv",
+    m4_file_retrieve_csv   => "M4_file_retrieve_csv.tsv",
     m4_file_xtract     => "M4_file_xtract.tsv",
     m4_file_import_numbers => "M4_file_import_numbers.tsv",
     m4_file_new        => "M4_file_new.tsv",
@@ -490,4 +492,5 @@ transcripts! {
     m10_startup_splash  => "M10_startup_splash.tsv",
     m10_status_line_filename => "M10_status_line_filename.tsv",
     m10_worksheet_status     => "M10_worksheet_status.tsv",
+    m10_label_spill          => "M10_label_spill.tsv",
 }

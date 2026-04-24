@@ -16,7 +16,7 @@ use plotters::prelude::*;
 use crate::icon_data::{
     BITMAP_DIM, ICON_BITMAPS, ICON_COLOR_AVAILABLE, ICON_COLOR_BITMAPS, ICON_DESCRIPTIONS,
 };
-use crate::icon_rle::PALETTE_INTENSITY;
+use crate::icon_rle::LOTUS_PALETTE_RGB;
 
 /// Logical pixel size of one icon cell in the generated PNG. Ratatui-
 /// image downscales this to fit the terminal area.
@@ -204,8 +204,19 @@ pub fn slot_description(panel: Panel, slot: usize) -> String {
     }
 }
 
-const BG: RGBColor = RGBColor(0xC0, 0xC0, 0xC0);
-const INK: RGBColor = RGBColor(0x10, 0x10, 0x10);
+// Panel background = palette slot 0 (EGA 7 light-grey) so cells meet
+// their icons seamlessly and colour-0 pixels can be skipped at paint
+// time without a visible seam.
+const BG: RGBColor = RGBColor(
+    LOTUS_PALETTE_RGB[0][0],
+    LOTUS_PALETTE_RGB[0][1],
+    LOTUS_PALETTE_RGB[0][2],
+);
+const INK: RGBColor = RGBColor(
+    LOTUS_PALETTE_RGB[1][0],
+    LOTUS_PALETTE_RGB[1][1],
+    LOTUS_PALETTE_RGB[1][2],
+);
 const ACCENT: RGBColor = RGBColor(0x00, 0x80, 0x80);
 
 /// Functional grouping used to tint each icon's ink. At terminal
@@ -291,57 +302,50 @@ pub fn render_panel_png(panel: Panel) -> Vec<u8> {
             let (cw, ch) = cell.dim_in_pixel();
             if slot < 16 {
                 let id = ids[slot];
-                let cat = icon_category(id);
-                // Tint the cell so each category reads as a distinct
-                // color block even when the terminal downscale blurs
-                // away the 24×24 mono detail.
-                let _ = cell.draw(&Rectangle::new(
-                    [(1, 1), ((cw as i32) - 2, (ch as i32) - 2)],
-                    cat.tint().filled(),
-                ));
                 if ICON_COLOR_AVAILABLE[id as usize] {
-                    paint_color_bitmap(
-                        cell,
-                        &ICON_COLOR_BITMAPS[id as usize],
-                        &cat.ink(),
-                        &cat.tint(),
-                    );
+                    // Authentic Lotus 1-2-3 WYSIWYG palette (light
+                    // grey bg, black outline, EGA yellow/blue/cyan/
+                    // red/magenta/green accents). No category tint —
+                    // the real icons have enough distinctness.
+                        paint_color_bitmap(cell, &ICON_COLOR_BITMAPS[id as usize]);
+                    } else {
+                        // Fall back to the category-tinted mono renderer
+                        // for any icon whose RLE record didn't decode.
+                        let cat = icon_category(id);
+                        let _ = cell.draw(&Rectangle::new(
+                            [(1, 1), ((cw as i32) - 2, (ch as i32) - 2)],
+                            cat.tint().filled(),
+                        ));
+                        paint_bitmap(cell, &ICON_BITMAPS[id as usize], &cat.ink());
+                    }
                 } else {
-                    paint_bitmap(cell, &ICON_BITMAPS[id as usize], &cat.ink());
+                    draw_pager(cell, panel);
                 }
-            } else {
-                draw_pager(cell, panel);
+                // Frame drawn last so the tint never leaks over the border.
+                let _ = cell.draw(&Rectangle::new(
+                    [(0, 0), ((cw as i32) - 1, (ch as i32) - 1)],
+                    INK.stroke_width(1),
+                ));
             }
-            // Frame drawn last so the tint never leaks over the border.
-            let _ = cell.draw(&Rectangle::new(
-                [(0, 0), ((cw as i32) - 1, (ch as i32) - 1)],
-                INK.stroke_width(1),
-            ));
+            let _ = root.present();
         }
-        let _ = root.present();
+        let img = match image::RgbImage::from_raw(w, h, rgb) {
+            Some(i) => i,
+            None => return Vec::new(),
+        };
+        let mut out = Cursor::new(Vec::new());
+        match img.write_to(&mut out, image::ImageFormat::Png) {
+            Ok(_) => out.into_inner(),
+            Err(_) => Vec::new(),
+        }
     }
-    let img = match image::RgbImage::from_raw(w, h, rgb) {
-        Some(i) => i,
-        None => return Vec::new(),
-    };
-    let mut out = Cursor::new(Vec::new());
-    match img.write_to(&mut out, image::ImageFormat::Png) {
-        Ok(_) => out.into_inner(),
-        Err(_) => Vec::new(),
-    }
-}
 
-/// Paint a 24×24 palette-indexed colour bitmap into `cell`. Colour 0
-/// is left as the cell tint (no draw), colour 1 becomes the category
-/// ink, and colours 2..=7 blend toward ink by [`PALETTE_INTENSITY`].
-/// Row 23 is the catalog's separator; it's cropped here just like the
-/// mono path.
-fn paint_color_bitmap<DB>(
-    cell: &DrawingArea<DB, plotters::coord::Shift>,
-    pixels: &[u8; 576],
-    ink: &RGBColor,
-    tint: &RGBColor,
-) where
+/// Paint a 24×24 palette-indexed colour bitmap into `cell` using the
+/// canonical Lotus WYSIWYG palette ([`LOTUS_PALETTE_RGB`]). Row 23 is
+/// the catalog's separator bar; it's cropped here just like the mono
+/// path so icons don't grow a solid stripe at the bottom.
+fn paint_color_bitmap<DB>(cell: &DrawingArea<DB, plotters::coord::Shift>, pixels: &[u8; 576])
+where
     DB: DrawingBackend,
     DB::ErrorType: 'static,
 {
@@ -360,16 +364,20 @@ fn paint_color_bitmap<DB>(
     for y in 0..rows_used {
         for x in 0..cols_used {
             let color = pixels[(y as usize) * 24 + (x as usize)] as usize;
-            let weight = PALETTE_INTENSITY[color.min(7)];
-            if weight == 0.0 {
+            // Palette index 0 is the panel background — skip to avoid
+            // painting a gridless square of grey over the cell fill.
+            if color == 0 {
                 continue;
             }
-            let px = blend(ink, tint, weight);
+            let [r, g, b] = LOTUS_PALETTE_RGB[color.min(7)];
             let x0 = off_x + x * scale;
             let y0 = off_y + y * scale;
+            // Plotters' Rectangle fills the half-open range [p0, p1):
+            // passing `(x0+scale, y0+scale)` covers scale×scale pixels
+            // exactly, with no gap between neighbouring native pixels.
             let _ = cell.draw(&Rectangle::new(
-                [(x0, y0), (x0 + scale - 1, y0 + scale - 1)],
-                px.filled(),
+                [(x0, y0), (x0 + scale, y0 + scale)],
+                RGBColor(r, g, b).filled(),
             ));
         }
     }

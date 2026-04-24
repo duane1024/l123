@@ -1,0 +1,61 @@
+# Authenticity Contract — labels spill into adjacent empty cells.
+#
+# Classic Lotus 1-2-3 behavior: a label wider than its own column bleeds
+# into the next cell(s) — but only while those cells are empty. The
+# prefix's alignment picks the direction:
+#   '  (apostrophe / default) → spill right
+#   "  (quote)                 → spill left
+#   ^  (caret)                 → spill both ways, centered in the span
+#   \  (backslash / fill)      → no spill; the pattern fills own width
+#
+# A non-empty neighbor hard-stops the spill and the label truncates at
+# its own column boundary.
+
+ASSERT_POINTER   A:A1
+
+# --- Left-align spill (apostrophe, the implicit default prefix) ---
+# "INCOME SUMMARY 1991" is 19 chars; default column width is 9.
+# B1 and C1 are empty, so the label paints across A1..C1.
+KEYS INCOME SUMMARY 1991
+ENTER
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1  INCOME SU
+ASSERT_CELL      A:B1  MMARY 199
+ASSERT_CELL      A:C1  1
+ASSERT_SCREEN    INCOME SUMMARY 1991
+
+# --- Spill hard-stopped by a non-empty neighbor ---
+# Put a long label in A2, then "X" in B2. B2 is occupied, so A2 must
+# truncate at its own 9-char boundary — no bleed into B2.
+DOWN
+KEYS blocked spill
+RIGHT
+KEYS X
+ENTER
+ASSERT_CELL      A:A2  blocked s
+ASSERT_CELL      A:B2  X
+
+# --- Right-align spill (quote prefix) bleeds LEFT ---
+# Type a long right-aligned label in B3. A3 is empty, so the overflow
+# flows into A3. "right-align spill" is 17 chars; combined A3+B3 = 18
+# → 1 pad space on the left, text right-aligned to B3's right edge.
+DOWN
+KEY "
+KEYS right-align spill
+ENTER
+ASSERT_CELL      A:A3  right-al
+ASSERT_CELL      A:B3  ign spill
+ASSERT_SCREEN    right-align spill
+
+# --- Centered spill (caret prefix) bleeds both ways ---
+# "centered text" is 13 chars. Put it at C4 with B4 and D4 empty; the
+# combined span is 27 chars. Centered (27-13=14 → 7 pad each side).
+DOWN
+RIGHT
+KEY ^
+KEYS centered text
+ENTER
+ASSERT_CELL      A:B4  ce
+ASSERT_CELL      A:C4  ntered te
+ASSERT_CELL      A:D4  xt
+ASSERT_SCREEN    centered text

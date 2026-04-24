@@ -186,12 +186,12 @@ fn main() {
     .unwrap();
     writeln!(
         f,
-        "/// 2..=7 = intermediate shades. See `icon_rle::PALETTE_INTENSITY` for the"
+        "/// 2..=7 = EGA accents. See `icon_rle::LOTUS_PALETTE_RGB` for the"
     )
     .unwrap();
     writeln!(
         f,
-        "/// weights the renderer uses to blend these back into each category's tint."
+        "/// canonical RGB values the renderer paints each index with."
     )
     .unwrap();
     writeln!(

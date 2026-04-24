@@ -21,8 +21,9 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use l123_core::{
-    address::col_to_letters, label::is_value_starter, render_label, render_value_in_cell, Address,
-    CellContents, ErrKind, Format, FormatKind, LabelPrefix, Mode, Range, SheetId, Value,
+    address::col_to_letters, label::is_value_starter, plan_row_spill, render_value_in_cell,
+    Address, CellContents, ErrKind, Format, FormatKind, LabelPrefix, Mode, Range, SheetId,
+    SpillSlot, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
@@ -210,6 +211,9 @@ pub struct App {
     menu: Option<MenuState>,
     point: Option<PointState>,
     prompt: Option<PromptState>,
+    /// Message displayed on control-panel line 2 while `Mode::Error` is
+    /// active. Cleared by Esc/Enter, which also returns to `Mode::Ready`.
+    error_message: Option<String>,
     /// Transient slot for the two-step /Range Name Create flow — the
     /// typed name is stashed here after the prompt step and consumed by
     /// commit_point.
@@ -964,6 +968,7 @@ impl App {
             menu: None,
             point: None,
             prompt: None,
+            error_message: None,
             pending_name: None,
             save_confirm: None,
             pending_xtract_path: None,
@@ -997,8 +1002,23 @@ impl App {
     /// already told us which file they want.
     pub fn new_with_file(path: PathBuf) -> Self {
         let mut app = Self::new();
-        app.load_workbook_from(path);
+        app.retrieve_by_extension(path);
         app
+    }
+
+    /// Dispatch a retrieve-style load by file extension. `.csv` goes
+    /// through the CSV path; everything else through the xlsx path.
+    /// Shared by the CLI entry point and `/File Retrieve`.
+    fn retrieve_by_extension(&mut self, path: PathBuf) {
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("csv") => self.load_csv_workbook_from(path),
+            _ => self.load_workbook_from(path),
+        }
     }
 
     /// Flip the startup splash on with the given identity strings.
@@ -1234,8 +1254,23 @@ impl App {
             Mode::Find => self.handle_key_find(k),
             Mode::Graph => self.handle_key_graph(k),
             Mode::Stat => self.handle_key_stat(k),
+            Mode::Error => self.handle_key_error(k),
             _ => {}
         }
+    }
+
+    fn handle_key_error(&mut self, k: KeyEvent) {
+        if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
+            self.error_message = None;
+            self.mode = Mode::Ready;
+        }
+    }
+
+    fn set_error(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        tracing::error!(error = %msg, "user-visible error");
+        self.error_message = Some(msg);
+        self.mode = Mode::Error;
     }
 
     fn handle_key_stat(&mut self, k: KeyEvent) {
@@ -2568,9 +2603,12 @@ impl App {
     /// else becomes `Label { Apostrophe, text }`. Empty fields are
     /// skipped (no overwrite).
     fn import_numbers_from(&mut self, path: PathBuf) {
-        let Ok(body) = std::fs::read_to_string(&path) else {
-            self.mode = Mode::Ready;
-            return;
+        let body = match std::fs::read_to_string(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.set_error(format!("Cannot read {}: {e}", path.display()));
+                return;
+            }
         };
         let rows = l123_io::csv::parse(&body);
         let origin = self.wb_mut().pointer;
@@ -2629,11 +2667,55 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    /// Read `path` as CSV, wipe the in-memory workbook, and paint the
+    /// parsed rows starting at A1 — the "retrieve" counterpart to
+    /// `/File Import Numbers`. Fails closed on a read error so the
+    /// current workbook survives a bad path.
+    fn load_csv_workbook_from(&mut self, path: PathBuf) {
+        let body = match std::fs::read_to_string(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.set_error(format!("Cannot read {}: {e}", path.display()));
+                return;
+            }
+        };
+        let rows = l123_io::csv::parse(&body);
+        self.execute_file_new();
+        let sheet = self.wb().pointer.sheet;
+        for (dr, row) in rows.iter().enumerate() {
+            for (dc, field) in row.iter().enumerate() {
+                if field.is_empty() {
+                    continue;
+                }
+                let addr = Address::new(sheet, dc as u16, dr as u32);
+                let (contents, engine_input) = match field.parse::<f64>() {
+                    Ok(n) => (
+                        CellContents::Constant(Value::Number(n)),
+                        l123_core::format_number_general(n),
+                    ),
+                    Err(_) => (
+                        CellContents::Label {
+                            prefix: LabelPrefix::Apostrophe,
+                            text: field.clone(),
+                        },
+                        format!("'{field}"),
+                    ),
+                };
+                let _ = self.wb_mut().engine.set_user_input(addr, &engine_input);
+                self.wb_mut().cells.insert(addr, contents);
+            }
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().active_path = Some(path);
+        self.mode = Mode::Ready;
+    }
+
     /// Load an xlsx from disk, wiping the current in-memory workbook
     /// and repopulating the UI cache from the loaded engine model.
     fn load_workbook_from(&mut self, path: PathBuf) {
-        if self.wb_mut().engine.load_xlsx(&path).is_err() {
-            self.mode = Mode::Ready;
+        if let Err(e) = self.wb_mut().engine.load_xlsx(&path) {
+            self.set_error(format!("Cannot open {}: {e}", path.display()));
             return;
         }
         // Wipe UI state; the loaded engine is the new source of truth.
@@ -3536,8 +3618,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                let path = PathBuf::from(&p.buffer);
-                self.load_workbook_from(path);
+                self.retrieve_by_extension(PathBuf::from(&p.buffer));
             }
             PromptNext::FileXtractFilename { kind } => {
                 if p.buffer.is_empty() {
@@ -4571,6 +4652,11 @@ impl App {
             self.render_file_list_lines()
         } else if self.save_confirm.is_some() {
             self.render_save_confirm_lines()
+        } else if let Some(msg) = self.error_message.as_ref() {
+            (
+                Line::from(format!(" {msg}")),
+                Line::from(" Press ESC or ENTER to clear"),
+            )
         } else if let Some(p) = self.prompt.as_ref() {
             (
                 Line::from(format!(" {}", p.buffer)),
@@ -4897,23 +4983,62 @@ impl App {
             } else {
                 Range::single(self.wb().pointer)
             };
-            for &(col_idx, x_off, w) in &layout {
+
+            // Classify each visible column for the spill planner. Labels
+            // are passed through as-is so they can overflow into empty
+            // neighbors; everything else is pre-rendered in its own
+            // column width and becomes an opaque spill blocker.
+            let sheet = self.wb().pointer.sheet;
+            let widths: Vec<usize> = layout.iter().map(|(_, _, w)| *w as usize).collect();
+            let row_inputs: Vec<RowInput> = layout
+                .iter()
+                .map(|&(col_idx, _, w)| {
+                    let addr = Address::new(sheet, col_idx, row_idx);
+                    match self.wb().cells.get(&addr) {
+                        None | Some(CellContents::Empty) => RowInput::Empty,
+                        Some(CellContents::Label { prefix, text }) => RowInput::Label {
+                            prefix: *prefix,
+                            text: text.clone(),
+                        },
+                        Some(other) => {
+                            let fmt = self.format_for_cell(addr);
+                            RowInput::Rendered(render_own_width(other, w as usize, fmt))
+                        }
+                    }
+                })
+                .collect();
+            let slots: Vec<SpillSlot<'_>> = row_inputs
+                .iter()
+                .map(|inp| match inp {
+                    RowInput::Empty => SpillSlot::Empty,
+                    RowInput::Label { prefix, text } => SpillSlot::Label {
+                        prefix: *prefix,
+                        text: text.as_str(),
+                    },
+                    RowInput::Rendered(s) => SpillSlot::Rendered(s.clone()),
+                })
+                .collect();
+            let painted = plan_row_spill(&slots, &widths);
+
+            for (&(col_idx, x_off, w), text) in layout.iter().zip(painted.iter()) {
                 let x = area.x + ROW_GUTTER + x_off;
-                let addr = Address::new(self.wb().pointer.sheet, col_idx, row_idx);
+                let addr = Address::new(sheet, col_idx, row_idx);
                 let highlighted = highlight.contains(addr);
                 let cell_style = if highlighted {
                     Style::default().add_modifier(Modifier::REVERSED)
                 } else {
                     Style::default()
                 };
-                // Blank background first
-                for k in 0..w {
-                    buf[(x + k, y)].set_char(' ').set_style(cell_style);
+                let mut printed = 0u16;
+                for ch in text.chars().take(w as usize) {
+                    buf[(x + printed, y)].set_char(ch).set_style(cell_style);
+                    printed += 1;
                 }
-                // Content
-                if let Some(contents) = self.wb().cells.get(&addr) {
-                    let fmt = self.format_for_cell(addr);
-                    draw_cell_contents(buf, x, y, w, contents, cell_style, fmt);
+                // Pad any shortfall with blank cells so highlight still
+                // fills the whole column.
+                while printed < w {
+                    buf[(x + printed, y)].set_char(' ').set_style(cell_style);
+                    printed += 1;
                 }
             }
         }
@@ -5080,40 +5205,36 @@ fn write_centered(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, styl
     }
 }
 
-/// Render a cell's contents into a fixed-width slot. The cell's `format`
-/// controls numeric display (decimals, currency, percent, etc.); labels
-/// ignore the format and honor their prefix alignment only.
-fn draw_cell_contents(
-    buf: &mut Buffer,
-    x: u16,
-    y: u16,
-    width: u16,
-    contents: &CellContents,
-    style: Style,
-    format: Format,
-) {
-    let w = width as usize;
-    let rendered = match contents {
-        CellContents::Empty => return,
-        CellContents::Label { prefix, text } => render_label(*prefix, text, w),
-        CellContents::Constant(v) => match render_value_in_cell(v, w, format) {
-            Some(s) => s,
-            None => return,
-        },
+/// Per-column classification fed to the spill planner. `Label` keeps
+/// the owned text so the borrowed [`SpillSlot::Label`] that follows can
+/// point into it for the planner's lifetime.
+enum RowInput {
+    Empty,
+    Label { prefix: LabelPrefix, text: String },
+    Rendered(String),
+}
+
+/// Render non-label cell contents into exactly `width` chars. An
+/// `Empty` / `Value::Empty` / unevaluated formula produces blanks so
+/// the result can slot directly into [`SpillSlot::Rendered`].
+fn render_own_width(contents: &CellContents, width: usize, format: Format) -> String {
+    match contents {
+        CellContents::Empty => " ".repeat(width),
+        CellContents::Label { .. } => {
+            // Labels are routed through SpillSlot::Label; we should
+            // never hit this branch from the planner caller.
+            " ".repeat(width)
+        }
+        CellContents::Constant(v) => {
+            render_value_in_cell(v, width, format).unwrap_or_else(|| " ".repeat(width))
+        }
         CellContents::Formula {
             cached_value: Some(v),
             ..
-        } => match render_value_in_cell(v, w, format) {
-            Some(s) => s,
-            None => return,
-        },
-        // Unevaluated formula: leave blank.
+        } => render_value_in_cell(v, width, format).unwrap_or_else(|| " ".repeat(width)),
         CellContents::Formula {
             cached_value: None, ..
-        } => return,
-    };
-    for (i, ch) in rendered.chars().enumerate().take(w) {
-        buf[(x + i as u16, y)].set_char(ch).set_style(style);
+        } => " ".repeat(width),
     }
 }
 
@@ -5159,6 +5280,30 @@ mod tests {
         assert_eq!(app.wb().pointer, Address::A1);
         assert_eq!(app.mode, Mode::Ready);
         assert!(app.entry.is_none());
+    }
+
+    #[test]
+    fn new_with_file_routes_csv_by_extension() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join("l123_new_with_csv");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("foo.csv");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(b"10,20\nfoo,bar\n")
+            .unwrap();
+        let app = App::new_with_file(path);
+        assert_eq!(
+            app.mode,
+            Mode::Ready,
+            "CLI-opening a .csv should land in READY, not ERROR (error={:?})",
+            app.error_message,
+        );
+        match app.wb().cells.get(&Address::A1) {
+            Some(CellContents::Constant(Value::Number(n))) => assert_eq!(*n, 10.0),
+            other => panic!("A1 expected Number(10), got {other:?}"),
+        }
     }
 
     #[test]

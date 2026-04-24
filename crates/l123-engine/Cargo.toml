@@ -9,3 +9,4 @@ l123-core = { workspace = true }
 ironcalc = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+tracing = { workspace = true }

@@ -221,8 +221,10 @@ impl Engine for IronCalcEngine {
         let path_str = path
             .to_str()
             .ok_or_else(|| EngineError::Backend(format!("non-UTF8 path: {}", path.display())))?;
-        let mut model = load_from_xlsx(path_str, "en", "UTC", "en")
-            .map_err(|e| EngineError::Backend(e.to_string()))?;
+        let mut model = load_from_xlsx(path_str, "en", "UTC", "en").map_err(|e| {
+            tracing::error!(path = %path.display(), err = %e, "ironcalc load_from_xlsx failed");
+            EngineError::Backend(e.to_string())
+        })?;
         model.evaluate();
         self.model = model;
         Ok(())

@@ -51,7 +51,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use l123_graph::{decode_color_bitmap, icon_rle::PALETTE_INTENSITY};
+use l123_graph::{decode_color_bitmap, icon_rle::LOTUS_PALETTE_RGB};
 
 const MONO_BITMAP_BYTES: usize = 72; // 24 × 24 / 8
 const BITMAP_DIM: u32 = 24;
@@ -189,21 +189,17 @@ fn save_bitmap_as_png(bits: &[u8], path: &Path) {
 }
 
 fn save_color_bitmap_as_png(pixels: &[u8; 576], path: &Path) {
-    // Render as a ramp from silver (palette 0) to near-black
-    // (palette 1) using PALETTE_INTENSITY as the blend weight. This
-    // is the same mapping the L123 panel renderer uses, so the PNG
-    // dump matches what you'd see in-app.
-    let bg = [0xC0u8, 0xC0, 0xC0];
-    let ink = [0x10u8, 0x10, 0x10];
+    // Render with the canonical Lotus WYSIWYG palette — the same
+    // RGB values the real 1-2-3 DOS build draws. See
+    // `icon_rle::LOTUS_PALETTE_RGB` for the source-of-truth table.
     let w = BITMAP_DIM * PNG_SCALE;
     let h = BITMAP_DIM * PNG_SCALE;
     let mut img = image::RgbImage::new(w, h);
     for y in 0..BITMAP_DIM {
         for x in 0..BITMAP_DIM {
             let c = pixels[(y * BITMAP_DIM + x) as usize] as usize;
-            let w_blend = PALETTE_INTENSITY[c.min(7)];
-            let mix = |a: u8, b: u8| ((a as f32) * w_blend + (b as f32) * (1.0 - w_blend)) as u8;
-            let color = image::Rgb([mix(ink[0], bg[0]), mix(ink[1], bg[1]), mix(ink[2], bg[2])]);
+            let [r, g, b] = LOTUS_PALETTE_RGB[c.min(7)];
+            let color = image::Rgb([r, g, b]);
             for sy in 0..PNG_SCALE {
                 for sx in 0..PNG_SCALE {
                     img.put_pixel(x * PNG_SCALE + sx, y * PNG_SCALE + sy, color);

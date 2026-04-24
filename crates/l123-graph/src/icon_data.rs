@@ -754,8 +754,8 @@ pub const COLOR_BITMAP_PIXELS: usize = 576;
 /// 105 palette-indexed 24×24 bitmaps decoded from Section 4 of ICONS3.DAT.
 ///
 /// Each byte is a palette index 0..=7: 0 = panel background, 1 = outline/ink,
-/// 2..=7 = intermediate shades. See `icon_rle::PALETTE_INTENSITY` for the
-/// weights the renderer uses to blend these back into each category's tint.
+/// 2..=7 = EGA accents. See `icon_rle::LOTUS_PALETTE_RGB` for the
+/// canonical RGB values the renderer paints each index with.
 pub static ICON_COLOR_BITMAPS: [[u8; COLOR_BITMAP_PIXELS]; ICON_COUNT] = [
     [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
