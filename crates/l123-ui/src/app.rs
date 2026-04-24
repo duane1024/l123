@@ -3550,15 +3550,28 @@ impl App {
         let kinds = IconKind::ORDER;
         let Some(kind) = kinds.get(index.min(kinds.len() - 1)) else { return };
         match kind {
-            IconKind::Left => self.move_pointer(-1, 0),
-            IconKind::Right => self.move_pointer(1, 0),
-            IconKind::Up => self.move_pointer(0, -1),
-            IconKind::Down => self.move_pointer(0, 1),
-            IconKind::SheetForward => self.move_sheet(1),
-            IconKind::SheetBackward => self.move_sheet(-1),
-            // Help isn't wired as a Mode yet (SPEC §18 Complete tier).
-            // A click here is a safe no-op rather than an error.
-            IconKind::Help => {}
+            IconKind::SaveFile => self.start_file_save_prompt(),
+            IconKind::RetrieveFile => self.start_file_retrieve_prompt(),
+            IconKind::FileOpenAfter => self.start_file_open_prompt(false),
+            IconKind::NextSheet => self.move_sheet(1),
+            IconKind::PrevSheet => self.move_sheet(-1),
+            IconKind::GraphView => self.enter_graph_view(),
+            IconKind::Print => self.start_print_file_prompt(),
+            // Remaining slots hit features we haven't implemented
+            // (WYSIWYG bold/italic/underline/font, perspective,
+            // print-preview, @SUM insertion, add-graph, help). A click
+            // is a safe no-op — no feedback for now, like clicking on
+            // an inert menu item.
+            IconKind::Perspective
+            | IconKind::Sum
+            | IconKind::AddGraph
+            | IconKind::PrintPreview
+            | IconKind::Bold
+            | IconKind::Italic
+            | IconKind::UnderlineSingle
+            | IconKind::FontCycle
+            | IconKind::Help
+            | IconKind::UserDefined => {}
         }
     }
 
@@ -5322,58 +5335,77 @@ mod tests {
         });
     }
 
-    #[test]
-    fn icon_click_left_moves_pointer_left() {
-        let mut app = App::new();
-        // Start at B2 so there's room to move left.
-        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(app.pointer().display_full(), "A:B2");
-        // Panel at x=80, 3 cols wide, rows 4..25 (21 rows tall, 3 per
-        // icon). Click the top (Left) icon: row 4..6.
-        let panel = Rect::new(80, 4, 3, 21);
-        click(&mut app, panel, 81, 5);
-        assert_eq!(app.pointer().display_full(), "A:A2", "Left click should move left");
+    /// Standard fixture panel: 17 icons × 3 rows each = 51 rows, so
+    /// slot N starts at local row N * 3.
+    const TEST_PANEL: Rect = Rect { x: 80, y: 4, width: 3, height: 51 };
+
+    fn click_slot(app: &mut App, slot: u16) {
+        // Click the middle row of the given slot.
+        click(app, TEST_PANEL, TEST_PANEL.x + 1, TEST_PANEL.y + slot * 3 + 1);
     }
 
     #[test]
-    fn icon_click_down_moves_pointer_down() {
+    fn icon_click_save_opens_save_prompt() {
         let mut app = App::new();
+        click_slot(&mut app, 0);
+        // /FS enters Mode::Menu with an active prompt for the filename.
+        assert_eq!(app.mode, Mode::Menu);
+        assert!(app.prompt.is_some(), "save prompt should be active");
+    }
+
+    #[test]
+    fn icon_click_retrieve_opens_retrieve_prompt() {
+        let mut app = App::new();
+        click_slot(&mut app, 1);
+        assert_eq!(app.mode, Mode::Menu);
+        assert!(app.prompt.is_some());
+    }
+
+    #[test]
+    fn icon_click_graph_view_enters_graph_mode() {
+        let mut app = App::new();
+        click_slot(&mut app, 7);
+        assert_eq!(app.mode, Mode::Graph);
+    }
+
+    #[test]
+    fn icon_click_print_opens_print_prompt() {
+        let mut app = App::new();
+        click_slot(&mut app, 9);
+        assert_eq!(app.mode, Mode::Menu);
+        assert!(app.prompt.is_some());
+    }
+
+    #[test]
+    fn icon_click_prev_sheet_is_noop_on_first_sheet() {
+        let mut app = App::new();
+        click_slot(&mut app, 5);
+        // Only one sheet in a fresh workbook — prev-sheet clamps.
         assert_eq!(app.pointer().display_full(), "A:A1");
-        // Panel: 21 rows / 7 icons = 3 rows per slot. Slot 1 (Down)
-        // spans local rows 3..=5.
-        let panel = Rect::new(80, 4, 3, 21);
-        click(&mut app, panel, 81, 4 + 4);
-        assert_eq!(app.pointer().display_full(), "A:A2");
-    }
-
-    #[test]
-    fn icon_click_right_moves_pointer_right() {
-        let mut app = App::new();
-        let panel = Rect::new(80, 4, 3, 21);
-        // Slot 3 (Right) spans local rows 9..=11.
-        click(&mut app, panel, 81, 4 + 10);
-        assert_eq!(app.pointer().display_full(), "A:B1");
+        assert_eq!(app.mode, Mode::Ready);
     }
 
     #[test]
     fn icon_click_help_is_safe_noop() {
         let mut app = App::new();
-        let panel = Rect::new(80, 4, 3, 21);
-        // Slot 6 (Help) — local rows 18..=20.
-        click(&mut app, panel, 81, 4 + 19);
-        // No mode change, no pointer move, no panic.
+        click_slot(&mut app, 15);
         assert_eq!(app.pointer().display_full(), "A:A1");
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    #[test]
+    fn icon_click_bold_is_safe_noop() {
+        let mut app = App::new();
+        click_slot(&mut app, 11);
         assert_eq!(app.mode, Mode::Ready);
     }
 
     #[test]
     fn mouse_click_outside_panel_is_ignored() {
         let mut app = App::new();
-        let panel = Rect::new(80, 4, 3, 21);
-        // Far outside the panel — should not move the pointer.
-        click(&mut app, panel, 10, 10);
+        click(&mut app, TEST_PANEL, 10, 10);
         assert_eq!(app.pointer().display_full(), "A:A1");
+        assert_eq!(app.mode, Mode::Ready);
     }
 
     #[test]
@@ -5392,14 +5424,14 @@ mod tests {
     #[test]
     fn mouse_non_left_button_is_ignored() {
         let mut app = App::new();
-        let panel = Rect::new(80, 4, 3, 21);
-        app.icon_panel_area.set(Some(panel));
+        app.icon_panel_area.set(Some(TEST_PANEL));
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Right),
             column: 81,
             row: 5,
             modifiers: KeyModifiers::NONE,
         });
-        assert_eq!(app.pointer().display_full(), "A:A1");
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(app.prompt.is_none());
     }
 }
