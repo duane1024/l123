@@ -451,6 +451,9 @@ enum PromptNext {
     /// After the user types the replacement string, apply it to all
     /// matches in the active [`SearchSession`].
     RangeSearchReplacement,
+    /// After the user types a filename, save the current graph to
+    /// that path as SVG.
+    GraphSaveFilename,
 }
 
 /// /File Xtract sub-command: does the extracted file keep formulas,
@@ -501,7 +504,8 @@ impl PromptNext {
             | PromptNext::FileImportNumbersFilename
             | PromptNext::FileDirPath
             | PromptNext::FileOpenFilename { .. }
-            | PromptNext::PrintFileFilename => is_path_char(c),
+            | PromptNext::PrintFileFilename
+            | PromptNext::GraphSaveFilename => is_path_char(c),
             // Header and footer are free-form text with the `|`
             // separator carving them into L|C|R.
             PromptNext::PrintFileHeader | PromptNext::PrintFileFooter => {
@@ -1376,6 +1380,38 @@ impl App {
         self.image_picker = Picker::from_query_stdio().ok();
     }
 
+    fn start_graph_save_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter graph file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::GraphSaveFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn commit_graph_save(&mut self, buffer: &str) {
+        let trimmed = buffer.trim();
+        if trimmed.is_empty() {
+            self.mode = Mode::Ready;
+            return;
+        }
+        // Match extension to format: svg is the default, .cgm is
+        // preserved if typed but the bytes are still SVG. Anything
+        // else also gets SVG bytes — the user got what they asked for.
+        let path = if std::path::Path::new(trimmed).extension().is_some() {
+            PathBuf::from(trimmed)
+        } else {
+            PathBuf::from(format!("{trimmed}.svg"))
+        };
+        let def = self.wb().current_graph.clone();
+        let values = self.collect_graph_values(&def);
+        let svg = l123_graph::render_svg(&def, &values);
+        let _ = std::fs::write(&path, svg);
+        self.mode = Mode::Ready;
+    }
+
     fn collect_graph_values(&self, def: &GraphDef) -> l123_graph::GraphValues {
         let mut out = l123_graph::GraphValues::default();
         if let Some(r) = def.x {
@@ -1640,6 +1676,7 @@ impl App {
                 self.close_menu();
             }
             Action::GraphView => self.enter_graph_view(),
+            Action::GraphSave => self.start_graph_save_prompt(),
             Action::GraphQuit => self.close_menu(),
             // Subsequent cycles wire these. For now, descent is a no-op.
             _ => self.close_menu(),
@@ -2914,6 +2951,10 @@ impl App {
                     self.save_workbook_to(path);
                     self.mode = Mode::Ready;
                 }
+            }
+            PromptNext::GraphSaveFilename => {
+                let buf = p.buffer.clone();
+                self.commit_graph_save(&buf);
             }
             PromptNext::FileRetrieveFilename => {
                 if p.buffer.is_empty() {

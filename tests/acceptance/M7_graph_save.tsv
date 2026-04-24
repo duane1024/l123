@@ -1,0 +1,52 @@
+# M7 slice 7 — /Graph Save writes the current graph to disk as SVG.
+# Extension defaults to .svg when none is typed; the bytes are always
+# a valid SVG document.
+
+# Seed a few cells so the graph has something to plot.
+KEYS 1
+ENTER
+KEYS 3
+ENTER
+KEYS 2
+ENTER
+KEYS 4
+ENTER
+HOME
+
+# /GTB /GA<POINT>~ — Bar with A1..A4 as series A.
+KEY /
+KEY G
+KEY T
+KEY B
+KEY /
+KEY G
+KEY A
+DOWN
+DOWN
+DOWN
+ENTER
+ASSERT_GRAPH_TYPE      BAR
+ASSERT_GRAPH_SERIES A  A:A1..A:A4
+
+# /GS — prompt for filename. Typing a bare name (no extension) gets
+# `.svg` appended. Write into the per-transcript $TMPDIR so no files
+# leak into the workspace.
+RM_FILE $TMPDIR/explicit.svg
+RM_FILE $TMPDIR/implicit.svg
+KEY /
+KEY G
+KEY S
+ASSERT_PANEL_L3        Enter graph file name
+KEYS $TMPDIR/explicit.svg
+ENTER
+ASSERT_MODE            READY
+ASSERT_FILE_CONTAINS   $TMPDIR/explicit.svg  <svg
+ASSERT_FILE_CONTAINS   $TMPDIR/explicit.svg  <rect
+
+# Without extension → .svg appended.
+KEY /
+KEY G
+KEY S
+KEYS $TMPDIR/implicit
+ENTER
+ASSERT_FILE_CONTAINS   $TMPDIR/implicit.svg  <svg

@@ -129,6 +129,10 @@ pub enum Action {
     GraphResetGraph,
     /// `/Graph View` — full-screen graph display (same as F10).
     GraphView,
+    /// `/Graph Save` — prompt for a filename and write the graph to
+    /// disk (SVG; a `.cgm` extension is preserved but the file body
+    /// is still SVG, per project convention).
+    GraphSave,
     /// `/Graph Quit` — close the `/Graph` menu back to READY.
     GraphQuit,
 }
@@ -1409,8 +1413,8 @@ const GRAPH_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'S',
         name: "Save",
-        help: "Save graph to a file",
-        body: MenuBody::NotImplemented("g-save"),
+        help: "Save graph to an SVG file",
+        body: MenuBody::Action(Action::GraphSave),
     },
     MenuItem {
         letter: 'O',
