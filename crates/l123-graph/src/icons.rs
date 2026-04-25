@@ -13,6 +13,8 @@ use std::io::Cursor;
 
 use plotters::prelude::*;
 
+use l123_core::TextStyle;
+
 use crate::icon_data::{
     BITMAP_DIM, ICON_BITMAPS, ICON_COLOR_AVAILABLE, ICON_COLOR_BITMAPS, ICON_DESCRIPTIONS,
 };
@@ -114,6 +116,11 @@ pub enum IconAction {
     /// Like [`IconAction::MenuPath`] but opens the WYSIWYG `:` colon
     /// menu instead of the classic `/` menu.
     WysiwygMenuPath(&'static str),
+    /// Toggle a text style on the current cell or active POINT
+    /// highlight without prompting — the SmartIcons behavior for
+    /// Bold/Italic/Underline. Clears the style if every cell in the
+    /// target range already carries it; otherwise sets it on all.
+    TextStyleToggle { bits: TextStyle },
     /// Fire a non-menu key.
     SysKey(SysAction),
     /// Dynamic panel navigator. Slot 16 uses this; the UI decides
@@ -159,22 +166,28 @@ pub fn icon_action(id: u8) -> IconAction {
         7 => MenuPath("PF"), // Print file
         10 => SysKey(GraphView),
         11 => SysKey(Undo),
-        12 => WysiwygMenuPath("FBS"), // Bold (set) via :Format Bold Set
-        13 => WysiwygMenuPath("FIS"), // Italic (set) via :Format Italic Set
-        14 => MenuPath("RFR"),        // Clear formats → Range Format Reset
-        15 => WysiwygMenuPath("FUS"), // Underline (set) via :Format Underline Set
-        17 => MenuPath("RFC"),        // Currency
-        19 => MenuPath("RFP"),        // Percent
-        26 => MenuPath("C"),          // Copy
-        27 => MenuPath("M"),          // Move
-        28 => MenuPath("RLL"),        // Label Left
-        29 => MenuPath("RLC"),        // Label Center
-        30 => MenuPath("RLR"),        // Label Right
-        33 => MenuPath("RE"),         // Range Erase
-        34 => MenuPath("WIR"),        // Insert row
-        35 => MenuPath("WIC"),        // Insert column
-        36 => MenuPath("WDR"),        // Delete row
-        37 => MenuPath("WDC"),        // Delete column
+        12 => TextStyleToggle {
+            bits: TextStyle::BOLD,
+        },
+        13 => TextStyleToggle {
+            bits: TextStyle::ITALIC,
+        },
+        14 => MenuPath("RFR"), // Clear formats → Range Format Reset
+        15 => TextStyleToggle {
+            bits: TextStyle::UNDERLINE,
+        },
+        17 => MenuPath("RFC"), // Currency
+        19 => MenuPath("RFP"), // Percent
+        26 => MenuPath("C"),   // Copy
+        27 => MenuPath("M"),   // Move
+        28 => MenuPath("RLL"), // Label Left
+        29 => MenuPath("RLC"), // Label Center
+        30 => MenuPath("RLR"), // Label Right
+        33 => MenuPath("RE"),  // Range Erase
+        34 => MenuPath("WIR"), // Insert row
+        35 => MenuPath("WIC"), // Insert column
+        36 => MenuPath("WDR"), // Delete row
+        37 => MenuPath("WDC"), // Delete column
         38 => SysKey(Home),
         44 => SysKey(Recalc),
         49 => SysKey(Goto),
@@ -543,9 +556,25 @@ mod tests {
 
     #[test]
     fn icon_action_wires_wysiwyg_bold_italic_underline() {
-        assert_eq!(icon_action(12), IconAction::WysiwygMenuPath("FBS"));
-        assert_eq!(icon_action(13), IconAction::WysiwygMenuPath("FIS"));
-        assert_eq!(icon_action(15), IconAction::WysiwygMenuPath("FUS"));
+        // SmartIcons toggle the style instantly — no menu, no POINT prompt.
+        assert_eq!(
+            icon_action(12),
+            IconAction::TextStyleToggle {
+                bits: TextStyle::BOLD,
+            },
+        );
+        assert_eq!(
+            icon_action(13),
+            IconAction::TextStyleToggle {
+                bits: TextStyle::ITALIC,
+            },
+        );
+        assert_eq!(
+            icon_action(15),
+            IconAction::TextStyleToggle {
+                bits: TextStyle::UNDERLINE,
+            },
+        );
     }
 
     #[test]

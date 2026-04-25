@@ -20,13 +20,13 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use l123_core::cell_render::{apply_halign_to_rendered, halign_to_label_prefix};
 use l123_core::{
     address::col_to_letters, label::is_value_starter, plan_row_spill, render_label,
     render_value_in_cell, Address, Alignment, Border, CellContents, Comment, ErrKind, Fill,
     FontStyle, Format, FormatKind, HAlign, LabelPrefix, Merge, Mode, Range, RgbColor, SheetId,
     SheetState, SpillSlot, Table, TextStyle, Value,
 };
-use l123_core::cell_render::{apply_halign_to_rendered, halign_to_label_prefix};
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
 use l123_menu::{self as menu, Action, MenuBody, MenuItem};
@@ -3463,12 +3463,8 @@ impl App {
             let _ = self.wb_mut().engine.set_cell_alignment(addr, align);
         }
         // Push per-cell fills so the background color round-trips.
-        let fills: Vec<(Address, Fill)> = self
-            .wb()
-            .cell_fills
-            .iter()
-            .map(|(a, f)| (*a, *f))
-            .collect();
+        let fills: Vec<(Address, Fill)> =
+            self.wb().cell_fills.iter().map(|(a, f)| (*a, *f)).collect();
         for (addr, fill) in fills {
             let _ = self.wb_mut().engine.set_cell_fill(addr, fill);
         }
@@ -5699,6 +5695,9 @@ impl App {
         match l123_graph::icon_action(id) {
             l123_graph::IconAction::MenuPath(path) => self.dispatch_menu_path(path),
             l123_graph::IconAction::WysiwygMenuPath(path) => self.dispatch_wysiwyg_menu_path(path),
+            l123_graph::IconAction::TextStyleToggle { bits } => {
+                self.dispatch_icon_text_style(bits)
+            }
             l123_graph::IconAction::SysKey(act) => self.dispatch_sys_action(act),
             l123_graph::IconAction::PageNav => {} // reached only via slot 16
             l123_graph::IconAction::Noop => {}
@@ -5721,6 +5720,45 @@ impl App {
         for c in path.chars() {
             self.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
+    }
+
+    /// SmartIcons toggle for Bold / Italic / Underline. Acts on the
+    /// active POINT highlight if one is in progress, otherwise on the
+    /// single cell at the pointer. If every cell in the target already
+    /// carries `bits`, clear them; otherwise set on all. Always lands
+    /// back in Ready.
+    fn dispatch_icon_text_style(&mut self, bits: TextStyle) {
+        let range = if matches!(self.mode, Mode::Point) {
+            self.highlight_range()
+        } else {
+            Range::single(self.wb().pointer)
+        };
+        self.point = None;
+        self.menu = None;
+        self.prompt = None;
+
+        let r = range.normalized();
+        let sheets: Vec<SheetId> = if self.group_mode {
+            (0..self.wb().engine.sheet_count()).map(SheetId).collect()
+        } else {
+            vec![r.start.sheet]
+        };
+        let all_have_bits = sheets.iter().all(|sheet| {
+            (r.start.row..=r.end.row).all(|row| {
+                (r.start.col..=r.end.col).all(|col| {
+                    let addr = Address::new(*sheet, col, row);
+                    let cur = self
+                        .wb()
+                        .cell_text_styles
+                        .get(&addr)
+                        .copied()
+                        .unwrap_or_default();
+                    cur.merge(bits) == cur
+                })
+            })
+        });
+        self.execute_range_text_style(range, bits, !all_have_bits);
+        self.mode = Mode::Ready;
     }
 
     fn dispatch_sys_action(&mut self, action: l123_graph::SysAction) {
@@ -6408,8 +6446,7 @@ impl App {
                     match self.wb().cells.get(&addr) {
                         None | Some(CellContents::Empty) => RowInput::Empty,
                         Some(CellContents::Label { prefix, text }) => {
-                            let eff_prefix =
-                                halign_to_label_prefix(halign).unwrap_or(*prefix);
+                            let eff_prefix = halign_to_label_prefix(halign).unwrap_or(*prefix);
                             RowInput::Label {
                                 prefix: eff_prefix,
                                 text: text.clone(),
@@ -6607,8 +6644,7 @@ impl App {
                     let painted_text = match self.wb().cells.get(&m.anchor) {
                         None | Some(CellContents::Empty) => " ".repeat(span_w as usize),
                         Some(CellContents::Label { prefix, text }) => {
-                            let eff_prefix =
-                                halign_to_label_prefix(halign).unwrap_or(*prefix);
+                            let eff_prefix = halign_to_label_prefix(halign).unwrap_or(*prefix);
                             render_label(eff_prefix, text, span_w as usize)
                         }
                         Some(other) => {
@@ -8272,14 +8308,12 @@ mod tests {
     }
 
     #[test]
-    fn icon_click_bold_enters_point_for_wysiwyg_bold_set() {
-        // Panel 1 slot 11 = icon id 12 = :Format Bold Set.  The click
-        // should drop the user into POINT mode auto-anchored at the
-        // pointer; pressing Enter commits and applies bold.
+    fn icon_click_bold_applies_to_pointer_cell_instantly() {
+        // Panel 1 slot 11 = icon id 12 = SmartIcons Bold. The click
+        // applies bold to the cursor cell immediately — no menu, no
+        // POINT prompt, mode stays Ready.
         let mut app = App::new();
         click_slot(&mut app, 11);
-        assert_eq!(app.mode, Mode::Point);
-        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Ready);
         assert_eq!(
             app.wb().cell_text_styles.get(&Address::A1).copied(),
@@ -8288,11 +8322,10 @@ mod tests {
     }
 
     #[test]
-    fn icon_click_italic_applies_italic_on_commit() {
-        // Panel 1 slot 12 = icon id 13 = :Format Italic Set.
+    fn icon_click_italic_applies_to_pointer_cell_instantly() {
         let mut app = App::new();
         click_slot(&mut app, 12);
-        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
         assert_eq!(
             app.wb().cell_text_styles.get(&Address::A1).copied(),
             Some(TextStyle::ITALIC),
@@ -8300,15 +8333,130 @@ mod tests {
     }
 
     #[test]
-    fn icon_click_underline_applies_underline_on_commit() {
-        // Panel 1 slot 13 = icon id 15 = :Format Underline Set.
+    fn icon_click_underline_applies_to_pointer_cell_instantly() {
         let mut app = App::new();
         click_slot(&mut app, 13);
-        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
         assert_eq!(
             app.wb().cell_text_styles.get(&Address::A1).copied(),
             Some(TextStyle::UNDERLINE),
         );
+    }
+
+    #[test]
+    fn icon_click_bold_applies_to_active_point_highlight() {
+        // While in POINT mode with an extended highlight (e.g. mid /Range
+        // command), clicking Bold should apply to that highlight rather
+        // than just A1, then return to Ready.
+        let mut app = App::new();
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE));
+        // Now in POINT for /Range Erase, anchored at A1. Extend to B2.
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Point);
+        click_slot(&mut app, 11);
+        assert_eq!(app.mode, Mode::Ready);
+        for addr in [
+            Address::A1,
+            Address::new(SheetId(0), 1, 0),
+            Address::new(SheetId(0), 0, 1),
+            Address::new(SheetId(0), 1, 1),
+        ] {
+            assert_eq!(
+                app.wb().cell_text_styles.get(&addr).copied(),
+                Some(TextStyle::BOLD),
+                "{addr:?} should be bold",
+            );
+        }
+    }
+
+    #[test]
+    fn icon_click_bold_toggles_off_when_pointer_cell_already_bold() {
+        // Second click on Bold over an already-bold cell removes bold.
+        let mut app = App::new();
+        click_slot(&mut app, 11);
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::BOLD),
+        );
+        click_slot(&mut app, 11);
+        assert_eq!(app.mode, Mode::Ready);
+        assert_eq!(app.wb().cell_text_styles.get(&Address::A1).copied(), None);
+    }
+
+    #[test]
+    fn icon_click_bold_toggle_only_clears_bold_keeping_other_styles() {
+        // Toggling Bold off must leave Italic/Underline intact on the cell.
+        let mut app = App::new();
+        app.execute_range_text_style(
+            Range::single(Address::A1),
+            TextStyle::BOLD.merge(TextStyle::ITALIC),
+            true,
+        );
+        click_slot(&mut app, 11);
+        assert_eq!(
+            app.wb().cell_text_styles.get(&Address::A1).copied(),
+            Some(TextStyle::ITALIC),
+        );
+    }
+
+    #[test]
+    fn icon_click_bold_toggles_off_when_every_cell_in_highlight_is_bold() {
+        // Pre-bold A1:B2, then enter POINT over A1:B2 and click Bold —
+        // the whole range should clear.
+        let mut app = App::new();
+        let r = Range {
+            start: Address::A1,
+            end: Address::new(SheetId(0), 1, 1),
+        };
+        app.execute_range_text_style(r, TextStyle::BOLD, true);
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        click_slot(&mut app, 11);
+        assert_eq!(app.mode, Mode::Ready);
+        for addr in [
+            Address::A1,
+            Address::new(SheetId(0), 1, 0),
+            Address::new(SheetId(0), 0, 1),
+            Address::new(SheetId(0), 1, 1),
+        ] {
+            assert_eq!(
+                app.wb().cell_text_styles.get(&addr).copied(),
+                None,
+                "{addr:?} should no longer be bold",
+            );
+        }
+    }
+
+    #[test]
+    fn icon_click_bold_sets_bold_on_mixed_highlight() {
+        // Mixed highlight (only A1 bold, others plain): one click bolds
+        // every cell rather than clearing.
+        let mut app = App::new();
+        app.execute_range_text_style(Range::single(Address::A1), TextStyle::BOLD, true);
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        click_slot(&mut app, 11);
+        for addr in [
+            Address::A1,
+            Address::new(SheetId(0), 1, 0),
+            Address::new(SheetId(0), 0, 1),
+            Address::new(SheetId(0), 1, 1),
+        ] {
+            assert_eq!(
+                app.wb().cell_text_styles.get(&addr).copied(),
+                Some(TextStyle::BOLD),
+                "{addr:?} should be bold",
+            );
+        }
     }
 
     #[test]
