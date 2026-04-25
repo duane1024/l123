@@ -1,0 +1,43 @@
+# Sheet tab color imported from xlsx tints the letter of the sheet
+# indicator on the status line (e.g. `[B: Q1 Red]` with a red B).
+# Fixture: tests/acceptance/fixtures/xlsx/sheet_color.xlsx — three
+# sheets, only Q1 Red and Q2 Blue are tinted.
+#
+# Known limitation (IronCalc 0.7): the xlsx exporter drops tabColor,
+# so a workbook created / edited in L123 will lose the tint on /FS.
+# This transcript exercises import + render only; see
+# `sheet_color_is_dropped_on_xlsx_save_upstream_gap` in the engine
+# adapter tests for the pinned round-trip expectation.
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/sheet_color.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Sheet A (Overview) — no tab color; letter renders DarkGray.
+ASSERT_POINTER          A:A1
+ASSERT_STATUS           [A: Overview]
+ASSERT_STATUS_SHEET_FG  none
+
+# Ctrl-PgDn → sheet B (Q1 Red).  DB BE 29 is a readable mustard.
+CTRL_PGDN
+ASSERT_POINTER          B:A1
+ASSERT_STATUS           [B: Q1 Red]
+ASSERT_STATUS_SHEET_FG  DBBE29
+
+# Ctrl-PgDn → sheet C (Q2 Blue).
+CTRL_PGDN
+ASSERT_POINTER          C:A1
+ASSERT_STATUS           [C: Q2 Blue]
+ASSERT_STATUS_SHEET_FG  3366CC
+
+# Ctrl-PgUp back to Q1 Red restores its tint.
+CTRL_PGUP
+ASSERT_POINTER          B:A1
+ASSERT_STATUS_SHEET_FG  DBBE29

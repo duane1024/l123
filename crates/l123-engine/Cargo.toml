@@ -10,3 +10,11 @@ ironcalc = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+# `zip` is used by the `build_fixtures` example to hand-patch xlsx
+# files with features IronCalc's exporter doesn't emit (e.g. sheet
+# tabColor — see docs/XLSX_IMPORT_PLAN.md §2.6 notes on upstream gap).
+# Version pinned to match IronCalc's transitive `zip` so we aren't
+# compiling two versions.
+zip = "0.6"

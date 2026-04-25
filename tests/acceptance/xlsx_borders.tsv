@@ -1,0 +1,56 @@
+# xlsx right-side borders paint a box-drawing glyph on the rightmost
+# column of each cell's slot.  Style → glyph mapping:
+#   Thin/Medium → │   Thick → ┃   Double → ║   Dashed → ╎   Dotted → ┊
+#
+# Fixture: tests/acceptance/fixtures/xlsx/borders.xlsx
+#   A1 'thin'    right = thin    → │
+#   B1 'thick'   right = thick   → ┃
+#   C1 'double'  right = double  → ║
+#   D1 'dashed'  right = mediumDashed → ╎ (collapses on read)
+#   E1 'plain'   no border       → space
+#
+# Top/bottom borders are *preserved* on round-trip but not yet
+# rendered; this transcript covers the v1 right-edge slice.
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/borders.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Pointer suppression: the highlighted cell drops its border so the
+# REVERSED selection stays loud.  Move pointer off A1..E1 first.
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER          A:F1
+
+ASSERT_CELL_RIGHT_GLYPH A:A1  │
+ASSERT_CELL_RIGHT_GLYPH A:B1  ┃
+ASSERT_CELL_RIGHT_GLYPH A:C1  ║
+ASSERT_CELL_RIGHT_GLYPH A:D1  ╎
+# E1 has no border — rightmost column is whatever padding the cell
+# rendered (a space for short text in default-width column).
+ASSERT_CELL_RIGHT_GLYPH A:E1  SPACE
+
+# Park the pointer on B1 — its border should disappear (suppressed),
+# and the cell renders a plain space at the right edge.  Adjacent A1
+# and C1 keep their borders since they're not highlighted.
+LEFT
+LEFT
+LEFT
+LEFT
+LEFT
+ASSERT_POINTER          A:A1
+RIGHT
+ASSERT_POINTER          A:B1
+ASSERT_CELL_RIGHT_GLYPH A:B1  SPACE
+ASSERT_CELL_RIGHT_GLYPH A:A1  │
+ASSERT_CELL_RIGHT_GLYPH A:C1  ║

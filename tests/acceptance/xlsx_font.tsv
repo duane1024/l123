@@ -1,0 +1,55 @@
+# xlsx font fg color + strikethrough ride the grid render.  Colors
+# come through as `Color::Rgb(...)` on the cell's fg; strikethrough as
+# `Modifier::CROSSED_OUT`.
+#
+# Fixture: tests/acceptance/fixtures/xlsx/font.xlsx
+#   A1 'red'    fg = FF0000
+#   B1 'blue'   fg = 3366CC
+#   C1 'struck' strikethrough, default color
+#   D1 'plain'  default font
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/font.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Pointer starts on A1; same suppression rule as fill — its fg is
+# suppressed so the REVERSED highlight stays loud.  Drive right to
+# expose A1.
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER   A:E1
+
+ASSERT_CELL_FG      A:A1  FF0000
+ASSERT_CELL_STRIKE  A:A1  false
+
+ASSERT_CELL_FG      A:B1  3366CC
+ASSERT_CELL_STRIKE  A:B1  false
+
+# Strike is an attribute of the glyph — it applies even without a
+# color override.  C1 has no fg color.
+ASSERT_CELL_FG      A:C1  none
+ASSERT_CELL_STRIKE  A:C1  true
+
+ASSERT_CELL_FG      A:D1  none
+ASSERT_CELL_STRIKE  A:D1  false
+
+# Park the pointer on the struck cell — color suppression rule means
+# cell_fg_rendered returns `none` for a highlighted cell, but strike
+# still applies (it's glyph-level, not selection-level).
+LEFT
+LEFT
+ASSERT_POINTER      A:C1
+ASSERT_CELL_FG      A:C1  none
+ASSERT_CELL_STRIKE  A:C1  true
+
+# Non-pointer B1 still carries its fg while we hover C1.
+ASSERT_CELL_FG      A:B1  3366CC

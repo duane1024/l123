@@ -3,7 +3,7 @@
 //! the print renderer in `l123-print`: alignment rules don't depend
 //! on the output medium.
 
-use crate::{Format, FormatKind, LabelPrefix, Value};
+use crate::{Format, FormatKind, HAlign, LabelPrefix, Value};
 
 /// One slot in a row for label-spill planning. Callers classify each
 /// visible column into one of these variants — see [`plan_row_spill`].
@@ -251,6 +251,56 @@ pub fn center_pad(text: &str, width: usize) -> String {
     format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
 }
 
+/// Translate an xlsx horizontal alignment into a 1-2-3 label prefix
+/// for rendering.  Returns `None` when the xlsx alignment is `General`
+/// so callers keep the cell's own stored prefix.  Used by the grid
+/// renderer to honor an explicit Excel alignment on a label cell —
+/// the spill planner picks direction from the prefix, so swapping
+/// prefix here keeps the spill contract intact.
+pub fn halign_to_label_prefix(h: HAlign) -> Option<LabelPrefix> {
+    match h {
+        HAlign::General => None,
+        HAlign::Left | HAlign::Justify => Some(LabelPrefix::Apostrophe),
+        // CenterAcross defers to a later cross-cell pass; within a single
+        // cell it renders the same as Center.
+        HAlign::Center | HAlign::CenterAcross => Some(LabelPrefix::Caret),
+        HAlign::Right => Some(LabelPrefix::Quote),
+        HAlign::Fill => Some(LabelPrefix::Backslash),
+    }
+}
+
+/// Re-pad an already-rendered value string to honor an explicit
+/// horizontal alignment override.  Width is the cell's column width
+/// (the string is assumed to already be exactly that wide).  When
+/// `h == HAlign::General` the string is returned unchanged so the
+/// 1-2-3 default (numbers right-aligned, text left-aligned) survives.
+///
+/// Overflow markers (all-asterisk fills, or any string whose trimmed
+/// content fully fills the width) are preserved as-is: re-aligning
+/// them would just shuffle characters that aren't really there.
+pub fn apply_halign_to_rendered(s: &str, h: HAlign, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if matches!(h, HAlign::General) {
+        return s.to_string();
+    }
+    let content: String = s.trim_matches(' ').to_string();
+    let content_len = content.chars().count();
+    if content_len == 0 || content_len >= width {
+        // Nothing to re-pad (blank slot) or already saturated
+        // (likely an overflow marker).
+        return s.to_string();
+    }
+    match h {
+        HAlign::General => s.to_string(),
+        HAlign::Left | HAlign::Justify => right_pad(&content, width, false),
+        HAlign::Center | HAlign::CenterAcross => center_pad(&content, width),
+        HAlign::Right => right_pad(&content, width, true),
+        HAlign::Fill => repeat_to_width(&content, width),
+    }
+}
+
 pub fn repeat_to_width(pattern: &str, width: usize) -> String {
     if pattern.is_empty() {
         return " ".repeat(width);
@@ -437,6 +487,88 @@ mod tests {
         assert_eq!(got[0].owner, 1);
         assert_eq!(got[1].owner, 1);
         assert_eq!(got[2].owner, 1);
+    }
+
+    #[test]
+    fn halign_to_label_prefix_maps_all_variants() {
+        assert_eq!(halign_to_label_prefix(HAlign::General), None);
+        assert_eq!(
+            halign_to_label_prefix(HAlign::Left),
+            Some(LabelPrefix::Apostrophe)
+        );
+        assert_eq!(
+            halign_to_label_prefix(HAlign::Justify),
+            Some(LabelPrefix::Apostrophe)
+        );
+        assert_eq!(
+            halign_to_label_prefix(HAlign::Center),
+            Some(LabelPrefix::Caret)
+        );
+        assert_eq!(
+            halign_to_label_prefix(HAlign::CenterAcross),
+            Some(LabelPrefix::Caret)
+        );
+        assert_eq!(
+            halign_to_label_prefix(HAlign::Right),
+            Some(LabelPrefix::Quote)
+        );
+        assert_eq!(
+            halign_to_label_prefix(HAlign::Fill),
+            Some(LabelPrefix::Backslash)
+        );
+    }
+
+    #[test]
+    fn apply_halign_general_is_identity() {
+        assert_eq!(apply_halign_to_rendered("    12345", HAlign::General, 9), "    12345");
+    }
+
+    #[test]
+    fn apply_halign_swaps_number_to_left() {
+        // Number was right-aligned to width 9: "    12345".
+        // Left-align override trims and re-pads.
+        assert_eq!(
+            apply_halign_to_rendered("    12345", HAlign::Left, 9),
+            "12345    "
+        );
+    }
+
+    #[test]
+    fn apply_halign_centers_short_text() {
+        // Text was left-aligned: "hi       ".
+        assert_eq!(
+            apply_halign_to_rendered("hi       ", HAlign::Center, 9),
+            "   hi    "
+        );
+    }
+
+    #[test]
+    fn apply_halign_right_pads_text() {
+        assert_eq!(
+            apply_halign_to_rendered("hi       ", HAlign::Right, 9),
+            "       hi"
+        );
+    }
+
+    #[test]
+    fn apply_halign_preserves_overflow_marker() {
+        // All-asterisk overflow: no surrounding spaces → unchanged.
+        assert_eq!(
+            apply_halign_to_rendered("*********", HAlign::Center, 9),
+            "*********"
+        );
+    }
+
+    #[test]
+    fn apply_halign_preserves_blank_slot() {
+        assert_eq!(apply_halign_to_rendered("         ", HAlign::Right, 9), "         ");
+    }
+
+    #[test]
+    fn apply_halign_fill_repeats() {
+        // Text "x" in width 9 → "x        ". Fill repeats the trimmed
+        // content to fill the whole width.
+        assert_eq!(apply_halign_to_rendered("x        ", HAlign::Fill, 9), "xxxxxxxxx");
     }
 
     #[test]

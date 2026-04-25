@@ -22,9 +22,10 @@ use crossterm::{
 };
 use l123_core::{
     address::col_to_letters, label::is_value_starter, plan_row_spill, render_value_in_cell,
-    Address, CellContents, ErrKind, Format, FormatKind, LabelPrefix, Mode, Range, SheetId,
-    SpillSlot, TextStyle, Value,
+    Address, Alignment, Border, CellContents, Comment, ErrKind, Fill, FontStyle, Format,
+    FormatKind, HAlign, LabelPrefix, Mode, Range, RgbColor, SheetId, SpillSlot, TextStyle, Value,
 };
+use l123_core::cell_render::{apply_halign_to_rendered, halign_to_label_prefix};
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
 use l123_menu::{self as menu, Action, MenuBody, MenuItem};
@@ -45,6 +46,12 @@ use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
 const PANEL_HEIGHT: u16 = 4; // 3 content lines + 1 bottom border
+
+/// Glyph painted at the top-right of a commented cell (mimics
+/// Excel's red-triangle "this cell has a note" indicator).  Sits on
+/// the rightmost column of the cell's slot in red; suppressed on the
+/// pointer-highlighted cell so the REVERSED selection stays loud.
+const COMMENT_MARKER: char = '\'';
 
 /// Cap for the per-sheet name shown in the status line after the
 /// filename. Longer xlsx tab names get truncated to keep the right-
@@ -130,6 +137,40 @@ struct Workbook {
     /// by the WYSIWYG `:Format Bold|Italic|Underline Set|Clear`
     /// commands.  Empty style = no entry.
     cell_text_styles: HashMap<Address, TextStyle>,
+    /// Per-cell explicit alignment from an xlsx import (or a future
+    /// /Range Alignment command).  Default alignment = no entry, so
+    /// the label-prefix / number-right-align contract still governs
+    /// uncharted cells.
+    cell_alignments: HashMap<Address, Alignment>,
+    /// Per-cell background-fill color from an xlsx import.  Default
+    /// (no fill) = no entry; the terminal default shows through.
+    /// Rendered via `Style::bg(Color::Rgb(...))` at grid-paint time.
+    cell_fills: HashMap<Address, Fill>,
+    /// Per-cell xlsx-derived font attributes (foreground color, size,
+    /// strikethrough).  Sits alongside `cell_text_styles` (the 1-2-3
+    /// WYSIWYG bold/italic/underline triple); the two maps can both
+    /// apply to the same cell.  Size is preserve-only.
+    cell_font_styles: HashMap<Address, FontStyle>,
+    /// Per-cell border edges from xlsx imports.  All four sides + color
+    /// round-trip; v1 renders only **right-edge** borders (overlaying
+    /// a box-drawing glyph on the rightmost column of the cell's slot).
+    /// Top, bottom, and left borders are preserved on save but not yet
+    /// rendered — adding row-direction borders requires a grid layout
+    /// change (seam rows) that's out of scope here.
+    cell_borders: HashMap<Address, Border>,
+    /// Per-cell comments from xlsx imports.  Renders as a small
+    /// corner marker (`'`) on the cell's right-edge column; when the
+    /// pointer lands on the cell, the author + text appears on
+    /// control-panel line 3.  Note (IronCalc 0.7): the xlsx exporter
+    /// drops comments — we preserve them in-memory and render them,
+    /// but `/FS` will lose them until the upstream gap closes.
+    comments: HashMap<Address, Comment>,
+    /// Per-sheet tab color from an xlsx import.  When set, the sheet's
+    /// letter in the status-line indicator renders with this fg color.
+    /// Note (IronCalc 0.7): the xlsx *export* path drops tab colors —
+    /// we preserve them in the model and render them, but `/FS` will
+    /// not carry them back to disk until the upstream gap closes.
+    sheet_colors: HashMap<SheetId, RgbColor>,
     col_widths: HashMap<(SheetId, u16), u8>,
     /// Workbook-wide default column width (1..240). Applied to any
     /// column without a `col_widths` entry. Set by `/Worksheet Global
@@ -166,6 +207,12 @@ impl Workbook {
             cells: HashMap::new(),
             cell_formats: HashMap::new(),
             cell_text_styles: HashMap::new(),
+            cell_alignments: HashMap::new(),
+            cell_fills: HashMap::new(),
+            cell_font_styles: HashMap::new(),
+            cell_borders: HashMap::new(),
+            comments: HashMap::new(),
+            sheet_colors: HashMap::new(),
             col_widths: HashMap::new(),
             default_col_width: 9,
             hidden_cols: HashSet::new(),
@@ -637,6 +684,10 @@ enum PromptNext {
     /// After the user types a filename, save the current graph to
     /// that path as SVG.
     GraphSaveFilename,
+    /// F5 GOTO: after the user types a cell address, move the pointer
+    /// there. Silent no-op on parse failure (matches 1-2-3's "Esc back
+    /// to READY" feel for an unrecognized address).
+    Goto,
 }
 
 /// /File Xtract sub-command: does the extracted file keep formulas,
@@ -683,6 +734,9 @@ impl PromptNext {
             PromptNext::RangeNameCreate | PromptNext::RangeNameDelete => {
                 c.is_ascii_alphanumeric() || c == '_'
             }
+            // GOTO accepts cell-address chars: letters (col), digits
+            // (row), and `:` for the optional sheet prefix (`A:B5`).
+            PromptNext::Goto => c.is_ascii_alphanumeric() || c == ':',
             PromptNext::FileSaveFilename
             | PromptNext::FileRetrieveFilename
             | PromptNext::FileXtractFilename { .. }
@@ -1317,6 +1371,133 @@ impl App {
         self.wb().cell_text_styles.get(&a).copied()
     }
 
+    /// Read back the rendered fg color of the sheet-letter cell on
+    /// the status line, as `(r, g, b)`.  Returns `None` when the
+    /// workbook has only one sheet (so no letter is shown), or when
+    /// the letter renders in the default `DarkGray` (i.e. the sheet
+    /// has no tab color).  Used by the acceptance harness's
+    /// `ASSERT_STATUS_SHEET_FG` directive.
+    pub fn status_sheet_letter_fg(&self, buf: &Buffer) -> Option<(u8, u8, u8)> {
+        if self.wb().engine.sheet_count() <= 1 {
+            return None;
+        }
+        // The status line is the last row of the rendered buffer.
+        let y = buf.area.height.saturating_sub(1);
+        // Locate the `[` that opens the sheet-indicator and read the
+        // letter immediately after it — that's the char we tint.
+        for x in 0..buf.area.width {
+            if buf[(x, y)].symbol() == "[" && x + 1 < buf.area.width {
+                match buf[(x + 1, y)].fg {
+                    Color::Rgb(r, g, b) => return Some((r, g, b)),
+                    _ => return None,
+                }
+            }
+        }
+        None
+    }
+
+    /// Read the rendered character at the rightmost column of a
+    /// cell's slot.  Used by the acceptance harness to verify that
+    /// xlsx-imported right borders paint the expected box-drawing
+    /// glyph.  Returns `None` when the cell is outside the viewport.
+    pub fn cell_right_edge_char(&self, buf: &Buffer, addr: &str) -> Option<String> {
+        let a = Address::parse(addr).ok()?;
+        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
+            return None;
+        }
+        let dr = (a.row - self.wb().viewport_row_offset) as u16;
+        let y = PANEL_HEIGHT + 1 + dr;
+        if y >= buf.area.height {
+            return None;
+        }
+        let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
+        let layout = self.visible_column_layout(content_width);
+        let (_, x_off, w) = *layout.iter().find(|(c, _, _)| *c == a.col)?;
+        if w == 0 {
+            return None;
+        }
+        let bx = ROW_GUTTER + x_off + w - 1;
+        Some(buf[(bx, y)].symbol().to_string())
+    }
+
+    /// Read back the rendered foreground color at a cell's left-edge
+    /// buffer position, as `(r, g, b)`.  Semantics mirror
+    /// [`Self::cell_bg_rendered`]: `None` when the cell is off-screen
+    /// or the fg renders with a non-RGB color (including the default
+    /// terminal fg).  Used by the acceptance harness's
+    /// `ASSERT_CELL_FG` directive.
+    pub fn cell_fg_rendered(&self, buf: &Buffer, addr: &str) -> Option<(u8, u8, u8)> {
+        let a = Address::parse(addr).ok()?;
+        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
+            return None;
+        }
+        let dr = (a.row - self.wb().viewport_row_offset) as u16;
+        let y = PANEL_HEIGHT + 1 + dr;
+        if y >= buf.area.height {
+            return None;
+        }
+        let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
+        let layout = self.visible_column_layout(content_width);
+        let (_, x_off, _) = *layout.iter().find(|(c, _, _)| *c == a.col)?;
+        let x0 = ROW_GUTTER + x_off;
+        match buf[(x0, y)].fg {
+            Color::Rgb(r, g, b) => Some((r, g, b)),
+            _ => None,
+        }
+    }
+
+    /// Report whether the cell's left-edge character is rendered with
+    /// the `CROSSED_OUT` modifier (xlsx strikethrough).  Returns
+    /// `false` when the cell is outside the viewport.  Used by the
+    /// acceptance harness's `ASSERT_CELL_STRIKE` directive.
+    pub fn cell_strike_rendered(&self, buf: &Buffer, addr: &str) -> bool {
+        let Ok(a) = Address::parse(addr) else {
+            return false;
+        };
+        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
+            return false;
+        }
+        let dr = (a.row - self.wb().viewport_row_offset) as u16;
+        let y = PANEL_HEIGHT + 1 + dr;
+        if y >= buf.area.height {
+            return false;
+        }
+        let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
+        let layout = self.visible_column_layout(content_width);
+        let Some((_, x_off, _)) = layout.iter().find(|(c, _, _)| *c == a.col).copied() else {
+            return false;
+        };
+        let x0 = ROW_GUTTER + x_off;
+        buf[(x0, y)].modifier.contains(Modifier::CROSSED_OUT)
+    }
+
+    /// Read back the rendered background color at a cell's left-edge
+    /// buffer position, as `(r, g, b)`.  Returns `None` when the cell
+    /// is outside the viewport, or when the rendered buffer has no
+    /// explicit RGB background set (the terminal default shows through).
+    /// Used by the acceptance harness's `ASSERT_CELL_BG` directive to
+    /// verify that an xlsx-imported fill survives both the load and
+    /// the grid-render pipeline.
+    pub fn cell_bg_rendered(&self, buf: &Buffer, addr: &str) -> Option<(u8, u8, u8)> {
+        let a = Address::parse(addr).ok()?;
+        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
+            return None;
+        }
+        let dr = (a.row - self.wb().viewport_row_offset) as u16;
+        let y = PANEL_HEIGHT + 1 + dr;
+        if y >= buf.area.height {
+            return None;
+        }
+        let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
+        let layout = self.visible_column_layout(content_width);
+        let (_, x_off, _) = *layout.iter().find(|(c, _, _)| *c == a.col)?;
+        let x0 = ROW_GUTTER + x_off;
+        match buf[(x0, y)].bg {
+            Color::Rgb(r, g, b) => Some((r, g, b)),
+            _ => None,
+        }
+    }
+
     // ---------------- key handling ----------------
 
     pub fn handle_key(&mut self, k: KeyEvent) {
@@ -1427,6 +1608,7 @@ impl App {
             KeyCode::PageUp => self.move_pointer(0, -20),
             KeyCode::F(2) => self.begin_edit(),
             KeyCode::F(4) if k.modifiers.contains(KeyModifiers::ALT) => self.undo(),
+            KeyCode::F(5) => self.begin_goto_prompt(),
             KeyCode::F(9) => self.do_recalc(),
             KeyCode::F(10) => self.enter_graph_view(),
             KeyCode::Char('/') => self.open_menu(),
@@ -1434,6 +1616,10 @@ impl App {
             KeyCode::Char(c) => self.begin_entry(c),
             _ => {}
         }
+    }
+
+    fn begin_goto_prompt(&mut self) {
+        self.start_name_prompt("Enter address to go to:", PromptNext::Goto);
     }
 
     fn begin_edit(&mut self) {
@@ -2723,11 +2909,44 @@ impl App {
         for (addr, fmt) in engine.used_cell_formats() {
             cell_formats.insert(addr, fmt);
         }
+        let mut cell_alignments: HashMap<Address, Alignment> = HashMap::new();
+        for (addr, a) in engine.used_cell_alignments() {
+            cell_alignments.insert(addr, a);
+        }
+        let mut cell_fills: HashMap<Address, Fill> = HashMap::new();
+        for (addr, f) in engine.used_cell_fills() {
+            cell_fills.insert(addr, f);
+        }
+        let mut cell_font_styles: HashMap<Address, FontStyle> = HashMap::new();
+        for (addr, fs) in engine.used_cell_font_styles() {
+            cell_font_styles.insert(addr, fs);
+        }
+        let mut cell_borders: HashMap<Address, Border> = HashMap::new();
+        for (addr, b) in engine.used_cell_borders() {
+            cell_borders.insert(addr, b);
+        }
+        let mut comments: HashMap<Address, Comment> = HashMap::new();
+        for c in engine.used_comments() {
+            comments.insert(c.addr, c);
+        }
+        let mut sheet_colors: HashMap<SheetId, RgbColor> = HashMap::new();
+        for sheet_idx in 0..engine.sheet_count() {
+            let sid = SheetId(sheet_idx);
+            if let Some(c) = engine.sheet_color(sid) {
+                sheet_colors.insert(sid, c);
+            }
+        }
         let new_file = Workbook {
             engine,
             cells,
             cell_formats,
             cell_text_styles,
+            cell_alignments,
+            cell_fills,
+            cell_font_styles,
+            cell_borders,
+            comments,
+            sheet_colors,
             col_widths,
             default_col_width: 9,
             hidden_cols: HashSet::new(),
@@ -2918,6 +3137,12 @@ impl App {
         self.wb_mut().cells.clear();
         self.wb_mut().cell_formats.clear();
         self.wb_mut().cell_text_styles.clear();
+        self.wb_mut().cell_alignments.clear();
+        self.wb_mut().cell_fills.clear();
+        self.wb_mut().cell_font_styles.clear();
+        self.wb_mut().cell_borders.clear();
+        self.wb_mut().comments.clear();
+        self.wb_mut().sheet_colors.clear();
         self.wb_mut().col_widths.clear();
         self.wb_mut().default_col_width = 9;
         self.wb_mut().hidden_cols.clear();
@@ -2941,6 +3166,28 @@ impl App {
         }
         for (addr, fmt) in self.wb_mut().engine.used_cell_formats() {
             self.wb_mut().cell_formats.insert(addr, fmt);
+        }
+        for (addr, a) in self.wb_mut().engine.used_cell_alignments() {
+            self.wb_mut().cell_alignments.insert(addr, a);
+        }
+        for (addr, f) in self.wb_mut().engine.used_cell_fills() {
+            self.wb_mut().cell_fills.insert(addr, f);
+        }
+        for (addr, fs) in self.wb_mut().engine.used_cell_font_styles() {
+            self.wb_mut().cell_font_styles.insert(addr, fs);
+        }
+        for (addr, b) in self.wb_mut().engine.used_cell_borders() {
+            self.wb_mut().cell_borders.insert(addr, b);
+        }
+        for c in self.wb_mut().engine.used_comments() {
+            self.wb_mut().comments.insert(c.addr, c);
+        }
+        let sheet_count = self.wb().engine.sheet_count();
+        for sheet_idx in 0..sheet_count {
+            let sid = SheetId(sheet_idx);
+            if let Some(c) = self.wb().engine.sheet_color(sid) {
+                self.wb_mut().sheet_colors.insert(sid, c);
+            }
         }
 
         self.wb_mut().active_path = Some(path);
@@ -2985,6 +3232,70 @@ impl App {
             .collect();
         for (addr, fmt) in formats {
             let _ = self.wb_mut().engine.set_cell_format(addr, fmt);
+        }
+        // Push per-cell alignments so xlsx preserves the horizontal /
+        // vertical / wrap settings imported (or assigned) on L123's side.
+        let aligns: Vec<(Address, Alignment)> = self
+            .wb()
+            .cell_alignments
+            .iter()
+            .map(|(a, al)| (*a, *al))
+            .collect();
+        for (addr, align) in aligns {
+            let _ = self.wb_mut().engine.set_cell_alignment(addr, align);
+        }
+        // Push per-cell fills so the background color round-trips.
+        let fills: Vec<(Address, Fill)> = self
+            .wb()
+            .cell_fills
+            .iter()
+            .map(|(a, f)| (*a, *f))
+            .collect();
+        for (addr, fill) in fills {
+            let _ = self.wb_mut().engine.set_cell_fill(addr, fill);
+        }
+        // Push per-cell font styles (color / size / strike).
+        let font_styles: Vec<(Address, FontStyle)> = self
+            .wb()
+            .cell_font_styles
+            .iter()
+            .map(|(a, f)| (*a, *f))
+            .collect();
+        for (addr, fs) in font_styles {
+            let _ = self.wb_mut().engine.set_cell_font_style(addr, fs);
+        }
+        // Push per-cell borders (all 4 sides preserve through xlsx).
+        let borders: Vec<(Address, Border)> = self
+            .wb()
+            .cell_borders
+            .iter()
+            .map(|(a, b)| (*a, *b))
+            .collect();
+        for (addr, b) in borders {
+            let _ = self.wb_mut().engine.set_cell_border(addr, b);
+        }
+        // Push per-cell comments.  IronCalc 0.7 doesn't actually
+        // serialize these on xlsx save (upstream gap, pinned by
+        // `comments_are_dropped_on_xlsx_save_upstream_gap` in the
+        // engine adapter tests).  The setter is still the right UI
+        // boundary — when upstream closes the gap no L123 work is
+        // needed here.
+        let comments: Vec<Comment> = self.wb().comments.values().cloned().collect();
+        for c in comments {
+            let _ = self.wb_mut().engine.set_comment(c);
+        }
+        // Push sheet tab colors.  IronCalc 0.7's xlsx exporter drops
+        // these (upstream gap), but the setter is still the right UI
+        // boundary — when upstream closes the gap no code change is
+        // needed here.
+        let sheet_colors: Vec<(SheetId, RgbColor)> = self
+            .wb()
+            .sheet_colors
+            .iter()
+            .map(|(s, c)| (*s, *c))
+            .collect();
+        for (sid, color) in sheet_colors {
+            let _ = self.wb_mut().engine.set_sheet_color(sid, Some(color));
         }
         if self.wb_mut().engine.save_xlsx(&path).is_ok() {
             self.wb_mut().active_path = Some(path);
@@ -3854,6 +4165,12 @@ impl App {
             PromptNext::GraphSaveFilename => {
                 let buf = p.buffer.clone();
                 self.commit_graph_save(&buf);
+            }
+            PromptNext::Goto => {
+                if let Ok(addr) = Address::parse(&p.buffer) {
+                    self.move_pointer_to(addr);
+                }
+                self.mode = Mode::Ready;
             }
             PromptNext::FileRetrieveFilename => {
                 if p.buffer.is_empty() {
@@ -5204,10 +5521,19 @@ impl App {
                     // idle so an in-progress value/label/edit never
                     // has its canonical line-3 space (formula preview)
                     // clobbered by a stray mouse-over.
+                    //
+                    // Cell-comment readout — fallback when the pointer
+                    // lands on a cell with an xlsx-imported comment
+                    // and no other claimant for line 3.  Format is
+                    // `<author>: <text>`, truncated to fit the panel.
                     let l3 = match (self.entry.as_ref(), self.hovered_icon) {
                         (None, Some((panel, slot))) => {
                             Line::from(format!(" {}", l123_graph::slot_description(panel, slot)))
                         }
+                        (None, None) => match self.wb().comments.get(&self.wb().pointer) {
+                            Some(c) => Line::from(format!(" {}", c.summary())),
+                            None => Line::from(""),
+                        },
                         _ => Line::from(""),
                     };
                     (l2, l3)
@@ -5544,15 +5870,30 @@ impl App {
                 .iter()
                 .map(|&(col_idx, _, w)| {
                     let addr = Address::new(sheet, col_idx, row_idx);
+                    // xlsx-set horizontal alignment overrides the 1-2-3
+                    // default (label-prefix for labels, right for
+                    // numbers / booleans / errors). HAlign::General
+                    // leaves the default in place.
+                    let halign = self
+                        .wb()
+                        .cell_alignments
+                        .get(&addr)
+                        .map(|a| a.horizontal)
+                        .unwrap_or(HAlign::General);
                     match self.wb().cells.get(&addr) {
                         None | Some(CellContents::Empty) => RowInput::Empty,
-                        Some(CellContents::Label { prefix, text }) => RowInput::Label {
-                            prefix: *prefix,
-                            text: text.clone(),
-                        },
+                        Some(CellContents::Label { prefix, text }) => {
+                            let eff_prefix =
+                                halign_to_label_prefix(halign).unwrap_or(*prefix);
+                            RowInput::Label {
+                                prefix: eff_prefix,
+                                text: text.clone(),
+                            }
+                        }
                         Some(other) => {
                             let fmt = self.format_for_cell(addr);
-                            RowInput::Rendered(render_own_width(other, w as usize, fmt))
+                            let s = render_own_width(other, w as usize, fmt);
+                            RowInput::Rendered(apply_halign_to_rendered(&s, halign, w as usize))
                         }
                     }
                 })
@@ -5585,6 +5926,34 @@ impl App {
                 } else {
                     Style::default()
                 };
+                // xlsx-imported background fill paints behind the cell
+                // contents.  Skip on the pointer highlight so the
+                // inverted selection stays visually loud; the fill
+                // returns the moment the pointer leaves.
+                if !highlighted {
+                    if let Some(fill) = self.wb().cell_fills.get(&style_addr) {
+                        if let Some(rgb) = fill.bg {
+                            cell_style = cell_style.bg(Color::Rgb(rgb.r, rgb.g, rgb.b));
+                        }
+                    }
+                    // xlsx-imported font color tints the text. Same
+                    // rule as fill: skip when highlighted so the
+                    // inverted pointer cell reads the terminal's
+                    // default swap, not a custom color inside it.
+                    if let Some(fs) = self.wb().cell_font_styles.get(&style_addr) {
+                        if let Some(rgb) = fs.color {
+                            cell_style = cell_style.fg(Color::Rgb(rgb.r, rgb.g, rgb.b));
+                        }
+                    }
+                }
+                // Strikethrough applies whether highlighted or not —
+                // it's an attribute of the glyph, not of the
+                // selection state.
+                if let Some(fs) = self.wb().cell_font_styles.get(&style_addr) {
+                    if fs.strike {
+                        cell_style = cell_style.add_modifier(Modifier::CROSSED_OUT);
+                    }
+                }
                 if let Some(style) = self.wb().cell_text_styles.get(&style_addr).copied() {
                     cell_style = cell_style.add_modifier(text_style_modifier(style));
                 }
@@ -5599,6 +5968,78 @@ impl App {
                     buf[(x + printed, y)].set_char(' ').set_style(cell_style);
                     printed += 1;
                 }
+            }
+
+            // Second pass: overlay vertical (right-edge) borders on
+            // each cell's rightmost column.  When two adjacent cells
+            // both set a border on the seam between them, pick the
+            // heavier via `merge_heavier`.  Pointer-highlighted cells
+            // skip the overlay so the REVERSED selection stays loud.
+            for (i, &(col_idx, x_off, w)) in layout.iter().enumerate() {
+                if w == 0 {
+                    continue;
+                }
+                let addr = Address::new(sheet, col_idx, row_idx);
+                if highlight.contains(addr) {
+                    continue;
+                }
+                let own_right = self.wb().cell_borders.get(&addr).and_then(|b| b.right);
+                let neighbor_left = if let Some(&(next_col, _, _)) = layout.get(i + 1) {
+                    let next_addr = Address::new(sheet, next_col, row_idx);
+                    // Don't borrow from a highlighted neighbor — its
+                    // border was suppressed too.
+                    if highlight.contains(next_addr) {
+                        None
+                    } else {
+                        self.wb().cell_borders.get(&next_addr).and_then(|b| b.left)
+                    }
+                } else {
+                    None
+                };
+                let edge = match (own_right, neighbor_left) {
+                    (Some(a), Some(b)) => Some(a.merge_heavier(b)),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (None, None) => None,
+                };
+                let Some(edge) = edge else { continue };
+                let glyph = edge.style.vertical_glyph();
+                let bx = area.x + ROW_GUTTER + x_off + w - 1;
+                // Preserve whatever bg the cell-paint pass put down
+                // (fill, blanks, etc.); only the fg switches to the
+                // border color so the glyph reads against the cell's
+                // existing surface.
+                let bg = buf[(bx, y)].bg;
+                let mut bstyle = Style::default().bg(bg);
+                if let Some(rgb) = edge.color {
+                    bstyle = bstyle.fg(Color::Rgb(rgb.r, rgb.g, rgb.b));
+                }
+                buf[(bx, y)].set_char(glyph).set_style(bstyle);
+            }
+
+            // Third pass: comment corner markers.  A small `'` in red
+            // sits on the rightmost column of cells that carry a
+            // comment, evoking Excel's red-triangle indicator.  This
+            // overrides any right-border glyph painted above (a
+            // commented cell's "look here" cue is more actionable
+            // than the visual seam).  Highlighted cells suppress
+            // their marker so the REVERSED selection stays loud.
+            for &(col_idx, x_off, w) in &layout {
+                if w == 0 {
+                    continue;
+                }
+                let addr = Address::new(sheet, col_idx, row_idx);
+                if highlight.contains(addr) {
+                    continue;
+                }
+                if !self.wb().comments.contains_key(&addr) {
+                    continue;
+                }
+                let bx = area.x + ROW_GUTTER + x_off + w - 1;
+                let bg = buf[(bx, y)].bg;
+                buf[(bx, y)]
+                    .set_char(COMMENT_MARKER)
+                    .set_style(Style::default().bg(bg).fg(Color::Red));
             }
         }
     }
@@ -5618,7 +6059,7 @@ impl App {
         // can see which Excel tab their letter-addressed pointer is on.
         // Single-sheet workbooks skip this since there's nothing to
         // disambiguate and authentic 1-2-3 never showed a sheet name.
-        let sheet_suffix = if self.wb().engine.sheet_count() > 1 {
+        let (sheet_suffix, letter_abs_col) = if self.wb().engine.sheet_count() > 1 {
             let sid = self.wb().pointer.sheet;
             let letter = sid.letter();
             let name = self
@@ -5627,9 +6068,13 @@ impl App {
                 .sheet_name(sid)
                 .unwrap_or_else(|| "?".to_string());
             let trimmed: String = name.chars().take(STATUS_SHEET_NAME_MAX).collect();
-            format!("  [{letter}: {trimmed}]")
+            let suffix = format!("  [{letter}: {trimmed}]");
+            // Position of the letter char within `left`: 1 leading
+            // space + left_text + 3 prefix chars ("  [") = left_text.len() + 4.
+            let letter_pos = 1 + left_text.chars().count() + 3;
+            (suffix, Some(letter_pos))
         } else {
-            String::new()
+            (String::new(), None)
         };
         let left = format!(" {left_text}{sheet_suffix}");
         // Active status indicators, in the order 1-2-3 displays them.
@@ -5650,10 +6095,21 @@ impl App {
         let right_chunk = indicators.join(" ");
         let pad = (area.width as usize).saturating_sub(left.len() + right_chunk.len() + 1);
         let line = format!("{left}{}{right_chunk} ", " ".repeat(pad));
+        // Tint just the sheet letter when the active sheet carries a
+        // tab color.  The rest of the status line stays DarkGray so the
+        // letter stands out and the status text remains legible.
+        let active_sheet = self.wb().pointer.sheet;
+        let letter_color = letter_abs_col
+            .and_then(|_| self.wb().sheet_colors.get(&active_sheet).copied())
+            .map(|c| Color::Rgb(c.r, c.g, c.b));
         for (i, ch) in line.chars().enumerate().take(area.width as usize) {
+            let fg = match (letter_abs_col, letter_color) {
+                (Some(pos), Some(rgb)) if i == pos => rgb,
+                _ => Color::DarkGray,
+            };
             buf[(area.x + i as u16, area.y)]
                 .set_char(ch)
-                .set_style(Style::default().fg(Color::DarkGray));
+                .set_style(Style::default().fg(fg));
         }
     }
 }
@@ -5921,6 +6377,30 @@ mod tests {
         assert_eq!(app.wb().pointer.col, 0);
         app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(app.wb().pointer.row, 0);
+    }
+
+    #[test]
+    fn f5_goto_moves_pointer() {
+        let mut app = App::new();
+        app.handle_key(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
+        for c in "C5".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.wb().pointer, Address::new(SheetId::A, 2, 4));
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    #[test]
+    fn f5_goto_esc_leaves_pointer_unchanged() {
+        let mut app = App::new();
+        app.handle_key(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
+        for c in "Z99".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.wb().pointer, Address::A1);
+        assert_eq!(app.mode, Mode::Ready);
     }
 
     #[test]

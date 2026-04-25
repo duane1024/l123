@@ -1,0 +1,43 @@
+# F5 GOTO — prompts on line 3 for an address, then moves the pointer.
+# SPEC §5: READY --F5--> (prompt in line 3) --<Enter>--> READY  (goto)
+# SPEC §6 tutorial: "F5 goes to a cell; pointer moves, highlight follows."
+
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1
+
+# F5 opens the GOTO prompt on line 3.
+F 5
+ASSERT_PANEL_L3   Enter address to go to
+
+# Type a short address and Enter — pointer jumps to it, mode back to READY.
+KEYS C5
+ENTER
+ASSERT_MODE       READY
+ASSERT_POINTER    A:C5
+
+# A second jump from a non-origin cell.
+F 5
+KEYS B12
+ENTER
+ASSERT_POINTER    A:B12
+
+# Esc cancels the prompt — pointer unchanged.
+F 5
+KEYS Z99
+ESC
+ASSERT_MODE       READY
+ASSERT_POINTER    A:B12
+
+# Garbage input (row 0 is invalid in 1-2-3) commits as a no-op:
+# pointer stays put, mode returns to READY.
+F 5
+KEYS A0
+ENTER
+ASSERT_MODE       READY
+ASSERT_POINTER    A:B12
+
+# Lowercase letters are accepted (Address::parse uppercases internally).
+F 5
+KEYS d4
+ENTER
+ASSERT_POINTER    A:D4

@@ -3,7 +3,10 @@
 
 use std::path::Path;
 
-use l123_core::{Address, Format, Range, SheetId, TextStyle, Value};
+use l123_core::{
+    Address, Alignment, Border, Comment, Fill, FontStyle, Format, Range, RgbColor, SheetId,
+    TextStyle, Value,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -140,5 +143,56 @@ pub trait Engine {
     /// override.
     fn set_cell_format(&mut self, _addr: Address, _format: Format) -> Result<()> {
         Err(EngineError::Unsupported("set_cell_format"))
+    }
+
+    /// Attach a cell alignment (horizontal, vertical, wrap) to a cell.
+    /// Passing [`Alignment::DEFAULT`] clears the override.  Used by the
+    /// xlsx round-trip: the UI pushes its per-cell `cell_alignments`
+    /// map into the engine before save.
+    fn set_cell_alignment(&mut self, _addr: Address, _alignment: Alignment) -> Result<()> {
+        Err(EngineError::Unsupported("set_cell_alignment"))
+    }
+
+    /// Attach a cell background fill to a cell.  Passing [`Fill::DEFAULT`]
+    /// clears the override.  Used by the xlsx round-trip: the UI pushes
+    /// its per-cell `cell_fills` map into the engine before save.
+    fn set_cell_fill(&mut self, _addr: Address, _fill: Fill) -> Result<()> {
+        Err(EngineError::Unsupported("set_cell_fill"))
+    }
+
+    /// Set a sheet tab color.  Passing `None` clears the override so
+    /// the sheet's tab renders with the terminal default.
+    fn set_sheet_color(&mut self, _sheet: SheetId, _color: Option<RgbColor>) -> Result<()> {
+        Err(EngineError::Unsupported("set_sheet_color"))
+    }
+
+    /// Attach an xlsx-derived font style (color, size, strike) to a
+    /// cell.  Passing [`FontStyle::DEFAULT`] clears the override.
+    /// `TextStyle` (bold / italic / underline — the 1-2-3 WYSIWYG
+    /// contract) is handled separately by [`Self::set_cell_text_style`];
+    /// these two methods write different bits of the same underlying
+    /// cell style and coexist on the same cell.
+    fn set_cell_font_style(&mut self, _addr: Address, _style: FontStyle) -> Result<()> {
+        Err(EngineError::Unsupported("set_cell_font_style"))
+    }
+
+    /// Attach cell borders (left / right / top / bottom with style and
+    /// color) to a cell.  Passing [`Border::NONE`] clears all four
+    /// edges.  Diagonals are not represented on L123's `Border` and
+    /// are wiped by this setter.
+    fn set_cell_border(&mut self, _addr: Address, _border: Border) -> Result<()> {
+        Err(EngineError::Unsupported("set_cell_border"))
+    }
+
+    /// Attach (or replace) a comment on `comment.addr`.  Replaces
+    /// any existing comment at that address with the new author/text
+    /// pair.
+    fn set_comment(&mut self, _comment: Comment) -> Result<()> {
+        Err(EngineError::Unsupported("set_comment"))
+    }
+
+    /// Drop the comment at `addr` if any.  No-op when none was set.
+    fn delete_comment(&mut self, _addr: Address) -> Result<()> {
+        Err(EngineError::Unsupported("delete_comment"))
     }
 }

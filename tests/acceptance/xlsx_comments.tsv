@@ -1,0 +1,54 @@
+# xlsx-imported cell comments paint a small corner marker (`'` in red)
+# on the cell's right edge.  When the pointer lands on a commented cell,
+# the comment text appears on control-panel line 3.
+#
+# Fixture: tests/acceptance/fixtures/xlsx/comments.xlsx (built by
+# `cargo run -p l123-engine --example build_fixtures` — IronCalc's
+# exporter doesn't emit `xl/comments1.xml`, so we hand-inject it).
+#
+# Layout:
+#   A1 'note 1' — comment "first note"
+#   B2 'note 2' — comment "second note"
+#   C3 'plain'  — no comment
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/comments.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Pointer lands on A1 (the cell with the first note).  The corner
+# marker is suppressed on the highlighted cell (REVERSED stays loud),
+# but the comment text appears on control-panel line 3.
+ASSERT_POINTER          A:A1
+ASSERT_PANEL_L3         first note
+ASSERT_CELL_RIGHT_GLYPH A:A1  SPACE
+# B2 (also has a comment) is *not* highlighted, so its corner marker
+# paints — a literal apostrophe.
+ASSERT_CELL_RIGHT_GLYPH A:B2  '
+# C3 has no comment — no marker.
+ASSERT_CELL_RIGHT_GLYPH A:C3  SPACE
+
+# Move pointer to B2 — comment text updates, A1's marker re-emerges.
+RIGHT
+DOWN
+ASSERT_POINTER          A:B2
+ASSERT_PANEL_L3         second note
+ASSERT_CELL_RIGHT_GLYPH A:A1  '
+ASSERT_CELL_RIGHT_GLYPH A:B2  SPACE
+
+# Move to C3 — no comment.  Both A1 and B2 markers appear (no
+# pointer suppression on either).  We don't assert L3 cleared
+# directly: the harness's substring assertion can't tell "blank" from
+# "padded spaces".  The visible re-emergence of both markers is the
+# proxy that proves the pointer is no longer on a commented cell.
+RIGHT
+DOWN
+ASSERT_POINTER          A:C3
+ASSERT_CELL_RIGHT_GLYPH A:A1  '
+ASSERT_CELL_RIGHT_GLYPH A:B2  '

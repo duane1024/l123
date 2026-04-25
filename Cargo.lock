@@ -1429,6 +1429,7 @@ dependencies = [
  "l123-core",
  "thiserror 2.0.18",
  "tracing",
+ "zip",
 ]
 
 [[package]]

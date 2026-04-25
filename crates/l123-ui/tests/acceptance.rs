@@ -18,6 +18,17 @@ use l123_ui::App;
 /// (tests take <200ms total) and removes the race outright.
 static ACCEPTANCE_LOCK: Mutex<()> = Mutex::new(());
 
+fn parse_hex_rgb(s: &str) -> Option<(u8, u8, u8)> {
+    let s = s.trim().strip_prefix('#').unwrap_or(s.trim());
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some((r, g, b))
+}
+
 fn workspace_root() -> PathBuf {
     // CARGO_MANIFEST_DIR is crates/l123-ui; workspace root is two up.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -189,6 +200,142 @@ fn run_transcript(path: &Path) {
                     "{}:{line_no}: expected {rest} hidden, got {got:?}",
                     path.display()
                 );
+            }
+            // "ASSERT_STATUS_SHEET_FG FF0000" — assert the fg color of
+            // the sheet-letter character in the status-line indicator.
+            // Use `none` when the sheet has no tab color (the letter
+            // renders DarkGray).
+            "ASSERT_STATUS_SHEET_FG" => {
+                let want = rest.trim();
+                let buf = app.render_to_buffer(width, height);
+                let got = app.status_sheet_letter_fg(&buf);
+                if want.eq_ignore_ascii_case("none") {
+                    assert!(
+                        got.is_none(),
+                        "{}:{line_no}: expected no sheet-letter tint, got {got:?}",
+                        path.display()
+                    );
+                } else {
+                    let want_rgb = parse_hex_rgb(want).unwrap_or_else(|| {
+                        panic!(
+                            "{}:{line_no}: ASSERT_STATUS_SHEET_FG bad hex {want:?}",
+                            path.display()
+                        )
+                    });
+                    assert_eq!(
+                        got,
+                        Some(want_rgb),
+                        "{}:{line_no}: sheet-letter fg expected {want:?} got {got:?}",
+                        path.display()
+                    );
+                }
+            }
+            // "ASSERT_CELL_RIGHT_GLYPH A:A1 │" — assert the character
+            // painted at the rightmost column of a cell's slot.  Used
+            // for xlsx-imported right-border glyphs.  Use the literal
+            // token `SPACE` to assert a blank (the parser trims, so
+            // a literal " " can't be carried here).
+            "ASSERT_CELL_RIGHT_GLYPH" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let addr = parts.next().unwrap_or("");
+                let raw = parts.next().unwrap_or("").trim();
+                let want = if raw == "SPACE" { " " } else { raw };
+                let buf = app.render_to_buffer(width, height);
+                let got = app.cell_right_edge_char(&buf, addr).unwrap_or_else(|| {
+                    panic!(
+                        "{}:{line_no}: cell {addr} not in viewport",
+                        path.display()
+                    )
+                });
+                assert_eq!(
+                    got, want,
+                    "{}:{line_no}: cell {addr} right-edge expected {want:?} got {got:?}",
+                    path.display()
+                );
+            }
+            // "ASSERT_CELL_FG A:A1 FF0000" — assert the rendered
+            // buffer's foreground color at the cell.  Use `none` for
+            // "no explicit RGB fg" (terminal default).
+            "ASSERT_CELL_FG" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let addr = parts.next().unwrap_or("");
+                let want = parts.next().unwrap_or("").trim();
+                let buf = app.render_to_buffer(width, height);
+                let got = app.cell_fg_rendered(&buf, addr);
+                if want.eq_ignore_ascii_case("none") {
+                    assert!(
+                        got.is_none(),
+                        "{}:{line_no}: cell {addr} expected no fg, got {got:?}",
+                        path.display()
+                    );
+                } else {
+                    let want_rgb = parse_hex_rgb(want).unwrap_or_else(|| {
+                        panic!(
+                            "{}:{line_no}: ASSERT_CELL_FG bad hex {want:?}",
+                            path.display()
+                        )
+                    });
+                    assert_eq!(
+                        got,
+                        Some(want_rgb),
+                        "{}:{line_no}: cell {addr} fg expected {want:?} got {got:?}",
+                        path.display()
+                    );
+                }
+            }
+            // "ASSERT_CELL_STRIKE A:A1 true" — assert whether the cell
+            // renders with the CROSSED_OUT modifier.  Argument is
+            // "true" / "false".
+            "ASSERT_CELL_STRIKE" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let addr = parts.next().unwrap_or("");
+                let want = parts.next().unwrap_or("").trim();
+                let want_b: bool = want.parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: ASSERT_CELL_STRIKE expected true/false, got {want:?}",
+                        path.display()
+                    )
+                });
+                let buf = app.render_to_buffer(width, height);
+                let got = app.cell_strike_rendered(&buf, addr);
+                assert_eq!(
+                    got,
+                    want_b,
+                    "{}:{line_no}: cell {addr} strike expected {want_b} got {got}",
+                    path.display()
+                );
+            }
+            // "ASSERT_CELL_BG A:A1 FF0000" — assert the rendered
+            // buffer's background color at the cell.  Color is an
+            // uppercase 6-char hex RGB.  Use `none` when the cell
+            // should render with the terminal default (no explicit
+            // background).
+            "ASSERT_CELL_BG" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let addr = parts.next().unwrap_or("");
+                let want = parts.next().unwrap_or("").trim();
+                let buf = app.render_to_buffer(width, height);
+                let got = app.cell_bg_rendered(&buf, addr);
+                if want.eq_ignore_ascii_case("none") {
+                    assert!(
+                        got.is_none(),
+                        "{}:{line_no}: cell {addr} expected no bg, got {got:?}",
+                        path.display()
+                    );
+                } else {
+                    let want_rgb = parse_hex_rgb(want).unwrap_or_else(|| {
+                        panic!(
+                            "{}:{line_no}: ASSERT_CELL_BG bad hex {want:?}",
+                            path.display()
+                        )
+                    });
+                    assert_eq!(
+                        got,
+                        Some(want_rgb),
+                        "{}:{line_no}: cell {addr} bg expected {want:?} got {got:?}",
+                        path.display()
+                    );
+                }
             }
             // "ASSERT_CELL_STYLE A:A1  Bold Italic" — assert the cell's
             // WYSIWYG text-style override. Use the literal word `plain`
@@ -539,6 +686,7 @@ transcripts! {
     m1_entry_cancel   => "M1_entry_cancel.tsv",
     m1_commit_on_arrow => "M1_commit_on_arrow.tsv",
     m1_edit_f2         => "M1_edit_f2.tsv",
+    m1_goto_f5         => "m1_goto_f5.tsv",
     m2_formula_entry   => "M2_formula_entry.tsv",
     m2_f9_calc         => "M2_f9_calc.tsv",
     m2_format_tag      => "M2_format_tag.tsv",
@@ -614,4 +762,17 @@ transcripts! {
     m10_mouse_click_cell        => "M10_mouse_click_cell.tsv",
     m10_mouse_click_point_extend => "M10_mouse_click_point_extend.tsv",
     m10_mouse_click_splice       => "M10_mouse_click_splice.tsv",
+    xlsx_alignment               => "xlsx_alignment.tsv",
+    xlsx_fill                    => "xlsx_fill.tsv",
+    xlsx_sheet_color             => "xlsx_sheet_color.tsv",
+    xlsx_font                    => "xlsx_font.tsv",
+    xlsx_borders                 => "xlsx_borders.tsv",
+    xlsx_comments                => "xlsx_comments.tsv",
+    t01_tutorial_labels_and_fast_entry => "T01_tutorial_labels_and_fast_entry.tsv",
+    t02_tutorial_values_erase_and_repeating_label => "T02_tutorial_values_erase_and_repeating_label.tsv",
+    t03_tutorial_calculation_and_named_ranges => "T03_tutorial_calculation_and_named_ranges.tsv",
+    t04_tutorial_formatting_and_printing => "T04_tutorial_formatting_and_printing.tsv",
+    t05_tutorial_graph_setup_view_save => "T05_tutorial_graph_setup_view_save.tsv",
+    t06_tutorial_multiple_sheets_group_and_3d => "T06_tutorial_multiple_sheets_group_and_3d.tsv",
+    t07_tutorial_file_retrieve_and_open => "T07_tutorial_file_retrieve_and_open.tsv",
 }
