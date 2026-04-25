@@ -1,0 +1,51 @@
+# xlsx merged ranges paint the anchor's content across the merge's
+# column span; non-anchor cells (and subsequent rows of multi-row
+# merges) render blank.  Cursor navigation does NOT snap to the
+# anchor for v1 — pointer can sit in non-anchor cells.
+#
+# Fixture: tests/acceptance/fixtures/xlsx/merges.xlsx
+#   A1:C1 horizontal merge, anchor A1 = "Header"
+#   B3:C4 rectangular merge, anchor B3 = "Box"
+#   A5 'plain'  — control cell, not merged
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/merges.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Pointer starts on A1 — the anchor of the horizontal merge.  Move
+# right so we can see the unhighlighted wide-paint of "Header"
+# (highlighted anchor stays REVERSED but content is still readable;
+# moving off makes the visual unambiguous).
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER   A:D1
+
+# Anchor cell shows the content, non-anchor cells are blank.
+ASSERT_CELL      A:A1  Header
+ASSERT_CELL      A:B1
+ASSERT_CELL      A:C1
+
+# Cursor snap is *not* yet implemented — pointer can land in a
+# non-anchor cell of the merge.  This pins the v1 behavior; flip the
+# assertion when snap lands.
+LEFT
+ASSERT_POINTER   A:C1
+
+# Rectangular merge B3:C4: anchor B3 shows "Box", the other three
+# cells of the rectangle render blank.  A3 is outside the merge.
+ASSERT_CELL      A:A3
+ASSERT_CELL      A:B3  Box
+ASSERT_CELL      A:C3
+ASSERT_CELL      A:B4
+ASSERT_CELL      A:C4
+
+# Control: A5 is not merged, content visible normally.
+ASSERT_CELL      A:A5  plain

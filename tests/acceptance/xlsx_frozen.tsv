@@ -1,0 +1,112 @@
+# xlsx-imported frozen panes pin rows 0..N at the top and cols 0..M
+# on the left while the rest of the grid scrolls.  v1 implementation:
+# the column header / row gutter / cell helpers all consult
+# `visible_row_layout` + `visible_column_layout` which prepend the
+# frozen prefix.
+#
+# Fixture: tests/acceptance/fixtures/xlsx/frozen.xlsx
+#   frozen_rows = 2, frozen_columns = 1
+#   A1 'TL'  A2 'L'              — frozen corner cells
+#   B1..AC1 'C1'..'C28'           — top frozen-row band
+#   A3..A60 'R3'..'R60'           — left frozen-column band
+#   E5 'BODY'                     — main scrolling region cue
+
+SIZE 80 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/frozen.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Initial state: pointer A1, no scroll.  Verify content is where we
+# expect on a fresh load.
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1   TL
+ASSERT_CELL      A:A2   L
+ASSERT_CELL      A:B1   C1
+ASSERT_CELL      A:E1   C4
+ASSERT_CELL      A:A5   R5
+ASSERT_CELL      A:E5   BODY
+
+# Vertical scroll: drive pointer down past the visible body.  The
+# default 25-line buffer leaves ~21 body rows after the panel +
+# header + status; pressing DOWN 30 times forces the viewport offset
+# past row 2.  Frozen rows 0 and 1 should stay visible.
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER   A:A31
+# Frozen rows 0 and 1 still visible (anchored at the top).
+ASSERT_CELL      A:A1   TL
+ASSERT_CELL      A:B1   C1
+ASSERT_CELL      A:A2   L
+# Pointer's row IS in the visible region — its content paints on the
+# same line.  Frozen-column A still visible too: the row-31 left
+# label is "R31".
+ASSERT_CELL      A:A31  R31
+
+# Return to A1 and horizontal-scroll test.
+HOME
+ASSERT_POINTER   A:A1
+
+# Drive pointer right past the visible body.  ~8 cols fit at width 80;
+# RIGHT 20 puts pointer at col 20 (U), forcing horizontal scroll.
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER   A:U1
+# Frozen column A still visible.  A1 = "TL"; A5 = "R5" both anchored
+# at x_off = 0 regardless of horizontal scroll.
+ASSERT_CELL      A:A1   TL
+ASSERT_CELL      A:A5   R5
+# The pointer's cell U1 should also be visible — it's on the
+# rightmost portion of the scrolling band.  Label is "C20".
+ASSERT_CELL      A:U1   C20

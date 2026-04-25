@@ -87,11 +87,21 @@ impl Address {
     /// 3D range separators, file refs, `$` absolutes, and named ranges are
     /// not supported here — this is a plain address parser only.
     pub fn parse(s: &str) -> Result<Address, AddressError> {
-        let (sheet_part, cell_part) = match s.find(':') {
-            Some(i) => (&s[..i], &s[i + 1..]),
-            None => ("A", s),
+        Self::parse_with_default_sheet(s, SheetId::A)
+    }
+
+    /// Like [`Address::parse`] but uses `default_sheet` when the input
+    /// has no sheet prefix. Useful in POINT mode, where a typed
+    /// short-form address (`B5`) should resolve on the sheet the user
+    /// is currently looking at.
+    pub fn parse_with_default_sheet(
+        s: &str,
+        default_sheet: SheetId,
+    ) -> Result<Address, AddressError> {
+        let (sheet, cell_part) = match s.find(':') {
+            Some(i) => (SheetId(letters_to_col(&s[..i])?), &s[i + 1..]),
+            None => (default_sheet, s),
         };
-        let sheet = SheetId(letters_to_col(sheet_part)?);
         // Split cell_part into letter and digit runs.
         let digit_start = cell_part
             .find(|c: char| c.is_ascii_digit())
@@ -164,6 +174,30 @@ impl Range {
 
     pub fn is_single_sheet(&self) -> bool {
         self.start.sheet == self.end.sheet
+    }
+
+    /// Parse a typed range. Accepts `A1`, `A1..D5`, `D5..A1` (normalized),
+    /// sheet-qualified (`A:B5`), and 3D (`A:A1..C:F17`). Sheet-less
+    /// addresses default to sheet A; use [`Range::parse_with_default_sheet`]
+    /// to override the default (e.g. to the current pointer's sheet).
+    pub fn parse(s: &str) -> Result<Range, AddressError> {
+        Self::parse_with_default_sheet(s, SheetId::A)
+    }
+
+    /// Like [`Range::parse`] but resolves sheet-less addresses against
+    /// `default_sheet` instead of sheet A.
+    pub fn parse_with_default_sheet(
+        s: &str,
+        default_sheet: SheetId,
+    ) -> Result<Range, AddressError> {
+        if let Some((lo, hi)) = s.split_once("..") {
+            let start = Address::parse_with_default_sheet(lo, default_sheet)?;
+            let end = Address::parse_with_default_sheet(hi, default_sheet)?;
+            Ok(Range { start, end }.normalized())
+        } else {
+            let a = Address::parse_with_default_sheet(s, default_sheet)?;
+            Ok(Range::single(a))
+        }
     }
 }
 
@@ -339,6 +373,69 @@ mod tests {
             let a = Address::parse(s).unwrap();
             assert_eq!(a.display_full(), s);
         }
+    }
+
+    #[test]
+    fn range_parse_single_address() {
+        assert_eq!(Range::parse("A1").unwrap(), Range::single(Address::A1));
+        assert_eq!(
+            Range::parse("c5").unwrap(),
+            Range::single(Address::new(SheetId::A, 2, 4)),
+        );
+    }
+
+    #[test]
+    fn range_parse_two_corners() {
+        let r = Range::parse("A1..D5").unwrap();
+        assert_eq!(r.start, Address::A1);
+        assert_eq!(r.end, Address::new(SheetId::A, 3, 4));
+    }
+
+    #[test]
+    fn range_parse_reverse_corners_normalize() {
+        // D5..A1 should normalize to A1..D5.
+        let r = Range::parse("D5..A1").unwrap();
+        assert_eq!(r.start, Address::A1);
+        assert_eq!(r.end, Address::new(SheetId::A, 3, 4));
+    }
+
+    #[test]
+    fn range_parse_sheet_qualified() {
+        let r = Range::parse("A:B5").unwrap();
+        assert_eq!(r, Range::single(Address::new(SheetId::A, 1, 4)));
+    }
+
+    #[test]
+    fn range_parse_3d() {
+        let r = Range::parse("A:A1..C:F17").unwrap();
+        assert_eq!(r.start, Address::new(SheetId::A, 0, 0));
+        assert_eq!(r.end, Address::new(SheetId(2), 5, 16));
+    }
+
+    #[test]
+    fn range_parse_default_sheet_applies_to_both_sides() {
+        // Default sheet B; neither side has a sheet prefix.
+        let r = Range::parse_with_default_sheet("A1..D5", SheetId(1)).unwrap();
+        assert_eq!(r.start, Address::new(SheetId(1), 0, 0));
+        assert_eq!(r.end, Address::new(SheetId(1), 3, 4));
+    }
+
+    #[test]
+    fn range_parse_default_sheet_does_not_override_explicit() {
+        // Default sheet B, but the buffer pins both sides to sheet C.
+        let r = Range::parse_with_default_sheet("C:A1..C:D5", SheetId(1)).unwrap();
+        assert_eq!(r.start.sheet, SheetId(2));
+        assert_eq!(r.end.sheet, SheetId(2));
+    }
+
+    #[test]
+    fn range_parse_rejects_garbage() {
+        assert!(Range::parse("").is_err());
+        assert!(Range::parse("..").is_err());
+        assert!(Range::parse("A0").is_err());
+        assert!(Range::parse("A1..").is_err());
+        assert!(Range::parse("..D5").is_err());
+        assert!(Range::parse("A1..D0").is_err());
     }
 
     #[test]

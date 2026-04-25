@@ -4,8 +4,8 @@
 use std::path::Path;
 
 use l123_core::{
-    Address, Alignment, Border, Comment, Fill, FontStyle, Format, Range, RgbColor, SheetId,
-    TextStyle, Value,
+    Address, Alignment, Border, Comment, Fill, FontStyle, Format, Merge, Range, RgbColor, SheetId,
+    SheetState, Table, TextStyle, Value,
 };
 use thiserror::Error;
 
@@ -194,5 +194,47 @@ pub trait Engine {
     /// Drop the comment at `addr` if any.  No-op when none was set.
     fn delete_comment(&mut self, _addr: Address) -> Result<()> {
         Err(EngineError::Unsupported("delete_comment"))
+    }
+
+    /// Mark a rectangular range as a merged cell.  Idempotent: setting
+    /// the same range twice leaves only one entry.  Single-cell merges
+    /// (anchor == end) are silently dropped — they have no semantic
+    /// effect and just bloat the xlsx.
+    fn set_merged_range(&mut self, _merge: Merge) -> Result<()> {
+        Err(EngineError::Unsupported("set_merged_range"))
+    }
+
+    /// Drop a previously-set merge.  No-op when the range isn't
+    /// currently merged.  Looks up by exact anchor+end match —
+    /// partial overlaps don't unmerge anything.
+    fn unset_merged_range(&mut self, _merge: Merge) -> Result<()> {
+        Err(EngineError::Unsupported("unset_merged_range"))
+    }
+
+    /// Set the frozen-row and frozen-column counts for a sheet.
+    /// `(0, 0)` clears the freeze.  Existing freeze is replaced
+    /// wholesale — the setter takes the absolute count, not a delta.
+    fn set_frozen_panes(&mut self, _sheet: SheetId, _rows: u32, _cols: u16) -> Result<()> {
+        Err(EngineError::Unsupported("set_frozen_panes"))
+    }
+
+    /// Set a sheet's visibility state (`Visible`, `Hidden`,
+    /// `VeryHidden`).  Round-trips through xlsx via IronCalc's
+    /// native `<sheet state="..."/>` writer.
+    fn set_sheet_state(&mut self, _sheet: SheetId, _state: SheetState) -> Result<()> {
+        Err(EngineError::Unsupported("set_sheet_state"))
+    }
+
+    /// Add (or replace) a table on `sheet`.  Replaces any existing
+    /// table sharing `table.name`.  IronCalc 0.7's xlsx exporter does
+    /// NOT write `xl/tables/*.xml` — see the
+    /// `tables_are_dropped_on_xlsx_save_upstream_gap` engine test.
+    fn set_table(&mut self, _sheet: SheetId, _table: Table) -> Result<()> {
+        Err(EngineError::Unsupported("set_table"))
+    }
+
+    /// Drop a table by `name`.  No-op when no such table exists.
+    fn unset_table(&mut self, _name: &str) -> Result<()> {
+        Err(EngineError::Unsupported("unset_table"))
     }
 }

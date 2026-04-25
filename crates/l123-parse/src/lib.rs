@@ -18,7 +18,7 @@
 //! - Named ranges — M3 (names layer).
 //! - Function renames where Lotus and Excel differ (e.g. `@AVG` ↔ `AVERAGE`).
 
-use l123_core::address::letters_to_col;
+use l123_core::address::{col_to_letters, letters_to_col, MAX_COLS, MAX_ROWS};
 
 /// Translate a Lotus-shape formula source (first char already classified
 /// as a value-starter) into an Excel-shape formula that always begins with
@@ -196,6 +196,169 @@ fn parse_bare_ref(s: &str, start: usize) -> Option<(usize, String)> {
     Some((i, s[start..i].to_string()))
 }
 
+/// Shift every relative cell reference in a Lotus-form `formula` by
+/// `(dx, dy)` columns and rows. Used by `/Copy` to update formula
+/// references when a cell is pasted to a new location.
+///
+/// Reference shapes recognised: bare `A1`, column-absolute `$A1`,
+/// row-absolute `A$1`, full-absolute `$A$1`, sheet-qualified `A:B5`
+/// (with `$` permitted on the cell part), and `..` ranges (each end
+/// shifted independently). Sheet parts are preserved verbatim.
+///
+/// String literals (`"..."`) are passed through unchanged. Identifiers
+/// without trailing digits (function names, named ranges) are not
+/// treated as refs. References that would shift out of the addressable
+/// space (`MAX_COLS` / `MAX_ROWS`) emit `ERR` — Lotus's error sigil.
+pub fn shift_refs(formula: &str, dx: i32, dy: i32) -> String {
+    let mut out = String::with_capacity(formula.len());
+    let mut in_string = false;
+    let bytes = formula.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' {
+            in_string = !in_string;
+            out.push('"');
+            i += 1;
+            continue;
+        }
+        if in_string {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        if let Some((shifted, end)) = try_shift_ref_at(formula, i, dx, dy) {
+            out.push_str(&shifted);
+            i = end;
+            continue;
+        }
+        let ch_end = next_char_boundary(formula, i);
+        out.push_str(&formula[i..ch_end]);
+        i = ch_end;
+    }
+    out
+}
+
+/// Try to parse a cell reference (possibly sheet-qualified, with
+/// optional `$` absolutes) starting at byte `start` and emit it
+/// shifted by `(dx, dy)`. Returns `None` if no ref matches — caller
+/// then emits one character verbatim.
+fn try_shift_ref_at(s: &str, start: usize, dx: i32, dy: i32) -> Option<(String, usize)> {
+    // First try sheet-qualified, then bare. Each branch fully validates
+    // before consuming so the failure of one doesn't leak.
+    if let Some(r) = parse_qualified_ref(s, start) {
+        return Some(emit_shifted(r, dx, dy));
+    }
+    let r = parse_bare_cell_ref(s, start)?;
+    Some(emit_shifted(r, dx, dy))
+}
+
+#[derive(Debug)]
+struct ParsedRef {
+    sheet: Option<String>,
+    col_abs: bool,
+    col: u16,
+    row_abs: bool,
+    row: u32,
+    end: usize,
+}
+
+/// Parse `<letters>:[$]<letters>[$]<digits>` starting at `start`.
+fn parse_qualified_ref(s: &str, start: usize) -> Option<ParsedRef> {
+    let bytes = s.as_bytes();
+    // Sheet letter run.
+    let mut i = start;
+    while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+        i += 1;
+    }
+    if i == start || bytes.get(i).copied() != Some(b':') {
+        return None;
+    }
+    let sheet_str = &s[start..i];
+    // Validate sheet letters (overflow → not a ref).
+    letters_to_col(sheet_str).ok()?;
+    i += 1; // consume colon
+    let mut cell = parse_bare_cell_ref(s, i)?;
+    cell.sheet = Some(sheet_str.to_string());
+    Some(cell)
+}
+
+/// Parse `[$]<letters>[$]<digits>` starting at `start`.
+fn parse_bare_cell_ref(s: &str, start: usize) -> Option<ParsedRef> {
+    let bytes = s.as_bytes();
+    let mut i = start;
+    let col_abs = bytes.get(i).copied() == Some(b'$');
+    if col_abs {
+        i += 1;
+    }
+    let col_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+        i += 1;
+    }
+    if i == col_start {
+        return None;
+    }
+    let col_letters = &s[col_start..i];
+    let col = letters_to_col(col_letters).ok()?;
+    let row_abs = bytes.get(i).copied() == Some(b'$');
+    if row_abs {
+        i += 1;
+    }
+    let row_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == row_start {
+        return None;
+    }
+    let row: u32 = s[row_start..i].parse().ok()?;
+    if row == 0 {
+        return None;
+    }
+    Some(ParsedRef {
+        sheet: None,
+        col_abs,
+        col,
+        row_abs,
+        row,
+        end: i,
+    })
+}
+
+fn emit_shifted(r: ParsedRef, dx: i32, dy: i32) -> (String, usize) {
+    let new_col = if r.col_abs {
+        r.col as i32
+    } else {
+        r.col as i32 + dx
+    };
+    let new_row = if r.row_abs {
+        r.row as i32
+    } else {
+        r.row as i32 + dy
+    };
+    if new_col < 0
+        || new_col >= MAX_COLS as i32
+        || new_row < 1
+        || new_row > MAX_ROWS as i32
+    {
+        return ("ERR".to_string(), r.end);
+    }
+    let mut out = String::new();
+    if let Some(sheet) = r.sheet {
+        out.push_str(&sheet);
+        out.push(':');
+    }
+    if r.col_abs {
+        out.push('$');
+    }
+    out.push_str(&col_to_letters(new_col as u16));
+    if r.row_abs {
+        out.push('$');
+    }
+    out.push_str(&new_row.to_string());
+    (out, r.end)
+}
+
 fn next_char_boundary(s: &str, start: usize) -> usize {
     let mut end = start + 1;
     while !s.is_char_boundary(end) && end < s.len() {
@@ -345,6 +508,108 @@ mod tests {
         let s: Vec<&str> = vec!["Sheet1", "Q2"];
         assert_eq!(to_engine_source("+A:B3", &s), "=Sheet1!B3");
         assert_eq!(to_engine_source("+B:B3", &s), "=Q2!B3");
+    }
+
+    // ---- shift_refs ----
+
+    #[test]
+    fn shift_simple_relative_cell() {
+        assert_eq!(shift_refs("+A1", 1, 0), "+B1");
+        assert_eq!(shift_refs("+A1", 0, 1), "+A2");
+        assert_eq!(shift_refs("+A1", 3, 2), "+D3");
+    }
+
+    #[test]
+    fn shift_preserves_leading_sigil() {
+        assert_eq!(shift_refs("@SUM(A1..A5)", 1, 0), "@SUM(B1..B5)");
+        assert_eq!(shift_refs("+A1+B2", 0, 2), "+A3+B4");
+    }
+
+    #[test]
+    fn shift_absolute_col_keeps_col() {
+        // $ before letter freezes the column.
+        assert_eq!(shift_refs("+$A1", 5, 0), "+$A1");
+        assert_eq!(shift_refs("+$A1", 0, 3), "+$A4");
+    }
+
+    #[test]
+    fn shift_absolute_row_keeps_row() {
+        // $ before digits freezes the row.
+        assert_eq!(shift_refs("+A$1", 0, 5), "+A$1");
+        assert_eq!(shift_refs("+A$1", 3, 0), "+D$1");
+    }
+
+    #[test]
+    fn shift_full_absolute_no_change() {
+        assert_eq!(shift_refs("+$A$1", 5, 5), "+$A$1");
+        assert_eq!(shift_refs("@SUM($A$1..$B$3)", 10, 10), "@SUM($A$1..$B$3)");
+    }
+
+    #[test]
+    fn shift_range_both_ends() {
+        assert_eq!(shift_refs("@SUM(A1..C3)", 2, 0), "@SUM(C1..E3)");
+        assert_eq!(shift_refs("@SUM(A1..C3)", 0, 5), "@SUM(A6..C8)");
+    }
+
+    #[test]
+    fn shift_skips_string_literals() {
+        assert_eq!(
+            shift_refs("@IF(A1>0,\"A1 is big\",\"low\")", 1, 0),
+            "@IF(B1>0,\"A1 is big\",\"low\")"
+        );
+    }
+
+    #[test]
+    fn shift_function_names_unchanged() {
+        // SUM, AVG, NOW, etc. are letter-runs without trailing digits and
+        // shouldn't be confused with cell refs.
+        assert_eq!(shift_refs("@NOW", 5, 5), "@NOW");
+        assert_eq!(shift_refs("@SUM(A1)+@AVG(B1)", 1, 0), "@SUM(B1)+@AVG(C1)");
+    }
+
+    #[test]
+    fn shift_sheet_qualified_keeps_sheet() {
+        assert_eq!(shift_refs("+A:B5", 1, 1), "+A:C6");
+        assert_eq!(shift_refs("@SUM(A:B5..A:D10)", 1, 0), "@SUM(A:C5..A:E10)");
+    }
+
+    #[test]
+    fn shift_3d_range_keeps_sheet_span() {
+        // Sheets stay at A..C; only col/row shift.
+        assert_eq!(
+            shift_refs("@SUM(A:B5..C:D10)", 1, 0),
+            "@SUM(A:C5..C:E10)"
+        );
+    }
+
+    #[test]
+    fn shift_underflow_emits_err() {
+        // Shifting A1 left by 1 would yield col -1 → ERR.
+        assert_eq!(shift_refs("+A1", -1, 0), "+ERR");
+        assert_eq!(shift_refs("+A1", 0, -1), "+ERR");
+    }
+
+    #[test]
+    fn shift_negative_within_bounds() {
+        assert_eq!(shift_refs("+D5", -1, -2), "+C3");
+    }
+
+    #[test]
+    fn shift_named_range_passthrough() {
+        // 5-letter "name" overflows column space — emit unchanged.
+        assert_eq!(shift_refs("@SUM(sales)", 1, 0), "@SUM(sales)");
+    }
+
+    #[test]
+    fn shift_decimals_not_misparsed() {
+        // 3.14 contains no letters → not a ref.
+        assert_eq!(shift_refs("+3.14+A1", 1, 0), "+3.14+B1");
+    }
+
+    #[test]
+    fn shift_zero_is_identity() {
+        let s = "@IF(A1>0,$A$1+B$2..C$3,\"none\")";
+        assert_eq!(shift_refs(s, 0, 0), s);
     }
 
     #[test]

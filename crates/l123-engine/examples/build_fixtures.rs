@@ -19,13 +19,13 @@ use std::path::{Path, PathBuf};
 
 use std::io::{Read, Write};
 
-use ironcalc::base::{
+use ironcalc_xlsx::base::{
     types::{
         Alignment, Border, BorderItem, BorderStyle, Fill, HorizontalAlignment, VerticalAlignment,
     },
     Model,
 };
-use ironcalc::export::save_to_xlsx;
+use ironcalc_xlsx::export::save_to_xlsx;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = fixtures_dir();
@@ -36,6 +36,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     regen(&out_dir.join("font.xlsx"), build_font)?;
     regen(&out_dir.join("borders.xlsx"), build_borders)?;
     regen(&out_dir.join("comments.xlsx"), build_comments)?;
+    regen(&out_dir.join("merges.xlsx"), build_merges)?;
+    regen(&out_dir.join("frozen.xlsx"), build_frozen)?;
+    regen(&out_dir.join("hidden_sheets.xlsx"), build_hidden_sheets)?;
+    regen(&out_dir.join("tables.xlsx"), build_tables)?;
     println!("Wrote fixtures to {}", out_dir.display());
     Ok(())
 }
@@ -304,6 +308,173 @@ fn build_comments(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         path,
         &[
             ("xl/comments1.xml", comments_xml),
+            ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels_xml),
+        ],
+    )?;
+    println!("  {}", path.display());
+    Ok(())
+}
+
+/// `merges.xlsx` — merged-cell fixture exercising both horizontal
+/// (one-row) and rectangular (multi-row) merges.  IronCalc's xlsx
+/// exporter writes `<mergeCells>` faithfully so no hand-patching is
+/// needed.
+///
+///   A1:C1 anchor=A1, "Header"  — horizontal three-cell merge
+///   B3:C4 anchor=B3, "Box"     — 2x2 rectangular merge
+///   A5    'plain'              — control cell, not merged
+fn build_merges(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = Model::new_empty("merges", "en", "UTC", "en")?;
+    model.set_user_input(0, 1, 1, "'Header".to_string())?;
+    model.set_user_input(0, 3, 2, "'Box".to_string())?;
+    model.set_user_input(0, 5, 1, "'plain".to_string())?;
+    {
+        let ws = model.workbook.worksheet_mut(0)?;
+        ws.merge_cells.push("A1:C1".to_string());
+        ws.merge_cells.push("B3:C4".to_string());
+    }
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF8 path: {}", path.display()))?;
+    save_to_xlsx(&model, path_str)?;
+    println!("  {}", path.display());
+    Ok(())
+}
+
+/// `frozen.xlsx` — exercises pinned rows + columns.
+///
+///   frozen_rows = 2, frozen_columns = 1
+///   A1 'TL', A2 'L'              — frozen top-left corner cells
+///   B1..AC1 'C{n}'               — long top frozen-row band
+///   A3..A60 'R{n}'               — long left frozen-column band
+///   B3..AC60 cells unimportant   — scrolling main region
+///
+/// IronCalc round-trips frozen panes natively, so no hand-patching.
+fn build_frozen(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = Model::new_empty("frozen", "en", "UTC", "en")?;
+    // Corner cells.
+    model.set_user_input(0, 1, 1, "'TL".to_string())?;
+    model.set_user_input(0, 2, 1, "'L".to_string())?;
+    // Top frozen-row content: B1..AC1.
+    for col in 2..=29 {
+        let label = format!("'C{}", col - 1);
+        model.set_user_input(0, 1, col, label)?;
+    }
+    // Left frozen-column content: A3..A60.
+    for row in 3..=60 {
+        let label = format!("'R{}", row);
+        model.set_user_input(0, row, 1, label)?;
+    }
+    // A few cells in the scrolling main region for navigation cues.
+    model.set_user_input(0, 5, 5, "'BODY".to_string())?;
+    model.set_frozen_rows(0, 2)?;
+    model.set_frozen_columns(0, 1)?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF8 path: {}", path.display()))?;
+    save_to_xlsx(&model, path_str)?;
+    println!("  {}", path.display());
+    Ok(())
+}
+
+/// `hidden_sheets.xlsx` — exercises sheet visibility round-trip and
+/// the L123 navigation skip behavior.
+///
+///   Sheet A (Visible)    "'Visible 1"
+///   Sheet B (Hidden)     "'Hidden body"
+///   Sheet C (VeryHidden) "'VeryHidden body"
+///   Sheet D (Visible)    "'Visible 2"
+///
+/// IronCalc round-trips state natively via the workbook XML's
+/// `<sheet state="..."/>` attribute.
+fn build_hidden_sheets(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use ironcalc_xlsx::base::types::SheetState;
+    let mut model = Model::new_empty("hidden_sheets", "en", "UTC", "en")?;
+    model.insert_sheet("Sheet2", 1, None)?;
+    model.insert_sheet("Sheet3", 2, None)?;
+    model.insert_sheet("Sheet4", 3, None)?;
+    model.set_user_input(0, 1, 1, "'Visible 1".to_string())?;
+    model.set_user_input(1, 1, 1, "'Hidden body".to_string())?;
+    model.set_user_input(2, 1, 1, "'VeryHidden body".to_string())?;
+    model.set_user_input(3, 1, 1, "'Visible 2".to_string())?;
+    model.set_sheet_state(1, SheetState::Hidden)?;
+    model.set_sheet_state(2, SheetState::VeryHidden)?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF8 path: {}", path.display()))?;
+    save_to_xlsx(&model, path_str)?;
+    println!("  {}", path.display());
+    Ok(())
+}
+
+/// `tables.xlsx` — a single sheet with a 4×4 table named `Table1`.
+/// IronCalc 0.7's xlsx exporter does NOT write `xl/tables/*.xml`,
+/// so we build the base file with IronCalc and hand-inject the
+/// table XML + sheet→table relationship.
+///
+/// Layout:
+///   A1 'Year'   B1 'Q1'  C1 'Q2'  D1 'Q3'   — header row
+///   A2 2024     B2 100   C2 110   D2 120
+///   A3 2025     B3 130   C3 140   D3 150
+///
+/// One named table covers A1:D3 with autofilter enabled.
+fn build_tables(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = Model::new_empty("tables", "en", "UTC", "en")?;
+    // Header row.
+    model.set_user_input(0, 1, 1, "'Year".to_string())?;
+    model.set_user_input(0, 1, 2, "'Q1".to_string())?;
+    model.set_user_input(0, 1, 3, "'Q2".to_string())?;
+    model.set_user_input(0, 1, 4, "'Q3".to_string())?;
+    // Two data rows.
+    for (row, year) in [(2, 2024), (3, 2025)] {
+        model.set_user_input(0, row, 1, year.to_string())?;
+    }
+    for (row, vals) in [(2, [100, 110, 120]), (3, [130, 140, 150])] {
+        for (i, v) in vals.iter().enumerate() {
+            model.set_user_input(0, row, 2 + i as i32, v.to_string())?;
+        }
+    }
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF8 path: {}", path.display()))?;
+    save_to_xlsx(&model, path_str)?;
+
+    // xl/tables/table1.xml — the table definition itself.  One-line
+    // XML to dodge the IronCalc-importer whitespace gotcha noted in
+    // `build_comments` (its `first_child()` parser trips on leading
+    // whitespace text nodes).
+    let table_xml = concat!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+        r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" "#,
+        r#"id="1" name="Table1" displayName="Table1" ref="A1:D3" totalsRowShown="0">"#,
+        // IronCalc 0.7 sets `has_filters = true` only when
+        // `<autoFilter>` has at least one child element — so we add
+        // an empty `<filterColumn colId="0"/>` placeholder.  Without
+        // it the flag round-trips as false even though the schema
+        // intends "filters are present".
+        r#"<autoFilter ref="A1:D3"><filterColumn colId="0"/></autoFilter>"#,
+        r#"<tableColumns count="4">"#,
+        r#"<tableColumn id="1" name="Year"/>"#,
+        r#"<tableColumn id="2" name="Q1"/>"#,
+        r#"<tableColumn id="3" name="Q2"/>"#,
+        r#"<tableColumn id="4" name="Q3"/>"#,
+        r#"</tableColumns>"#,
+        r#"<tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" "#,
+        r#"showRowStripes="1" showColumnStripes="0"/>"#,
+        r#"</table>"#,
+    );
+    // Sheet rels: point sheet1 at the new table part.  Same shape as
+    // the comments fixture's relationship file.
+    let sheet_rels_xml = concat!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+        r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>"#,
+        r#"</Relationships>"#,
+    );
+    add_to_xlsx(
+        path,
+        &[
+            ("xl/tables/table1.xml", table_xml),
             ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels_xml),
         ],
     )?;

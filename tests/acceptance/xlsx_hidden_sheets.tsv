@@ -1,0 +1,41 @@
+# xlsx-imported sheet visibility states preserve through load/save and
+# Ctrl-PgUp/PgDn navigation skips Hidden / VeryHidden sheets.
+#
+# Fixture: tests/acceptance/fixtures/xlsx/hidden_sheets.xlsx
+#   Sheet A (Visible)     "Visible 1"
+#   Sheet B (Hidden)      "Hidden body"
+#   Sheet C (VeryHidden)  "VeryHidden body"
+#   Sheet D (Visible)     "Visible 2"
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/hidden_sheets.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Pointer lands on the first visible sheet (A) at A1.
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1   Visible 1
+
+# Ctrl-PgDn advances to the next *visible* sheet — skipping the
+# Hidden B and the VeryHidden C, landing on D.
+CTRL_PGDN
+ASSERT_POINTER   D:A1
+ASSERT_CELL      D:A1   Visible 2
+
+# Pressing Ctrl-PgDn at the last visible sheet is a no-op.
+CTRL_PGDN
+ASSERT_POINTER   D:A1
+
+# Ctrl-PgUp returns directly to A — again skipping C and B.
+CTRL_PGUP
+ASSERT_POINTER   A:A1
+
+# Pressing Ctrl-PgUp at the first visible sheet is a no-op.
+CTRL_PGUP
+ASSERT_POINTER   A:A1

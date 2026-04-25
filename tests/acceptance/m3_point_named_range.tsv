@@ -1,0 +1,137 @@
+# Range names usable as range input in POINT prompts.
+# Builds on the typed-range buffer (m3_point_typed_range.tsv) — when
+# the buffer doesn't parse as a literal range, fall back to looking
+# up the buffer (case-insensitive) as a defined range name.
+
+# Seed A1=10, A2=20, A3=30.
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+DOWN
+KEYS 30
+ENTER
+HOME
+
+# /RNC sales over A1..A3.
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS sales
+ENTER
+ASSERT_MODE       POINT
+DOWN
+DOWN
+ASSERT_PANEL_L3   A:A1..A:A3
+ENTER
+ASSERT_MODE       READY
+
+# /RFF 0, then POINT — type the name and Enter resolves it.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+ASSERT_MODE       POINT
+KEYS sales
+ASSERT_PANEL_L3   sales
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (F0) 10
+ASSERT_CELL       A:A1  10
+ASSERT_CELL       A:A2  20
+ASSERT_CELL       A:A3  30
+
+# Case-insensitive: SALES resolves the same way.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 1
+ENTER
+ASSERT_MODE       POINT
+KEYS SALES
+ASSERT_PANEL_L3   SALES
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (F1) 10
+
+# Underscore is allowed in name input (Lotus convention).
+HOME
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS my_range
+ENTER
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+KEYS my_range
+ASSERT_PANEL_L3   my_range
+ENTER
+ASSERT_MODE       READY
+
+# Unknown name is a silent no-op — buffer cleared, stay in POINT, no
+# panic, command not committed.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+KEYS nope
+ASSERT_PANEL_L3   nope
+ENTER
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   A:A1..A:A1
+# Recover by typing a valid literal range.
+KEYS A1
+ENTER
+ASSERT_MODE       READY
+
+# /RND removes the name; subsequent typed-name lookup misses.
+KEY /
+KEY R
+KEY N
+KEY D
+KEYS sales
+ENTER
+ASSERT_MODE       READY
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+KEYS sales
+ENTER
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   A:A1..A:A1
+ESC
+
+# Literal range input still works alongside the name path.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+KEYS A1..A3
+ENTER
+ASSERT_MODE       READY

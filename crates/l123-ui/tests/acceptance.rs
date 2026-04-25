@@ -201,6 +201,27 @@ fn run_transcript(path: &Path) {
                     path.display()
                 );
             }
+            // "ASSERT_TABLES A Table1,Sales" — assert the comma-joined
+            // list of table names on a sheet (single letter argument).
+            // Use `none` to assert the sheet has no tables.
+            "ASSERT_TABLES" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let letter = parts.next().unwrap_or("").trim();
+                let want_raw = parts.next().unwrap_or("").trim();
+                let want: &str = if want_raw.eq_ignore_ascii_case("none") {
+                    ""
+                } else {
+                    want_raw
+                };
+                let ch = letter.chars().next().unwrap_or('?');
+                let got = app.table_names(ch);
+                assert_eq!(
+                    got,
+                    want,
+                    "{}:{line_no}: tables on sheet {letter} expected {want:?} got {got:?}",
+                    path.display()
+                );
+            }
             // "ASSERT_STATUS_SHEET_FG FF0000" — assert the fg color of
             // the sheet-letter character in the status-line indicator.
             // Use `none` when the sheet has no tab color (the letter
@@ -695,9 +716,12 @@ transcripts! {
     m3_insert_delete_row_col => "M3_insert_delete_row_col.tsv",
     m3_range_erase     => "M3_range_erase.tsv",
     m3_copy            => "M3_copy.tsv",
+    m3_copy_lotus_tutorial => "m3_copy_lotus_tutorial.tsv",
     m3_move            => "M3_move.tsv",
     m3_range_label     => "M3_range_label.tsv",
     m3_range_format    => "M3_range_format.tsv",
+    m3_point_typed_range => "m3_point_typed_range.tsv",
+    m3_point_named_range => "m3_point_named_range.tsv",
     m3_wg_recalc       => "M3_wg_recalc.tsv",
     m3_ws_col_width    => "M3_ws_col_width.tsv",
     m3_ws_col_reset_width       => "M3_ws_col_reset_width.tsv",
@@ -768,6 +792,10 @@ transcripts! {
     xlsx_font                    => "xlsx_font.tsv",
     xlsx_borders                 => "xlsx_borders.tsv",
     xlsx_comments                => "xlsx_comments.tsv",
+    xlsx_merges                  => "xlsx_merges.tsv",
+    xlsx_frozen                  => "xlsx_frozen.tsv",
+    xlsx_hidden_sheets           => "xlsx_hidden_sheets.tsv",
+    xlsx_tables                  => "xlsx_tables.tsv",
     t01_tutorial_labels_and_fast_entry => "T01_tutorial_labels_and_fast_entry.tsv",
     t02_tutorial_values_erase_and_repeating_label => "T02_tutorial_values_erase_and_repeating_label.tsv",
     t03_tutorial_calculation_and_named_ranges => "T03_tutorial_calculation_and_named_ranges.tsv",

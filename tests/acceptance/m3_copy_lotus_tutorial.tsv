@@ -1,0 +1,187 @@
+# /Copy — Lotus tutorial behaviors: single-source replicate, same-size,
+# formula relative-ref shift, mismatched-dim error, 3D destination.
+
+# ---- Single-source → multi-cell destination (replicate) ----
+# Tutorial uses `\-` to draw a horizontal rule across a row by typing
+# a single repeating-dash label and copying it across.
+HOME
+KEY \
+KEYS -
+ENTER
+ASSERT_POINTER    A:A1
+
+# /C source = A1..A1, dest paint via `.` then RIGHT four times to F1.
+KEY /
+KEY C
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   FROM
+ENTER
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   TO
+# Move pointer to B1, anchor with `.`, extend to F1.
+RIGHT
+KEY .
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER    A:F1
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:B1  ---------
+ASSERT_CELL       A:F1  ---------
+
+# ---- Same-size cell-for-cell copy ----
+HOME
+DOWN
+DOWN
+KEYS 100
+ENTER
+DOWN
+KEYS 200
+ENTER
+DOWN
+KEYS 300
+ENTER
+HOME
+DOWN
+DOWN
+ASSERT_POINTER    A:A3
+KEY /
+KEY C
+# FROM A3..A5
+DOWN
+DOWN
+ASSERT_PANEL_L3   A:A3..A:A5
+ENTER
+# TO C3..C5 — paint with `.`
+ASSERT_MODE       POINT
+RIGHT
+RIGHT
+KEY .
+DOWN
+DOWN
+ASSERT_POINTER    A:C5
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:C3  100
+ASSERT_CELL       A:C4  200
+ASSERT_CELL       A:C5  300
+
+# ---- Formula relative-ref shift ----
+# Put a formula at A8 that sums A3+A4+A5; copy A8 to B8 and verify the
+# formula now reads B3+B4+B5 (and evaluates against the values just
+# written through their copy at C3..C5 — actually we use the originals).
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER    A:A8
+KEY +
+KEYS A3+A4+A5
+ENTER
+ASSERT_CELL       A:A8  600
+# Seed B3..B5 with different values so the shift is observable.
+HOME
+RIGHT
+DOWN
+DOWN
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+DOWN
+KEYS 4
+ENTER
+ASSERT_CELL       A:B3  1
+ASSERT_CELL       A:B4  2
+ASSERT_CELL       A:B5  4
+# Copy A8 → B8; refs shift by (+1, 0).
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER    A:A8
+KEY /
+KEY C
+ENTER
+RIGHT
+ENTER
+ASSERT_MODE       READY
+# B8 should now evaluate B3+B4+B5 = 7.
+ASSERT_CELL       A:B8  7
+
+# ---- Mismatched dimensions: error, no mutation ----
+# Seed E1..E2 so we can verify they're not touched on a bad copy.
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+KEYS 99
+ENTER
+DOWN
+KEYS 88
+ENTER
+ASSERT_CELL       A:E1  99
+ASSERT_CELL       A:E2  88
+
+# /C from A3..A5 (3 rows) to E1..F2 (2x2 = 4 cells, mismatched).
+HOME
+DOWN
+DOWN
+KEY /
+KEY C
+DOWN
+DOWN
+ENTER
+# In TO, navigate to E1, anchor, extend to F2.
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+UP
+UP
+KEY .
+RIGHT
+DOWN
+ASSERT_POINTER    A:F2
+ENTER
+ASSERT_MODE       ERROR
+ESC
+ASSERT_MODE       READY
+# Originals untouched.
+ASSERT_CELL       A:E1  99
+ASSERT_CELL       A:E2  88
+
+# ---- 3D destination via typed range ----
+# Insert sheet B (After current).
+HOME
+KEY /
+KEY W
+KEY I
+KEY S
+KEY A
+ASSERT_MODE       READY
+# Now copy A:A3..A:A5 (3 numbers) to B:A3 (single anchor on sheet B).
+KEY /
+KEY C
+KEYS A:A3..A:A5
+ENTER
+ASSERT_MODE       POINT
+KEYS B:A3
+ENTER
+ASSERT_MODE       READY
+# Sheet B should now have the same values at A3..A5.
+ASSERT_CELL       B:A3  100
+ASSERT_CELL       B:A4  200
+ASSERT_CELL       B:A5  300

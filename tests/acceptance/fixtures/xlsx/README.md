@@ -34,3 +34,7 @@ documented per-file.
 | `font.xlsx` | Per-cell font fg color + strikethrough (§3.1) | A1=#FF0000, B1=#3366CC, C1=struck, D1=plain |
 | `borders.xlsx` | Per-cell right-side border styles (§2.2) | A1=Thin, B1=Thick, C1=Double, D1=Dashed, E1=plain. Dotted omitted — IronCalc importer drops it. |
 | `comments.xlsx` | Cell comments (§2.7) | A1='first note', B2='second note', C3=plain. IronCalc's exporter doesn't emit comments, so the comments part + sheet rels are hand-injected. Authors are dropped on read. |
+| `merges.xlsx` | Merged cell ranges (§2.4) | A1:C1 anchor='Header' (horizontal); B3:C4 anchor='Box' (rectangular); A5='plain'. IronCalc round-trips merges natively. |
+| `frozen.xlsx` | Frozen rows + columns (§2.5) | frozen_rows=2, frozen_columns=1; top frozen-row band B1..AC1; left frozen-col band A3..A60; E5='BODY' as scrolling-region cue. Round-trips natively. |
+| `hidden_sheets.xlsx` | Sheet visibility (§3.3) | 4 sheets: A=Visible, B=Hidden, C=VeryHidden, D=Visible. Round-trips natively. |
+| `tables.xlsx` | Excel tables / autofilter (§3.2) | Sheet A has Table1 covering A1:D3 with header row Year/Q1/Q2/Q3 and an autoFilter. IronCalc's exporter doesn't write tables — table XML + sheet rels hand-injected. Style name doesn't round-trip (IronCalc importer reads from a mis-spelled `<tableInfo>`). |

@@ -35,8 +35,9 @@ l123-graph  = { path = "crates/l123-graph" }
 l123-print  = { path = "crates/l123-print" }
 
 # external
-ironcalc       = "0.7"
-ironcalc_base  = "0.7"
+ironcalc_xlsx  = { package = "ironcalc", path = "../IronCalc/xlsx" }
+ironcalc_base  = { path = "../IronCalc/base" }
+ironcalc_lotus = { path = "../IronCalc/lotus" }
 ratatui        = "0.30"
 crossterm      = "0.28"
 thiserror      = "2"

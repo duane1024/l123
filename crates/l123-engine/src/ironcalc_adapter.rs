@@ -8,21 +8,23 @@
 
 use std::path::Path;
 
-use ironcalc::base::{
+use ironcalc_xlsx::base::{
     expressions::utils::number_to_column,
     types::{
         Alignment as IcAlignment, Border as IcBorder, BorderItem as IcBorderItem,
         BorderStyle as IcBorderStyle, Cell, Comment as IcComment, HorizontalAlignment,
-        VerticalAlignment,
+        SheetState as IcSheetState, Table as IcTable, TableColumn as IcTableColumn,
+        TableStyleInfo as IcTableStyleInfo, VerticalAlignment,
     },
     Model,
 };
-use ironcalc::export::save_to_xlsx;
-use ironcalc::import::load_from_xlsx;
+use ironcalc_xlsx::export::save_to_xlsx;
+use ironcalc_xlsx::import::load_from_xlsx;
 
 use l123_core::{
     address::col_to_letters, Address, Alignment, Border, BorderEdge, BorderStyle, Comment, Fill,
-    FillPattern, FontStyle, Format, HAlign, Range, RgbColor, SheetId, TextStyle, VAlign, Value,
+    FillPattern, FontStyle, Format, HAlign, Merge, Range, RgbColor, SheetId, SheetState, Table,
+    TableColumn, TableStyle, TextStyle, VAlign, Value,
 };
 
 use crate::engine::{CellView, Engine, EngineError, Result};
@@ -87,10 +89,10 @@ impl Engine for IronCalcEngine {
             .get_cell_value_by_index(sheet, row, col)
             .map_err(EngineError::Backend)?;
         let value = match cv {
-            ironcalc::base::cell::CellValue::None => Value::Empty,
-            ironcalc::base::cell::CellValue::String(s) => Value::Text(s),
-            ironcalc::base::cell::CellValue::Number(n) => Value::Number(n),
-            ironcalc::base::cell::CellValue::Boolean(b) => Value::Bool(b),
+            ironcalc_xlsx::base::cell::CellValue::None => Value::Empty,
+            ironcalc_xlsx::base::cell::CellValue::String(s) => Value::Text(s),
+            ironcalc_xlsx::base::cell::CellValue::Number(n) => Value::Number(n),
+            ironcalc_xlsx::base::cell::CellValue::Boolean(b) => Value::Bool(b),
         };
         // Formula retrieval is optional for M0; attempted but non-fatal.
         let formula = self.model.get_cell_formula(sheet, row, col).ok().flatten();
@@ -102,9 +104,15 @@ impl Engine for IronCalcEngine {
     }
 
     fn clear_cell(&mut self, addr: Address) -> Result<()> {
+        // IronCalc moved the per-cell clear API onto the worksheet
+        // type and dropped the `Model::cell_clear_contents` shim.
+        // Reach through `worksheet_mut` to keep the L123 surface stable.
         let sheet = self.sheet_index(addr.sheet);
         self.model
-            .cell_clear_contents(sheet, Self::row_1based(addr), Self::col_1based(addr))
+            .workbook
+            .worksheet_mut(sheet)
+            .map_err(EngineError::Backend)?
+            .cell_clear_contents(Self::row_1based(addr), Self::col_1based(addr))
             .map_err(EngineError::Backend)
     }
 
@@ -417,6 +425,74 @@ impl Engine for IronCalcEngine {
         Ok(())
     }
 
+    fn set_merged_range(&mut self, merge: Merge) -> Result<()> {
+        if merge.anchor == merge.end {
+            // Single-cell "merge" — semantically empty, drop on the floor.
+            return Ok(());
+        }
+        self.extend_sheets_to(merge.anchor.sheet)?;
+        let s = merge_to_a1_range(merge);
+        let ws = self
+            .model
+            .workbook
+            .worksheet_mut(self.sheet_index(merge.anchor.sheet))
+            .map_err(EngineError::Backend)?;
+        // Idempotent: drop any existing identical entry before pushing.
+        ws.merge_cells.retain(|r| r != &s);
+        ws.merge_cells.push(s);
+        Ok(())
+    }
+
+    fn unset_merged_range(&mut self, merge: Merge) -> Result<()> {
+        let s = merge_to_a1_range(merge);
+        let Ok(ws) = self.model.workbook.worksheet_mut(self.sheet_index(merge.anchor.sheet)) else {
+            return Ok(());
+        };
+        ws.merge_cells.retain(|r| r != &s);
+        Ok(())
+    }
+
+    fn set_frozen_panes(&mut self, sheet: SheetId, rows: u32, cols: u16) -> Result<()> {
+        self.extend_sheets_to(sheet)?;
+        let idx = self.sheet_index(sheet);
+        // IronCalc stores both as `i32`.  L123's `(rows, cols)` types
+        // can't go negative; clamp on the way down.
+        self.model
+            .set_frozen_rows(idx, rows.try_into().unwrap_or(i32::MAX))
+            .map_err(EngineError::Backend)?;
+        self.model
+            .set_frozen_columns(idx, cols.into())
+            .map_err(EngineError::Backend)?;
+        Ok(())
+    }
+
+    fn set_sheet_state(&mut self, sheet: SheetId, state: SheetState) -> Result<()> {
+        self.extend_sheets_to(sheet)?;
+        let ic = match state {
+            SheetState::Visible => IcSheetState::Visible,
+            SheetState::Hidden => IcSheetState::Hidden,
+            SheetState::VeryHidden => IcSheetState::VeryHidden,
+        };
+        self.model
+            .set_sheet_state(self.sheet_index(sheet), ic)
+            .map_err(EngineError::Backend)
+    }
+
+    fn set_table(&mut self, sheet: SheetId, table: Table) -> Result<()> {
+        self.extend_sheets_to(sheet)?;
+        let sheet_name = self
+            .sheet_name(sheet)
+            .ok_or_else(|| EngineError::BadAddress(format!("unknown sheet {sheet:?}")))?;
+        let ic = to_ic_table(&table, sheet_name);
+        self.model.workbook.tables.insert(table.name.clone(), ic);
+        Ok(())
+    }
+
+    fn unset_table(&mut self, name: &str) -> Result<()> {
+        self.model.workbook.tables.remove(name);
+        Ok(())
+    }
+
     fn get_column_width(&self, sheet: SheetId, col: u16) -> Result<Option<u8>> {
         let idx = self.sheet_index(sheet) as usize;
         let Some(ws) = self.model.workbook.worksheets.get(idx) else {
@@ -470,14 +546,14 @@ fn to_ic_alignment(a: Alignment) -> IcAlignment {
 /// `<fgColor>`) treats `bg_color` as the solid fill's color, and its
 /// save path serializes it there.  Keeping our reader and writer on
 /// the same field avoids a save-then-read round trip losing the color.
-fn to_ic_fill(f: Fill) -> ironcalc::base::types::Fill {
+fn to_ic_fill(f: Fill) -> ironcalc_xlsx::base::types::Fill {
     match f.pattern {
-        FillPattern::None => ironcalc::base::types::Fill {
+        FillPattern::None => ironcalc_xlsx::base::types::Fill {
             pattern_type: "none".to_string(),
             fg_color: None,
             bg_color: None,
         },
-        FillPattern::Solid => ironcalc::base::types::Fill {
+        FillPattern::Solid => ironcalc_xlsx::base::types::Fill {
             pattern_type: "solid".to_string(),
             fg_color: None,
             // IronCalc's xlsx exporter blindly writes `FF` + whatever
@@ -495,7 +571,7 @@ fn to_ic_fill(f: Fill) -> ironcalc::base::types::Fill {
 /// authored by other tools (which *do* follow the Excel spec and put
 /// the solid color in `fg_color`) still render.  Unknown hex is
 /// silently dropped so a corrupt xlsx doesn't panic the load path.
-fn from_ic_fill(f: &ironcalc::base::types::Fill) -> Fill {
+fn from_ic_fill(f: &ironcalc_xlsx::base::types::Fill) -> Fill {
     match f.pattern_type.as_str() {
         "none" | "" => Fill::DEFAULT,
         _ => {
@@ -510,6 +586,112 @@ fn from_ic_fill(f: &ironcalc::base::types::Fill) -> Fill {
             }
         }
     }
+}
+
+/// Translate L123's `Table` into an IronCalc `Table` ready to be
+/// stored on the workbook.  Drops the dxf_id fields (round-trip
+/// lossy for header / data / totals row formatting — see the
+/// `l123-core::table` doc comment).
+fn to_ic_table(t: &Table, sheet_name: String) -> IcTable {
+    let reference = format!(
+        "{}{}:{}{}",
+        col_to_letters(t.range.start.col),
+        t.range.start.row + 1,
+        col_to_letters(t.range.end.col),
+        t.range.end.row + 1,
+    );
+    IcTable {
+        name: t.name.clone(),
+        display_name: if t.display_name.is_empty() {
+            t.name.clone()
+        } else {
+            t.display_name.clone()
+        },
+        sheet_name,
+        reference,
+        totals_row_count: if t.has_totals_row { 1 } else { 0 },
+        header_row_count: if t.has_header_row { 1 } else { 0 },
+        header_row_dxf_id: None,
+        data_dxf_id: None,
+        totals_row_dxf_id: None,
+        columns: t
+            .columns
+            .iter()
+            .map(|c| IcTableColumn {
+                id: c.id,
+                name: c.name.clone(),
+                totals_row_label: c.totals_row_label.clone(),
+                totals_row_function: c.totals_row_function.clone(),
+                header_row_dxf_id: None,
+                data_dxf_id: None,
+                totals_row_dxf_id: None,
+            })
+            .collect(),
+        style_info: IcTableStyleInfo {
+            name: t.style.name.clone(),
+            show_first_column: t.style.show_first_column,
+            show_last_column: t.style.show_last_column,
+            show_row_stripes: t.style.show_row_stripes,
+            show_column_stripes: t.style.show_column_stripes,
+        },
+        has_filters: t.has_filters,
+    }
+}
+
+/// Translate an IronCalc `Table` back to L123's `Table`.  Returns
+/// `None` when the `reference` string doesn't parse as an A1 range
+/// (cross-sheet refs, malformed input).
+fn from_ic_table(ic: &IcTable, sheet: SheetId) -> Option<Table> {
+    let range = parse_a1_range(&ic.reference, sheet)?;
+    Some(Table {
+        name: ic.name.clone(),
+        display_name: ic.display_name.clone(),
+        range: Range {
+            start: range.anchor,
+            end: range.end,
+        },
+        has_filters: ic.has_filters,
+        has_header_row: ic.header_row_count > 0,
+        has_totals_row: ic.totals_row_count > 0,
+        columns: ic
+            .columns
+            .iter()
+            .map(|c| TableColumn {
+                id: c.id,
+                name: c.name.clone(),
+                totals_row_function: c.totals_row_function.clone(),
+                totals_row_label: c.totals_row_label.clone(),
+            })
+            .collect(),
+        style: TableStyle {
+            name: ic.style_info.name.clone(),
+            show_first_column: ic.style_info.show_first_column,
+            show_last_column: ic.style_info.show_last_column,
+            show_row_stripes: ic.style_info.show_row_stripes,
+            show_column_stripes: ic.style_info.show_column_stripes,
+        },
+    })
+}
+
+/// Format a merge as the IronCalc `"A1:B2"` cell-range string.
+fn merge_to_a1_range(m: Merge) -> String {
+    format!(
+        "{}{}:{}{}",
+        col_to_letters(m.anchor.col),
+        m.anchor.row + 1,
+        col_to_letters(m.end.col),
+        m.end.row + 1,
+    )
+}
+
+/// Parse an A1-style range (`"A1:B2"`) into an L123 [`Merge`] pinned
+/// to the given sheet.  Returns `None` for anything that doesn't fit
+/// that exact shape (sheet-qualified refs, single cells, malformed).
+fn parse_a1_range(s: &str, sheet: SheetId) -> Option<Merge> {
+    let (a, b) = s.split_once(':')?;
+    let anchor = parse_a1_cell_ref(a, sheet)?;
+    let end = parse_a1_cell_ref(b, sheet)?;
+    Merge::from_corners(anchor, end)
 }
 
 /// Parse an A1-style single-cell reference (e.g. `"B5"`) into an
@@ -632,6 +814,63 @@ impl IronCalcEngine {
     /// Used by the formula translator to expand sheet-qualified refs.
     pub fn all_sheet_names(&self) -> Vec<String> {
         self.model.workbook.get_worksheet_names()
+    }
+
+    /// Enumerate every Excel-format table across the workbook.
+    /// Tables whose `sheet_name` doesn't match a worksheet, or whose
+    /// `reference` doesn't parse as `A1:B2`, are silently dropped —
+    /// keeps a corrupt xlsx from panicking the load path.  Order is
+    /// not guaranteed (callers that want stable display order should
+    /// sort by `(sheet, table.name)`).
+    pub fn used_tables(&self) -> Vec<(SheetId, Table)> {
+        // Pre-build a lookup from sheet name → SheetId so we can map
+        // each table's `sheet_name` back to L123's typed identifier.
+        let names = self.all_sheet_names();
+        let mut name_to_id: std::collections::HashMap<String, SheetId> =
+            std::collections::HashMap::with_capacity(names.len());
+        for (i, n) in names.into_iter().enumerate() {
+            name_to_id.insert(n, SheetId(i as u16));
+        }
+        let mut out = Vec::new();
+        for ic in self.model.workbook.tables.values() {
+            let Some(&sid) = name_to_id.get(&ic.sheet_name) else {
+                continue;
+            };
+            let Some(t) = from_ic_table(ic, sid) else {
+                continue;
+            };
+            out.push((sid, t));
+        }
+        out
+    }
+
+    /// Read a sheet's visibility state (`Visible`, `Hidden`, or
+    /// `VeryHidden`).  Out-of-range sheet indices return `Visible` so
+    /// callers don't have to special-case the "no such sheet" path.
+    pub fn sheet_state(&self, sheet: SheetId) -> SheetState {
+        let idx = self.sheet_index(sheet) as usize;
+        let Some(ws) = self.model.workbook.worksheets.get(idx) else {
+            return SheetState::Visible;
+        };
+        match ws.state {
+            IcSheetState::Visible => SheetState::Visible,
+            IcSheetState::Hidden => SheetState::Hidden,
+            IcSheetState::VeryHidden => SheetState::VeryHidden,
+        }
+    }
+
+    /// Read frozen-pane counts for a sheet as `(rows, cols)`.
+    /// Returns `(0, 0)` for unfrozen sheets and for out-of-range
+    /// sheet indices (so callers don't have to special-case the
+    /// "no such sheet" path during render).
+    pub fn frozen_panes(&self, sheet: SheetId) -> (u32, u16) {
+        let idx = self.sheet_index(sheet) as usize;
+        let Some(ws) = self.model.workbook.worksheets.get(idx) else {
+            return (0, 0);
+        };
+        let rows = ws.frozen_rows.max(0) as u32;
+        let cols = ws.frozen_columns.clamp(0, u16::MAX as i32) as u16;
+        (rows, cols)
     }
 
     /// Read the sheet's tab color, if any.  Returns `None` when the
@@ -775,6 +1014,23 @@ impl IronCalcEngine {
                             out.push((addr, a));
                         }
                     }
+                }
+            }
+        }
+        out
+    }
+
+    /// Enumerate every merged range across every sheet, paired with
+    /// the sheet it lives on.  Merges whose `cell_ref` doesn't parse
+    /// as `A1:B2` (cross-sheet refs, malformed strings) are silently
+    /// dropped — keeps a corrupt xlsx from panicking the load path.
+    pub fn used_merged_cells(&self) -> Vec<(SheetId, Merge)> {
+        let mut out = Vec::new();
+        for (sheet_idx, ws) in self.model.workbook.worksheets.iter().enumerate() {
+            let sheet = SheetId(sheet_idx as u16);
+            for s in &ws.merge_cells {
+                if let Some(m) = parse_a1_range(s, sheet) {
+                    out.push((sheet, m));
                 }
             }
         }
@@ -1551,6 +1807,286 @@ mod tests {
         assert_eq!(got[0].author, "", "IronCalc importer drops author");
         assert_eq!(got[1].addr, Address::new(SheetId::A, 1, 1));
         assert_eq!(got[1].text, "second note");
+    }
+
+    #[test]
+    fn tables_read_committed_fixture() {
+        // The `tables.xlsx` fixture is built by `cargo run -p
+        // l123-engine --example build_fixtures` — IronCalc produces
+        // the base xlsx and we hand-inject `xl/tables/table1.xml` +
+        // `xl/worksheets/_rels/sheet1.xml.rels` (its exporter
+        // doesn't emit them).
+        use l123_core::Address;
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture = manifest
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root above crates/l123-engine")
+            .join("tests/acceptance/fixtures/xlsx/tables.xlsx");
+        if !fixture.exists() {
+            eprintln!(
+                "skipping tables_read_committed_fixture: {} missing",
+                fixture.display()
+            );
+            return;
+        }
+        let mut e = IronCalcEngine::new().unwrap();
+        e.load_xlsx(&fixture).unwrap();
+        let mut got = e.used_tables();
+        got.sort_by_key(|(_, t)| t.name.clone());
+        assert_eq!(got.len(), 1);
+        let (sid, t) = &got[0];
+        assert_eq!(*sid, SheetId::A);
+        assert_eq!(t.name, "Table1");
+        assert_eq!(t.display_name, "Table1");
+        assert_eq!(t.range.start, Address::new(SheetId::A, 0, 0));
+        assert_eq!(t.range.end, Address::new(SheetId::A, 3, 2));
+        assert!(t.has_filters);
+        assert!(t.has_header_row);
+        assert!(!t.has_totals_row);
+        assert_eq!(t.columns.len(), 4);
+        let col_names: Vec<&str> = t.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(col_names, vec!["Year", "Q1", "Q2", "Q3"]);
+        // IronCalc 0.7's importer parses style info from a
+        // mis-spelled `<tableInfo>` tag, not the actual
+        // `<tableStyleInfo>` we wrote — so the style name silently
+        // drops to None on read.  `show_row_stripes` defaults to
+        // `true` in that path, which happens to match what we wrote.
+        // Pin both behaviors so we notice when upstream fixes the
+        // tag-name typo.
+        assert_eq!(t.style.name, None);
+        assert!(t.style.show_row_stripes);
+    }
+
+    #[test]
+    fn tables_survive_in_memory_set_and_read() {
+        // Like comments / sheet color, IronCalc 0.7's xlsx exporter
+        // doesn't write tables — see the `*_upstream_gap` test below.
+        // The setter writes into the workbook field; the reader pulls
+        // back across all sheets.
+        use l123_core::{Address, Range, Table, TableColumn};
+        let mut e = IronCalcEngine::new().unwrap();
+        let r = Range {
+            start: Address::new(SheetId::A, 0, 0),
+            end: Address::new(SheetId::A, 3, 5),
+        };
+        let t = Table {
+            name: "Sales".into(),
+            display_name: "Sales".into(),
+            range: r,
+            has_filters: true,
+            has_header_row: true,
+            has_totals_row: false,
+            columns: vec![
+                TableColumn {
+                    id: 1,
+                    name: "Year".into(),
+                    ..Default::default()
+                },
+                TableColumn {
+                    id: 2,
+                    name: "Total".into(),
+                    totals_row_function: Some("sum".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        e.set_table(SheetId::A, t.clone()).unwrap();
+        let got = e.used_tables();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, SheetId::A);
+        assert_eq!(got[0].1, t);
+
+        e.unset_table("Sales").unwrap();
+        assert!(e.used_tables().is_empty());
+    }
+
+    #[test]
+    fn tables_are_dropped_on_xlsx_save_upstream_gap() {
+        // IronCalc 0.7 doesn't serialize tables through its xlsx
+        // exporter (no `xl/tables/*.xml` parts written).  Pin the
+        // current behavior so we notice when upstream closes the gap.
+        use l123_core::{Address, Range, Table, TableColumn};
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir =
+            std::env::temp_dir().join(format!("l123_engine_table_rt_{}_{}", process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("table.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "'h").unwrap();
+        let r = Range {
+            start: Address::new(SheetId::A, 0, 0),
+            end: Address::new(SheetId::A, 1, 2),
+        };
+        e.set_table(
+            SheetId::A,
+            Table {
+                name: "T1".into(),
+                display_name: "T1".into(),
+                range: r,
+                has_header_row: true,
+                columns: vec![TableColumn {
+                    id: 1,
+                    name: "A".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        assert!(
+            e2.used_tables().is_empty(),
+            "IronCalc xlsx save drops tables. If this starts returning \
+             a non-empty Vec, upstream closed the gap; flip the assertion \
+             and tell users /FS preserves tables."
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn sheet_state_round_trips_through_xlsx() {
+        // IronCalc round-trips sheet state natively via the workbook
+        // XML's `<sheet state="hidden|veryHidden"/>` attribute.
+        use l123_core::SheetState;
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "l123_engine_sheet_state_rt_{}_{}",
+            process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sheet_state_rt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        e.insert_sheet_at(1).unwrap();
+        e.insert_sheet_at(2).unwrap();
+        // A: visible (default), B: hidden, C: very-hidden.
+        e.set_sheet_state(SheetId(1), SheetState::Hidden).unwrap();
+        e.set_sheet_state(SheetId(2), SheetState::VeryHidden).unwrap();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        assert_eq!(e2.sheet_state(SheetId::A), SheetState::Visible);
+        assert_eq!(e2.sheet_state(SheetId(1)), SheetState::Hidden);
+        assert_eq!(e2.sheet_state(SheetId(2)), SheetState::VeryHidden);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn frozen_panes_round_trip_through_xlsx() {
+        // IronCalc 0.7 round-trips frozen rows + columns natively.
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "l123_engine_frozen_rt_{}_{}",
+            process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("frozen_rt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        e.insert_sheet_at(1).unwrap();
+        // Sheet A: 2 frozen rows, 1 frozen column.
+        e.set_frozen_panes(SheetId::A, 2, 1).unwrap();
+        // Sheet B: only frozen rows.
+        e.set_frozen_panes(SheetId(1), 3, 0).unwrap();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        assert_eq!(e2.frozen_panes(SheetId::A), (2, 1));
+        assert_eq!(e2.frozen_panes(SheetId(1)), (3, 0));
+
+        // Clearing both wipes the freeze.
+        e2.set_frozen_panes(SheetId::A, 0, 0).unwrap();
+        assert_eq!(e2.frozen_panes(SheetId::A), (0, 0));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn merges_round_trip_through_xlsx() {
+        // IronCalc 0.7's xlsx exporter DOES write `<mergeCells>` —
+        // unlike comments / sheet color / dotted borders.  Full
+        // round-trip is exercised here.
+        use l123_core::Merge;
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "l123_engine_merge_rt_{}_{}",
+            process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("merge_rt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        // A1:C1 (horizontal)
+        let m1 = Merge::from_corners(
+            Address::new(SheetId::A, 0, 0),
+            Address::new(SheetId::A, 2, 0),
+        )
+        .unwrap();
+        // B3:C5 (rectangular)
+        let m2 = Merge::from_corners(
+            Address::new(SheetId::A, 1, 2),
+            Address::new(SheetId::A, 2, 4),
+        )
+        .unwrap();
+        e.set_user_input(m1.anchor, "'header").unwrap();
+        e.set_user_input(m2.anchor, "'box").unwrap();
+        e.set_merged_range(m1).unwrap();
+        e.set_merged_range(m2).unwrap();
+        e.recalc();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        let mut got: Vec<(SheetId, Merge)> = e2.used_merged_cells();
+        got.sort_by_key(|(_, m)| (m.anchor.col, m.anchor.row));
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0], (SheetId::A, m1));
+        assert_eq!(got[1], (SheetId::A, m2));
+
+        // Unmerge one and verify it disappears.
+        e2.unset_merged_range(m1).unwrap();
+        let after = e2.used_merged_cells();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0], (SheetId::A, m2));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

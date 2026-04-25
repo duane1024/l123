@@ -21,9 +21,10 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use l123_core::{
-    address::col_to_letters, label::is_value_starter, plan_row_spill, render_value_in_cell,
-    Address, Alignment, Border, CellContents, Comment, ErrKind, Fill, FontStyle, Format,
-    FormatKind, HAlign, LabelPrefix, Mode, Range, RgbColor, SheetId, SpillSlot, TextStyle, Value,
+    address::col_to_letters, label::is_value_starter, plan_row_spill, render_label,
+    render_value_in_cell, Address, Alignment, Border, CellContents, Comment, ErrKind, Fill,
+    FontStyle, Format, FormatKind, HAlign, LabelPrefix, Merge, Mode, Range, RgbColor, SheetId,
+    SheetState, SpillSlot, Table, TextStyle, Value,
 };
 use l123_core::cell_render::{apply_halign_to_rendered, halign_to_label_prefix};
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
@@ -165,6 +166,33 @@ struct Workbook {
     /// drops comments — we preserve them in-memory and render them,
     /// but `/FS` will lose them until the upstream gap closes.
     comments: HashMap<Address, Comment>,
+    /// Merged ranges by sheet.  The grid renderer paints the
+    /// anchor's content across the merge's column span; non-anchor
+    /// cells in the same row render blank (and block label-spill
+    /// from neighbors).  Multi-row merges: the anchor's content
+    /// shows on the anchor's row only; subsequent rows of the merge
+    /// area render blank — top-aligned, like Excel.  Cursor
+    /// navigation does NOT yet snap to the anchor (deferred).
+    merges: HashMap<SheetId, Vec<Merge>>,
+    /// Per-sheet frozen-pane counts: `(rows, cols)` indicate how many
+    /// rows from the top and columns from the left stay pinned in the
+    /// viewport while the rest of the grid scrolls.  `(0, 0)` (or no
+    /// entry) means no freeze.  Round-trips natively through xlsx.
+    frozen: HashMap<SheetId, (u32, u16)>,
+    /// Per-sheet visibility from xlsx imports.  Sheets not in the
+    /// map default to `Visible`.  Hidden / VeryHidden sheets are
+    /// skipped by `Ctrl-PgUp/PgDn` navigation; loaded files with a
+    /// hidden first sheet get the pointer redirected to the first
+    /// `Visible` sheet on import so the user lands somewhere they
+    /// can interact with.
+    sheet_states: HashMap<SheetId, SheetState>,
+    /// Excel tables (named ranges with header / autofilter / totals
+    /// metadata) by sheet.  v1: round-trip-only — preserved through
+    /// the engine on save, but no UI surface yet (no filter widgets,
+    /// no `/Data Query Define` integration).  IronCalc 0.7's xlsx
+    /// exporter doesn't write tables, so `/FS` drops them today
+    /// (pinned by `tables_are_dropped_on_xlsx_save_upstream_gap`).
+    tables: HashMap<SheetId, Vec<Table>>,
     /// Per-sheet tab color from an xlsx import.  When set, the sheet's
     /// letter in the status-line indicator renders with this fg color.
     /// Note (IronCalc 0.7): the xlsx *export* path drops tab colors —
@@ -198,9 +226,26 @@ struct Workbook {
     /// one into `current_graph`; `Delete` drops it; `Reset` wipes all.
     #[allow(dead_code)] // wired by `/Graph Name Create` in a later slice
     graphs: BTreeMap<String, GraphDef>,
+    /// Range names defined via `/Range Name Create`. Keyed by the
+    /// lowercased name (Lotus 1-2-3 names are case-insensitive). The
+    /// engine also stores names for formula resolution; this UI-side
+    /// mirror is what POINT typed-buffer name resolution reads, so we
+    /// don't need to round-trip through the engine to look up a range.
+    named_ranges: HashMap<String, Range>,
 }
 
 impl Workbook {
+    /// Find the merge containing `addr`, if any.  O(N) over the
+    /// sheet's merge list — fine for the small N (~dozens) typical
+    /// of real workbooks; revisit if a fixture pushes it past 1000.
+    fn merge_at(&self, addr: Address) -> Option<Merge> {
+        self.merges
+            .get(&addr.sheet)?
+            .iter()
+            .find(|m| m.contains(addr))
+            .copied()
+    }
+
     fn new() -> Self {
         Self {
             engine: IronCalcEngine::new().expect("IronCalc engine init"),
@@ -212,6 +257,10 @@ impl Workbook {
             cell_font_styles: HashMap::new(),
             cell_borders: HashMap::new(),
             comments: HashMap::new(),
+            merges: HashMap::new(),
+            frozen: HashMap::new(),
+            sheet_states: HashMap::new(),
+            tables: HashMap::new(),
             sheet_colors: HashMap::new(),
             col_widths: HashMap::new(),
             default_col_width: 9,
@@ -223,6 +272,7 @@ impl Workbook {
             journal: Vec::new(),
             current_graph: GraphDef::default(),
             graphs: BTreeMap::new(),
+            named_ranges: HashMap::new(),
         }
     }
 }
@@ -768,6 +818,42 @@ fn is_path_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/' | '\\' | ' ' | '~')
 }
 
+/// Resolve which destination anchors a `/Copy` should paste into,
+/// given source and destination ranges. Implements the Lotus tutorial
+/// dimension matrix:
+/// - source 1×1 → replicate at every (col, row) on every dest sheet
+/// - dest 1×1 OR same dims as source → single anchor at dest top-left
+///   on every dest sheet (3D destination paste once per sheet)
+/// - both multi-cell with mismatched dims → error string for the
+///   caller to surface
+fn copy_paste_anchors(src: Range, dest: Range) -> Result<Vec<Address>, &'static str> {
+    let src_cols = u32::from(src.end.col - src.start.col + 1);
+    let src_rows = src.end.row - src.start.row + 1;
+    let dst_cols = u32::from(dest.end.col - dest.start.col + 1);
+    let dst_rows = dest.end.row - dest.start.row + 1;
+    let single_src = src_cols == 1 && src_rows == 1;
+    let same_size = src_cols == dst_cols && src_rows == dst_rows;
+    let single_dest = dst_cols == 1 && dst_rows == 1;
+    if !single_src && !same_size && !single_dest {
+        return Err("Copy: source and destination ranges have different sizes");
+    }
+    let mut anchors = Vec::new();
+    for sheet_idx in dest.start.sheet.0..=dest.end.sheet.0 {
+        let sheet = SheetId(sheet_idx);
+        if single_src && !single_dest {
+            // Replicate the single source at every (col, row) of dest.
+            for col in dest.start.col..=dest.end.col {
+                for row in dest.start.row..=dest.end.row {
+                    anchors.push(Address::new(sheet, col, row));
+                }
+            }
+        } else {
+            anchors.push(Address::new(sheet, dest.start.col, dest.start.row));
+        }
+    }
+    Ok(anchors)
+}
+
 /// Resolve a user-typed filename into a save-target path. If the input
 /// has no extension, default to `.xlsx` (L123's modern save format).
 fn resolve_save_path(input: &str) -> PathBuf {
@@ -906,6 +992,54 @@ fn xtract_cell_input(cv: &CellView, kind: XtractKind) -> String {
 /// stripped so that `to_engine_source` will re-prepend it cleanly on
 /// save (the reverse Excel→1-2-3 translation is a later milestone;
 /// edits of loaded formulas will see the Excel-shape expression).
+/// If the workbook's pointer sits on a non-visible sheet (Hidden /
+/// VeryHidden), advance it to the first sheet that *is* visible so
+/// the user lands somewhere they can interact with.  No-op when the
+/// pointer is already on a visible sheet, or when no visible sheets
+/// exist at all.  Resets viewport offsets on redirect so the new
+/// sheet shows from A1.
+/// Translate a single sheet letter (`A`, `B`, …, `Z`) into its
+/// `SheetId` index.  `'A'` → 0, `'B'` → 1, `'Z'` → 25.  Lowercase
+/// works too.  Returns `None` for non-letters.  Used by harness
+/// assertion directives that take `<letter> <…>` arguments.
+fn letter_to_sheet_index(c: char) -> Option<u16> {
+    let upper = c.to_ascii_uppercase() as u32;
+    if (b'A' as u32..=b'Z' as u32).contains(&upper) {
+        Some((upper - b'A' as u32) as u16)
+    } else {
+        None
+    }
+}
+
+fn redirect_pointer_off_hidden(wb: &mut Workbook) {
+    let active = wb.pointer.sheet;
+    let active_visible = wb
+        .sheet_states
+        .get(&active)
+        .copied()
+        .unwrap_or(SheetState::Visible)
+        .is_visible();
+    if active_visible {
+        return;
+    }
+    let count = wb.engine.sheet_count();
+    for i in 0..count {
+        let sid = SheetId(i);
+        let visible = wb
+            .sheet_states
+            .get(&sid)
+            .copied()
+            .unwrap_or(SheetState::Visible)
+            .is_visible();
+        if visible {
+            wb.pointer = Address::new(sid, 0, 0);
+            wb.viewport_col_offset = 0;
+            wb.viewport_row_offset = 0;
+            return;
+        }
+    }
+}
+
 fn cell_view_to_contents(cv: &CellView) -> Option<CellContents> {
     if let Some(f) = &cv.formula {
         let expr = f.strip_prefix('=').unwrap_or(f).to_string();
@@ -933,6 +1067,12 @@ struct PointState {
     /// Which command initiated POINT, so that `Enter` routes the selected
     /// range back to the right handler.
     pending: PendingCommand,
+    /// Lotus-style typed range buffer (e.g. `c8..d12`). Empty in the
+    /// usual highlight-by-arrows flow. When non-empty, line 3 shows the
+    /// buffer in place of the auto-derived highlight, and `Enter` parses
+    /// it (via [`Range::parse_with_default_sheet`]) to override the
+    /// committed range.
+    typed: String,
 }
 
 /// Commands in progress that are waiting on one more POINT selection.
@@ -1338,19 +1478,23 @@ impl App {
         s.trim_end().to_string()
     }
 
+    /// Find the buffer y coordinate for a given grid row, honoring
+    /// frozen rows + the current row scroll.  Returns `None` when the
+    /// row is outside the visible body region.
+    fn cell_y_in_buffer(&self, buf: &Buffer, row: u32) -> Option<u16> {
+        // Body height: total - panel - column-header (1) - status line (1).
+        let body_rows = buf.area.height.saturating_sub(PANEL_HEIGHT + 2);
+        let layout = self.visible_row_layout(body_rows);
+        let (_, y_off) = *layout.iter().find(|(r, _)| *r == row)?;
+        Some(PANEL_HEIGHT + 1 + y_off)
+    }
+
     /// Read back the rendered text of a single grid cell by address
     /// (`"A:B5"` or `"B5"`). Returns None if the cell is outside the
     /// current viewport.
     pub fn cell_rendered_text(&self, buf: &Buffer, addr: &str) -> Option<String> {
         let a = Address::parse(addr).ok()?;
-        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
-            return None;
-        }
-        let dr = (a.row - self.wb().viewport_row_offset) as u16;
-        let y = PANEL_HEIGHT + 1 + dr; // +1 skips column header row
-        if y >= buf.area.height {
-            return None;
-        }
+        let y = self.cell_y_in_buffer(buf, a.row)?;
         let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
         let layout = self.visible_column_layout(content_width);
         let (_, x_off, w) = *layout.iter().find(|(c, _, _)| *c == a.col)?;
@@ -1369,6 +1513,25 @@ impl App {
     pub fn cell_text_style(&self, addr: &str) -> Option<TextStyle> {
         let a = Address::parse(addr).ok()?;
         self.wb().cell_text_styles.get(&a).copied()
+    }
+
+    /// Comma-joined table names on the given sheet, in the order
+    /// L123 stores them after load.  Empty string when the sheet has
+    /// no tables.  Used by the acceptance harness's `ASSERT_TABLES`
+    /// directive to verify xlsx-imported tables survive load.
+    pub fn table_names(&self, sheet_letter: char) -> String {
+        let Some(idx) = letter_to_sheet_index(sheet_letter) else {
+            return String::new();
+        };
+        let sid = SheetId(idx);
+        match self.wb().tables.get(&sid) {
+            Some(tables) => tables
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            None => String::new(),
+        }
     }
 
     /// Read back the rendered fg color of the sheet-letter cell on
@@ -1402,14 +1565,7 @@ impl App {
     /// glyph.  Returns `None` when the cell is outside the viewport.
     pub fn cell_right_edge_char(&self, buf: &Buffer, addr: &str) -> Option<String> {
         let a = Address::parse(addr).ok()?;
-        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
-            return None;
-        }
-        let dr = (a.row - self.wb().viewport_row_offset) as u16;
-        let y = PANEL_HEIGHT + 1 + dr;
-        if y >= buf.area.height {
-            return None;
-        }
+        let y = self.cell_y_in_buffer(buf, a.row)?;
         let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
         let layout = self.visible_column_layout(content_width);
         let (_, x_off, w) = *layout.iter().find(|(c, _, _)| *c == a.col)?;
@@ -1428,14 +1584,7 @@ impl App {
     /// `ASSERT_CELL_FG` directive.
     pub fn cell_fg_rendered(&self, buf: &Buffer, addr: &str) -> Option<(u8, u8, u8)> {
         let a = Address::parse(addr).ok()?;
-        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
-            return None;
-        }
-        let dr = (a.row - self.wb().viewport_row_offset) as u16;
-        let y = PANEL_HEIGHT + 1 + dr;
-        if y >= buf.area.height {
-            return None;
-        }
+        let y = self.cell_y_in_buffer(buf, a.row)?;
         let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
         let layout = self.visible_column_layout(content_width);
         let (_, x_off, _) = *layout.iter().find(|(c, _, _)| *c == a.col)?;
@@ -1454,14 +1603,9 @@ impl App {
         let Ok(a) = Address::parse(addr) else {
             return false;
         };
-        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
+        let Some(y) = self.cell_y_in_buffer(buf, a.row) else {
             return false;
-        }
-        let dr = (a.row - self.wb().viewport_row_offset) as u16;
-        let y = PANEL_HEIGHT + 1 + dr;
-        if y >= buf.area.height {
-            return false;
-        }
+        };
         let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
         let layout = self.visible_column_layout(content_width);
         let Some((_, x_off, _)) = layout.iter().find(|(c, _, _)| *c == a.col).copied() else {
@@ -1480,14 +1624,7 @@ impl App {
     /// the grid-render pipeline.
     pub fn cell_bg_rendered(&self, buf: &Buffer, addr: &str) -> Option<(u8, u8, u8)> {
         let a = Address::parse(addr).ok()?;
-        if a.col < self.wb().viewport_col_offset || a.row < self.wb().viewport_row_offset {
-            return None;
-        }
-        let dr = (a.row - self.wb().viewport_row_offset) as u16;
-        let y = PANEL_HEIGHT + 1 + dr;
-        if y >= buf.area.height {
-            return None;
-        }
+        let y = self.cell_y_in_buffer(buf, a.row)?;
         let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
         let layout = self.visible_column_layout(content_width);
         let (_, x_off, _) = *layout.iter().find(|(c, _, _)| *c == a.col)?;
@@ -2929,6 +3066,30 @@ impl App {
         for c in engine.used_comments() {
             comments.insert(c.addr, c);
         }
+        let mut merges: HashMap<SheetId, Vec<Merge>> = HashMap::new();
+        for (sheet, m) in engine.used_merged_cells() {
+            merges.entry(sheet).or_default().push(m);
+        }
+        let mut frozen: HashMap<SheetId, (u32, u16)> = HashMap::new();
+        for sheet_idx in 0..engine.sheet_count() {
+            let sid = SheetId(sheet_idx);
+            let f = engine.frozen_panes(sid);
+            if f != (0, 0) {
+                frozen.insert(sid, f);
+            }
+        }
+        let mut sheet_states: HashMap<SheetId, SheetState> = HashMap::new();
+        for sheet_idx in 0..engine.sheet_count() {
+            let sid = SheetId(sheet_idx);
+            let st = engine.sheet_state(sid);
+            if st != SheetState::Visible {
+                sheet_states.insert(sid, st);
+            }
+        }
+        let mut tables: HashMap<SheetId, Vec<Table>> = HashMap::new();
+        for (sheet, t) in engine.used_tables() {
+            tables.entry(sheet).or_default().push(t);
+        }
         let mut sheet_colors: HashMap<SheetId, RgbColor> = HashMap::new();
         for sheet_idx in 0..engine.sheet_count() {
             let sid = SheetId(sheet_idx);
@@ -2946,6 +3107,10 @@ impl App {
             cell_font_styles,
             cell_borders,
             comments,
+            merges,
+            frozen,
+            sheet_states,
+            tables,
             sheet_colors,
             col_widths,
             default_col_width: 9,
@@ -2957,7 +3122,14 @@ impl App {
             journal: Vec::new(),
             current_graph: GraphDef::default(),
             graphs: BTreeMap::new(),
+            named_ranges: HashMap::new(),
         };
+        // If the active sheet is hidden / very-hidden, redirect to the
+        // first visible sheet so the user lands somewhere they can
+        // interact with.  Works on the freshly-built `new_file`
+        // before it's inserted into the active-files list.
+        let mut new_file = new_file;
+        redirect_pointer_off_hidden(&mut new_file);
         if before {
             self.active_files.insert(self.current, new_file);
             // `current` still points to the old (now shifted) file;
@@ -3142,6 +3314,10 @@ impl App {
         self.wb_mut().cell_font_styles.clear();
         self.wb_mut().cell_borders.clear();
         self.wb_mut().comments.clear();
+        self.wb_mut().merges.clear();
+        self.wb_mut().frozen.clear();
+        self.wb_mut().sheet_states.clear();
+        self.wb_mut().tables.clear();
         self.wb_mut().sheet_colors.clear();
         self.wb_mut().col_widths.clear();
         self.wb_mut().default_col_width = 9;
@@ -3182,7 +3358,28 @@ impl App {
         for c in self.wb_mut().engine.used_comments() {
             self.wb_mut().comments.insert(c.addr, c);
         }
+        for (sheet, m) in self.wb_mut().engine.used_merged_cells() {
+            self.wb_mut().merges.entry(sheet).or_default().push(m);
+        }
         let sheet_count = self.wb().engine.sheet_count();
+        for sheet_idx in 0..sheet_count {
+            let sid = SheetId(sheet_idx);
+            let f = self.wb().engine.frozen_panes(sid);
+            if f != (0, 0) {
+                self.wb_mut().frozen.insert(sid, f);
+            }
+        }
+        for sheet_idx in 0..sheet_count {
+            let sid = SheetId(sheet_idx);
+            let st = self.wb().engine.sheet_state(sid);
+            if st != SheetState::Visible {
+                self.wb_mut().sheet_states.insert(sid, st);
+            }
+        }
+        for (sheet, t) in self.wb_mut().engine.used_tables() {
+            self.wb_mut().tables.entry(sheet).or_default().push(t);
+        }
+        redirect_pointer_off_hidden(self.wb_mut());
         for sheet_idx in 0..sheet_count {
             let sid = SheetId(sheet_idx);
             if let Some(c) = self.wb().engine.sheet_color(sid) {
@@ -3283,6 +3480,52 @@ impl App {
         let comments: Vec<Comment> = self.wb().comments.values().cloned().collect();
         for c in comments {
             let _ = self.wb_mut().engine.set_comment(c);
+        }
+        // Push merged ranges.  IronCalc's xlsx exporter writes
+        // <mergeCells> faithfully, so this round-trips end-to-end.
+        let merges: Vec<Merge> = self
+            .wb()
+            .merges
+            .values()
+            .flat_map(|v| v.iter().copied())
+            .collect();
+        for m in merges {
+            let _ = self.wb_mut().engine.set_merged_range(m);
+        }
+        // Push frozen-pane counts.  IronCalc round-trips these
+        // natively via `<pane state="frozen" .../>` in sheet XML.
+        let frozen: Vec<(SheetId, u32, u16)> = self
+            .wb()
+            .frozen
+            .iter()
+            .map(|(s, &(r, c))| (*s, r, c))
+            .collect();
+        for (sid, rows, cols) in frozen {
+            let _ = self.wb_mut().engine.set_frozen_panes(sid, rows, cols);
+        }
+        // Push sheet visibility states.  Round-trips natively via the
+        // workbook XML's `<sheet state="..."/>` attribute.
+        let sheet_states: Vec<(SheetId, SheetState)> = self
+            .wb()
+            .sheet_states
+            .iter()
+            .map(|(s, &st)| (*s, st))
+            .collect();
+        for (sid, st) in sheet_states {
+            let _ = self.wb_mut().engine.set_sheet_state(sid, st);
+        }
+        // Push tables.  IronCalc 0.7 doesn't actually serialize these
+        // through xlsx export (upstream gap, pinned by
+        // `tables_are_dropped_on_xlsx_save_upstream_gap`); the setter
+        // is still the right UI boundary.
+        let tables: Vec<(SheetId, Table)> = self
+            .wb()
+            .tables
+            .iter()
+            .flat_map(|(s, ts)| ts.iter().map(move |t| (*s, t.clone())))
+            .collect();
+        for (sid, t) in tables {
+            let _ = self.wb_mut().engine.set_table(sid, t);
         }
         // Push sheet tab colors.  IronCalc 0.7's xlsx exporter drops
         // these (upstream gap), but the setter is still the right UI
@@ -3512,14 +3755,47 @@ impl App {
     }
 
     /// Ctrl-PgDn / Ctrl-PgUp: jump to the next / previous sheet. Clamps
-    /// at the bookends — no wrap.
+    /// at the bookends — no wrap.  Hidden / VeryHidden sheets are
+    /// skipped: stepping with `delta=+1` past a hidden sheet lands on
+    /// the next visible one, not on the hidden one itself.  When all
+    /// sheets in the requested direction are hidden, the pointer stays
+    /// put.
     fn move_sheet(&mut self, delta: i32) {
         let count = self.wb().engine.sheet_count();
-        if count == 0 {
+        if count == 0 || delta == 0 {
             return;
         }
         let cur = self.wb().pointer.sheet.0 as i32;
-        let next = (cur + delta).clamp(0, count as i32 - 1) as u16;
+        let max = count as i32 - 1;
+        let step = delta.signum();
+        let mut probe = cur + step;
+        let mut landed: Option<u16> = None;
+        while (0..=max).contains(&probe) {
+            let sid = SheetId(probe as u16);
+            if self
+                .wb()
+                .sheet_states
+                .get(&sid)
+                .copied()
+                .unwrap_or(SheetState::Visible)
+                .is_visible()
+            {
+                landed = Some(probe as u16);
+                if probe - cur == delta {
+                    break;
+                }
+                // Continue past this visible sheet only if we still
+                // owe more steps in `delta`.  `delta = ±1` short-
+                // circuits above; for ±N we keep stepping.
+                if (probe - cur).signum() != step {
+                    break;
+                }
+            }
+            probe += step;
+        }
+        let Some(next) = landed else {
+            return;
+        };
         let wb = self.wb_mut();
         if next != wb.pointer.sheet.0 {
             wb.pointer = Address::new(SheetId(next), 0, 0);
@@ -3535,6 +3811,7 @@ impl App {
         self.point = Some(PointState {
             anchor: Some(self.wb().pointer),
             pending,
+            typed: String::new(),
         });
         self.mode = Mode::Point;
     }
@@ -3571,17 +3848,55 @@ impl App {
             KeyCode::PageUp => self.move_pointer(0, -20),
             KeyCode::Enter => self.commit_point(),
             KeyCode::Esc => self.esc_in_point(),
-            KeyCode::Char('.') => self.period_in_point(),
+            KeyCode::Backspace => {
+                if let Some(ps) = self.point.as_mut() {
+                    ps.typed.pop();
+                }
+            }
+            // `.` is the anchor-cycle key when no typed range is in
+            // progress, but once the user has started typing a range it
+            // becomes the literal range separator (`A1..D5`).
+            KeyCode::Char('.') => {
+                let typing = self
+                    .point
+                    .as_ref()
+                    .map(|p| !p.typed.is_empty())
+                    .unwrap_or(false);
+                if typing {
+                    if let Some(ps) = self.point.as_mut() {
+                        ps.typed.push('.');
+                    }
+                } else {
+                    self.period_in_point();
+                }
+            }
+            // Any other address-like char extends (or starts) the typed
+            // range buffer. `:` only makes sense after a sheet letter,
+            // so we ignore a leading `:`. `_` is accepted to support
+            // typed range names (Lotus permits `_` inside names).
+            KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == ':' || c == '_' => {
+                if let Some(ps) = self.point.as_mut() {
+                    if !(c == ':' && ps.typed.is_empty()) {
+                        ps.typed.push(c);
+                    }
+                }
+            }
             _ => {}
         }
     }
 
-    /// Esc during POINT: first press unanchors (pointer moves free); second
-    /// press cancels the pending command back to READY.
+    /// Esc during POINT: with a non-empty typed range buffer, first
+    /// clear the buffer (returning to highlight POINT). Otherwise the
+    /// usual cascade — first press unanchors, second cancels back to
+    /// READY.
     fn esc_in_point(&mut self) {
         let Some(ps) = self.point.as_mut() else {
             return;
         };
+        if !ps.typed.is_empty() {
+            ps.typed.clear();
+            return;
+        }
         if ps.anchor.is_some() {
             ps.anchor = None;
         } else {
@@ -3629,17 +3944,48 @@ impl App {
     }
 
     fn commit_point(&mut self) {
+        // Typed range buffer takes precedence over the highlight
+        // anchor+pointer pair. Resolution order: literal address /
+        // range first, then a defined range name (case-insensitive).
+        // Both miss → silent no-op clear-buffer-stay-in-POINT, same
+        // shape as F5 GOTO.
+        let typed_range = match self.point.as_ref() {
+            Some(ps) if !ps.typed.is_empty() => {
+                let default_sheet = self.wb().pointer.sheet;
+                let resolved = Range::parse_with_default_sheet(&ps.typed, default_sheet)
+                    .ok()
+                    .or_else(|| {
+                        self.wb()
+                            .named_ranges
+                            .get(&ps.typed.to_ascii_lowercase())
+                            .copied()
+                    });
+                match resolved {
+                    Some(r) => Some(r),
+                    None => {
+                        if let Some(ps) = self.point.as_mut() {
+                            ps.typed.clear();
+                        }
+                        return;
+                    }
+                }
+            }
+            _ => None,
+        };
         let Some(ps) = self.point.take() else {
             self.mode = Mode::Ready;
             return;
         };
-        let range = match ps.anchor {
-            Some(a) => Range {
-                start: a,
-                end: self.wb_mut().pointer,
-            }
-            .normalized(),
-            None => Range::single(self.wb_mut().pointer),
+        let range = match typed_range {
+            Some(r) => r,
+            None => match ps.anchor {
+                Some(a) => Range {
+                    start: a,
+                    end: self.wb_mut().pointer,
+                }
+                .normalized(),
+                None => Range::single(self.wb_mut().pointer),
+            },
         };
         match ps.pending {
             PendingCommand::RangeErase => {
@@ -3653,17 +3999,16 @@ impl App {
                 self.transition_point(PendingCommand::MoveTo { source: range })
             }
             PendingCommand::CopyTo { source } => {
-                // Destination anchor is the pointer's current position,
-                // regardless of how the TO range was painted — for M3
-                // this is the common case (single-cell destination anchor).
-                let dest = self.wb_mut().pointer;
-                self.execute_copy(source, dest);
-                self.mode = Mode::Ready;
+                if self.execute_copy(source, range) {
+                    self.mode = Mode::Ready;
+                }
+                // On dim-mismatch error, set_error already put the app
+                // in Mode::Error — leave it.
             }
             PendingCommand::MoveTo { source } => {
-                let dest = self.wb_mut().pointer;
-                self.execute_move(source, dest);
-                self.mode = Mode::Ready;
+                if self.execute_move(source, range) {
+                    self.mode = Mode::Ready;
+                }
             }
             PendingCommand::RangeLabel { new_prefix } => {
                 self.execute_range_label(range, new_prefix);
@@ -3680,6 +4025,9 @@ impl App {
             PendingCommand::RangeNameCreate => {
                 if let Some(name) = self.pending_name.take() {
                     let _ = self.wb_mut().engine.define_name(&name, range);
+                    self.wb_mut()
+                        .named_ranges
+                        .insert(name.to_ascii_lowercase(), range);
                     self.wb_mut().engine.recalc();
                     self.refresh_formula_caches();
                 }
@@ -4141,6 +4489,9 @@ impl App {
             PromptNext::RangeNameDelete => {
                 if !p.buffer.is_empty() {
                     let _ = self.wb_mut().engine.delete_name(&p.buffer);
+                    self.wb_mut()
+                        .named_ranges
+                        .remove(&p.buffer.to_ascii_lowercase());
                     self.wb_mut().engine.recalc();
                     self.refresh_formula_caches();
                 }
@@ -4433,40 +4784,90 @@ impl App {
         };
         self.wb_mut().pointer = source_tl;
         self.scroll_into_view();
+        // Copy/Move TO start with no anchor so the user's pointer
+        // movement defaults to a single-cell destination (matches the
+        // M3 single-anchor flow). Pressing `.` anchors a multi-cell TO,
+        // which is what the Lotus tutorial "single source → fill multi
+        // destination" replicate flow needs.
+        let anchor = match next {
+            PendingCommand::CopyTo { .. } | PendingCommand::MoveTo { .. } => None,
+            _ => Some(self.wb().pointer),
+        };
         self.point = Some(PointState {
-            anchor: Some(self.wb_mut().pointer),
+            anchor,
             pending: next,
+            typed: String::new(),
         });
         // mode stays POINT
     }
 
-    fn execute_copy(&mut self, source: Range, dest_anchor: Address) {
-        let src_cells = self.collect_cells_in_range(source);
-        self.write_cells_at_offset(&src_cells, source.start, dest_anchor);
+    /// Apply the Lotus-tutorial /Copy dimension matrix:
+    /// - single source × any-size dest → replicate the cell into every
+    ///   dest position (including across all dest sheets for 3D dest)
+    /// - multi source × single-cell dest → paste source block at dest's
+    ///   top-left
+    /// - source and dest same dimensions → cell-for-cell paste at
+    ///   dest.start
+    /// - both multi-cell with different dimensions → predictable error,
+    ///   no mutation
+    ///
+    /// Returns `false` on the dimension-mismatch error path so the
+    /// caller can preserve the error mode instead of bouncing back to
+    /// READY.
+    fn execute_copy(&mut self, source: Range, dest_range: Range) -> bool {
+        let src = source.normalized();
+        let dest = dest_range.normalized();
+        let anchors = match copy_paste_anchors(src, dest) {
+            Ok(a) => a,
+            Err(msg) => {
+                self.set_error(msg);
+                return false;
+            }
+        };
+        let src_cells = self.collect_cells_in_range(src);
+        for anchor in anchors {
+            self.write_cells_at_offset(&src_cells, src.start, anchor);
+        }
         self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
+        true
     }
 
-    fn execute_move(&mut self, source: Range, dest_anchor: Address) {
-        let src_cells = self.collect_cells_in_range(source);
-        self.write_cells_at_offset(&src_cells, source.start, dest_anchor);
-        // Clear the source cells (but only ones not overlapping the destination).
-        let dest_range = Range {
+    /// Same dim-rule contract as [`execute_copy`] but never replicates
+    /// a single source — /Move is always 1:1 in Lotus.
+    fn execute_move(&mut self, source: Range, dest_range: Range) -> bool {
+        let src = source.normalized();
+        let dest = dest_range.normalized();
+        let src_cols = u32::from(src.end.col - src.start.col + 1);
+        let src_rows = src.end.row - src.start.row + 1;
+        let dst_cols = u32::from(dest.end.col - dest.start.col + 1);
+        let dst_rows = dest.end.row - dest.start.row + 1;
+        let same_size = src_cols == dst_cols && src_rows == dst_rows;
+        let single_dest = dst_cols == 1 && dst_rows == 1;
+        if !same_size && !single_dest {
+            self.set_error("Move: source and destination ranges have different sizes");
+            return false;
+        }
+        let src_cells = self.collect_cells_in_range(src);
+        let dest_anchor = Address::new(dest.start.sheet, dest.start.col, dest.start.row);
+        self.write_cells_at_offset(&src_cells, src.start, dest_anchor);
+        let dest_block = Range {
             start: dest_anchor,
             end: Address::new(
                 dest_anchor.sheet,
-                dest_anchor.col + (source.end.col - source.start.col),
-                dest_anchor.row + (source.end.row - source.start.row),
+                dest_anchor.col + (src.end.col - src.start.col),
+                dest_anchor.row + (src.end.row - src.start.row),
             ),
         };
-        for (src, _) in &src_cells {
-            if !dest_range.contains(*src) {
-                self.wb_mut().cells.remove(src);
-                let _ = self.wb_mut().engine.clear_cell(*src);
+        for (s, _) in &src_cells {
+            if !dest_block.contains(*s) {
+                self.wb_mut().cells.remove(s);
+                let _ = self.wb_mut().engine.clear_cell(*s);
             }
         }
         self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
+        true
     }
 
     fn collect_cells_in_range(&self, range: Range) -> Vec<(Address, CellContents)> {
@@ -4483,23 +4884,33 @@ impl App {
         out
     }
 
-    /// Write cells to their new positions offset so that `src_origin` maps
-    /// to `dest_anchor`. Formulas are pushed as-is (reference adjustment on
-    /// copy is deferred to a later cycle).
+    /// Write cells to their new positions, offset so `src_origin` maps
+    /// to `dest_anchor`. Formula references in copied cells shift by
+    /// the same `(dx, dy)` so the new formulas refer to cells in the
+    /// same relative positions as the originals.
     fn write_cells_at_offset(
         &mut self,
         cells: &[(Address, CellContents)],
         src_origin: Address,
         dest_anchor: Address,
     ) {
+        let dx = dest_anchor.col as i32 - src_origin.col as i32;
+        let dy = dest_anchor.row as i32 - src_origin.row as i32;
         for (src, contents) in cells {
             let dst = Address::new(
                 dest_anchor.sheet,
                 dest_anchor.col + (src.col - src_origin.col),
                 dest_anchor.row + (src.row - src_origin.row),
             );
-            self.wb_mut().cells.insert(dst, contents.clone());
-            self.push_to_engine_at(dst, contents);
+            let to_write = match contents {
+                CellContents::Formula { expr, .. } => CellContents::Formula {
+                    expr: l123_parse::shift_refs(expr, dx, dy),
+                    cached_value: None,
+                },
+                other => other.clone(),
+            };
+            self.wb_mut().cells.insert(dst, to_write.clone());
+            self.push_to_engine_at(dst, &to_write);
         }
     }
 
@@ -4781,23 +5192,41 @@ impl App {
         }
         let content_width = area.width - ROW_GUTTER;
         let visible_rows = (area.height - 1) as u32;
+        // Frozen rows occupy the top of the body region; only the
+        // remaining rows can scroll, so the effective scrolling
+        // capacity shrinks by the frozen-row count when computing
+        // viewport_row_offset.  When the pointer sits inside the
+        // frozen prefix it never needs scroll.
+        let sheet = self.wb().pointer.sheet;
+        let frozen_rows: u32 = self.wb().frozen.get(&sheet).map(|f| f.0).unwrap_or(0);
+        let frozen_cols: u16 = self.wb().frozen.get(&sheet).map(|f| f.1).unwrap_or(0);
 
         let pointer_row = self.wb().pointer.row;
-        if pointer_row >= self.wb().viewport_row_offset + visible_rows {
-            self.wb_mut().viewport_row_offset = pointer_row - visible_rows + 1;
+        if pointer_row >= frozen_rows {
+            let scrolling_rows = visible_rows.saturating_sub(frozen_rows).max(1);
+            let effective_offset = self.wb().viewport_row_offset.max(frozen_rows);
+            if pointer_row >= effective_offset + scrolling_rows {
+                self.wb_mut().viewport_row_offset = pointer_row - scrolling_rows + 1;
+            }
         }
 
-        let sheet = self.wb().pointer.sheet;
         let pointer_col = self.wb().pointer.col;
-        if !self.wb().hidden_cols.contains(&(sheet, pointer_col)) {
+        if pointer_col >= frozen_cols && !self.wb().hidden_cols.contains(&(sheet, pointer_col)) {
             let actual_w = self.col_width_of(sheet, pointer_col) as u16;
             let layout = self.visible_column_layout(content_width);
             let fully_visible = layout
                 .iter()
                 .any(|&(c, _, drawn)| c == pointer_col && drawn == actual_w);
             if !fully_visible {
-                self.wb_mut().viewport_col_offset =
-                    self.ideal_left_for_rightmost(pointer_col, content_width);
+                let frozen_width: u16 = (0..frozen_cols)
+                    .filter(|c| !self.wb().hidden_cols.contains(&(sheet, *c)))
+                    .map(|c| self.col_width_of(sheet, c) as u16)
+                    .sum();
+                let scrolling_width = content_width.saturating_sub(frozen_width).max(1);
+                let new_offset = self
+                    .ideal_left_for_rightmost(pointer_col, scrolling_width)
+                    .max(frozen_cols);
+                self.wb_mut().viewport_col_offset = new_offset;
             }
         }
     }
@@ -5663,12 +6092,18 @@ impl App {
         let Some(ps) = self.point.as_ref() else {
             return (Line::from(""), Line::from(""));
         };
-        let range = self.highlight_range();
-        let range_str = format!(
-            "{}..{}",
-            range.start.display_full(),
-            range.end.display_full()
-        );
+        // If the user is typing a literal range, show the buffer
+        // verbatim — it replaces the auto-derived highlight string.
+        let range_str = if ps.typed.is_empty() {
+            let range = self.highlight_range();
+            format!(
+                "{}..{}",
+                range.start.display_full(),
+                range.end.display_full()
+            )
+        } else {
+            ps.typed.clone()
+        };
         let line3_text = format!(" {} {}", ps.pending.prompt(), range_str);
         (Line::from(""), Line::from(line3_text))
     }
@@ -5788,8 +6223,31 @@ impl App {
             return out;
         }
         let sheet = self.wb().pointer.sheet;
+        let frozen_cols = self.wb().frozen.get(&sheet).map(|f| f.1).unwrap_or(0);
         let mut x_off: u16 = 0;
-        let mut col = self.wb().viewport_col_offset;
+        // Emit the frozen columns first at fixed positions starting
+        // from x_off = 0, regardless of viewport_col_offset.
+        for col in 0..frozen_cols {
+            let hidden = self.wb().hidden_cols.contains(&(sheet, col));
+            let w = self.col_width_of(sheet, col) as u16;
+            if hidden || w == 0 {
+                continue;
+            }
+            let remaining = content_width.saturating_sub(x_off);
+            if remaining == 0 {
+                return out;
+            }
+            let drawn = w.min(remaining);
+            out.push((col, x_off, drawn));
+            x_off = x_off.saturating_add(drawn);
+            if x_off >= content_width {
+                return out;
+            }
+        }
+        // Then emit the scrolling columns, starting at the greater of
+        // the user's scroll offset and `frozen_cols` (so a user who
+        // scrolled into the frozen range conceptually clamps back).
+        let mut col = self.wb().viewport_col_offset.max(frozen_cols);
         loop {
             let hidden = self.wb().hidden_cols.contains(&(sheet, col));
             let w = self.col_width_of(sheet, col) as u16;
@@ -5811,6 +6269,39 @@ impl App {
                 break;
             }
             col += 1;
+        }
+        out
+    }
+
+    /// Visible body rows as `(row_idx, y_off_from_first_data_row)`.
+    /// Frozen rows come first at fixed positions; scrolling rows
+    /// follow, starting at `max(viewport_row_offset, frozen_rows)`.
+    /// Each entry consumes one row in the buffer (cells are 1 line
+    /// tall in this TUI), so `y_off` doubles as the row index within
+    /// the body region.
+    fn visible_row_layout(&self, body_rows: u16) -> Vec<(u32, u16)> {
+        let mut out = Vec::new();
+        if body_rows == 0 {
+            return out;
+        }
+        let sheet = self.wb().pointer.sheet;
+        let frozen_rows: u32 = self.wb().frozen.get(&sheet).map(|f| f.0).unwrap_or(0);
+        let mut y_off: u16 = 0;
+        for row in 0..frozen_rows {
+            if y_off >= body_rows {
+                return out;
+            }
+            out.push((row, y_off));
+            y_off += 1;
+        }
+        let mut row = (self.wb().viewport_row_offset as u64).max(frozen_rows as u64) as u32;
+        while y_off < body_rows {
+            out.push((row, y_off));
+            y_off += 1;
+            row = row.saturating_add(1);
+            if row == u32::MAX {
+                break;
+            }
         }
         out
     }
@@ -5839,9 +6330,11 @@ impl App {
                 .set_style(header_style);
         }
 
-        // Body rows
-        for r in 0..visible_rows {
-            let row_idx = self.wb().viewport_row_offset + r as u32;
+        // Body rows: frozen rows pinned at the top, then scrolling
+        // rows starting at the viewport offset (clamped to skip past
+        // the frozen prefix).
+        let row_layout = self.visible_row_layout(visible_rows);
+        for &(row_idx, r) in &row_layout {
             let y = area.y + 1 + r;
             // Row number gutter
             let label = format!("{:>width$}", row_idx + 1, width = (ROW_GUTTER - 1) as usize);
@@ -5870,6 +6363,17 @@ impl App {
                 .iter()
                 .map(|&(col_idx, _, w)| {
                     let addr = Address::new(sheet, col_idx, row_idx);
+                    // Non-anchor cells of a merge render as a blank
+                    // Rendered slot — blocks label-spill from
+                    // neighbors and keeps the spill planner from
+                    // double-painting over the merge area.  The
+                    // anchor's content is repainted across the merge
+                    // span by a dedicated pass after this loop.
+                    if let Some(m) = self.wb().merge_at(addr) {
+                        if !m.is_anchor(addr) {
+                            return RowInput::Rendered(" ".repeat(w as usize));
+                        }
+                    }
                     // xlsx-set horizontal alignment overrides the 1-2-3
                     // default (label-prefix for labels, right for
                     // numbers / booleans / errors). HAlign::General
@@ -6040,6 +6544,100 @@ impl App {
                 buf[(bx, y)]
                     .set_char(COMMENT_MARKER)
                     .set_style(Style::default().bg(bg).fg(Color::Red));
+            }
+
+            // Fourth pass: merge anchor expansion.  For each merge
+            // whose top-left anchor sits on this row and is visible
+            // in the current layout, repaint the anchor's content
+            // across the merge's column span — overwriting the blank
+            // non-anchor slots prepared by the row-input builder.
+            // Multi-row merges only expand on the anchor's row;
+            // subsequent rows of the merge stay blank (top-aligned,
+            // matching Excel's default vertical alignment).
+            if let Some(merge_list) = self.wb().merges.get(&sheet) {
+                for m in merge_list {
+                    if m.anchor.row != row_idx {
+                        continue;
+                    }
+                    // Look up the anchor's slot in the current layout;
+                    // bail if it's not visible.
+                    let Some(anchor_idx) = layout.iter().position(|(c, _, _)| *c == m.anchor.col)
+                    else {
+                        continue;
+                    };
+                    let (_, anchor_x_off, _) = layout[anchor_idx];
+                    // Sum widths of every visible column from anchor
+                    // through the merge's end (clamped to viewport).
+                    let span_w: u16 = layout
+                        .iter()
+                        .filter(|(c, _, _)| *c >= m.anchor.col && *c <= m.end.col)
+                        .map(|(_, _, w)| *w)
+                        .sum();
+                    if span_w == 0 {
+                        continue;
+                    }
+                    // Render the anchor's content at the wider width.
+                    let halign = self
+                        .wb()
+                        .cell_alignments
+                        .get(&m.anchor)
+                        .map(|a| a.horizontal)
+                        .unwrap_or(HAlign::General);
+                    let painted_text = match self.wb().cells.get(&m.anchor) {
+                        None | Some(CellContents::Empty) => " ".repeat(span_w as usize),
+                        Some(CellContents::Label { prefix, text }) => {
+                            let eff_prefix =
+                                halign_to_label_prefix(halign).unwrap_or(*prefix);
+                            render_label(eff_prefix, text, span_w as usize)
+                        }
+                        Some(other) => {
+                            let fmt = self.format_for_cell(m.anchor);
+                            let s = render_own_width(other, span_w as usize, fmt);
+                            apply_halign_to_rendered(&s, halign, span_w as usize)
+                        }
+                    };
+                    // Build the anchor's full visual style — same
+                    // layering as the cell-paint loop: pointer
+                    // suppresses fill/font; text-style modifiers
+                    // always apply.  The pointer-on-anchor case keeps
+                    // the wide span REVERSED across the whole merge.
+                    let anchor_highlighted = highlight.contains(m.anchor);
+                    let mut astyle = if anchor_highlighted {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    if !anchor_highlighted {
+                        if let Some(fill) = self.wb().cell_fills.get(&m.anchor) {
+                            if let Some(rgb) = fill.bg {
+                                astyle = astyle.bg(Color::Rgb(rgb.r, rgb.g, rgb.b));
+                            }
+                        }
+                        if let Some(fs) = self.wb().cell_font_styles.get(&m.anchor) {
+                            if let Some(rgb) = fs.color {
+                                astyle = astyle.fg(Color::Rgb(rgb.r, rgb.g, rgb.b));
+                            }
+                        }
+                    }
+                    if let Some(fs) = self.wb().cell_font_styles.get(&m.anchor) {
+                        if fs.strike {
+                            astyle = astyle.add_modifier(Modifier::CROSSED_OUT);
+                        }
+                    }
+                    if let Some(ts) = self.wb().cell_text_styles.get(&m.anchor).copied() {
+                        astyle = astyle.add_modifier(text_style_modifier(ts));
+                    }
+                    let x = area.x + ROW_GUTTER + anchor_x_off;
+                    let mut printed = 0u16;
+                    for ch in painted_text.chars().take(span_w as usize) {
+                        buf[(x + printed, y)].set_char(ch).set_style(astyle);
+                        printed += 1;
+                    }
+                    while printed < span_w {
+                        buf[(x + printed, y)].set_char(' ').set_style(astyle);
+                        printed += 1;
+                    }
+                }
             }
         }
     }
@@ -6401,6 +6999,55 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.wb().pointer, Address::A1);
         assert_eq!(app.mode, Mode::Ready);
+    }
+
+    #[test]
+    fn typed_point_range_commits() {
+        let mut app = App::new();
+        // /Range Erase enters POINT in one step.
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Point);
+        for c in "B2..D4".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+        assert_eq!(app.wb().pointer, Address::A1);
+    }
+
+    #[test]
+    fn typed_point_esc_clears_buffer_first() {
+        let mut app = App::new();
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE));
+        for c in "B2".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Point);
+        assert!(app.point.as_ref().unwrap().typed.is_empty());
+        // Two more Esc presses to fully cancel (un-anchor, then exit).
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Point);
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    #[test]
+    fn typed_point_bad_input_stays_in_point() {
+        let mut app = App::new();
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE));
+        for c in "WAT".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Point);
+        assert!(app.point.as_ref().unwrap().typed.is_empty());
     }
 
     #[test]

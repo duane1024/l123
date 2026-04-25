@@ -1,0 +1,142 @@
+# Typed range input during POINT mode (SPEC §9.4).
+# In POINT for any range-asking command, the user can type a
+# Lotus-style range address (e.g. `c8..d12`) and press Enter to
+# commit it, replacing the auto-painted highlight.
+
+# Seed values so format changes are visible.
+KEYS 1.6
+ENTER
+DOWN
+KEYS 2.7
+ENTER
+
+# Path 1: typed range commits the format command.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+ASSERT_MODE       POINT
+KEYS A1..A2
+ASSERT_PANEL_L3   A1..A2
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (F0) 1.6
+ASSERT_CELL       A:A1  2
+ASSERT_CELL       A:A2  3
+
+# Path 2: reverse corners normalize. Commands run without panic.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 1
+ENTER
+ASSERT_MODE       POINT
+KEYS B3..A2
+ASSERT_PANEL_L3   B3..A2
+ENTER
+ASSERT_MODE       READY
+
+# Path 3: Esc with non-empty typed buffer clears the buffer and
+# returns to highlight POINT (does NOT cancel back to READY).
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+ASSERT_MODE       POINT
+KEYS A1..C3
+ASSERT_PANEL_L3   A1..C3
+ESC
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   A:A1..A:A1
+# Second Esc cancels (existing behavior).
+ESC
+ASSERT_MODE       POINT
+ESC
+ASSERT_MODE       READY
+
+# Path 4: Backspace edits the typed buffer.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+KEYS A1..A2X
+ASSERT_PANEL_L3   A1..A2X
+BACKSPACE
+ASSERT_PANEL_L3   A1..A2
+ENTER
+ASSERT_MODE       READY
+
+# Path 5: bad input on Enter is a silent no-op — stays in POINT,
+# buffer is cleared so the user can retype.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+KEYS WAT
+ASSERT_PANEL_L3   WAT
+ENTER
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   A:A1..A:A1
+# Recover by typing a valid address.
+KEYS A1
+ENTER
+ASSERT_MODE       READY
+
+# Path 6: lowercase letters are accepted (parser uppercases).
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+KEYS c2
+ASSERT_PANEL_L3   c2
+ENTER
+ASSERT_MODE       READY
+
+# Path 7: existing pointer-highlight POINT (no typed buffer)
+# behaves exactly as before — arrows paint, Enter commits.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+RIGHT
+RIGHT
+ASSERT_PANEL_L3   A:A1..A:C1
+ENTER
+ASSERT_MODE       READY
+
+# Path 8: '.' as the first POINT keystroke still toggles the anchor
+# (not appended to the typed buffer). Anchor toggle in single-cell
+# state moves the anchor onto the pointer — observable by then
+# moving and seeing the highlight grow from A1.
+HOME
+KEY /
+KEY R
+KEY F
+KEY F
+KEY 0
+ENTER
+KEY .
+RIGHT
+ASSERT_PANEL_L3   A:A1..A:B1
+ENTER
+ASSERT_MODE       READY

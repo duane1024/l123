@@ -1,0 +1,28 @@
+# xlsx-imported tables (named ranges with header / autofilter / totals
+# metadata) round-trip into L123's `tables` map.  v1 doesn't render
+# any filter UI yet — this transcript proves the data flows from
+# xlsx → engine → UI.
+#
+# Fixture: tests/acceptance/fixtures/xlsx/tables.xlsx
+#   A1..D3 — a 4x3 table named `Table1` with header row Year/Q1/Q2/Q3.
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/tables.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Cell content survived load (sanity).
+ASSERT_CELL      A:A1   Year
+ASSERT_CELL      A:B1   Q1
+ASSERT_CELL      A:D2   120
+
+# The `Table1` definition is in the workbook's tables map on sheet A.
+ASSERT_TABLES    A      Table1
+# Sheet B doesn't exist on this fixture, so its table list is empty.
+ASSERT_TABLES    B      none
