@@ -9,20 +9,23 @@ workflows carry forward.
 ## Executable Transcripts
 
 - `T01_tutorial_labels_and_fast_entry.tsv` covers Lesson 3 label entry,
-  long-label storage, auto apostrophe prefix, F5 GOTO, and pointer-key
-  commit.
+  long-label storage, auto apostrophe prefix, F5 GOTO, F2
+  cursor-position editing, and pointer-key commit.
 - `T02_tutorial_values_erase_and_repeating_label.tsv` covers Lesson 4
   value entry, typed range erase, repeating labels, single-cell-to-range
-  copy, and named ranges as command range input.
+  copy, named ranges as command range input, and F3 NAMES selection from
+  a command range prompt.
 - `T03_tutorial_calculation_and_named_ranges.tsv` covers Lesson 5
   arithmetic formulas, `@SUM`, recalculation, relative-reference formula
-  copy, typed range-name creation, and named ranges in formulas.
+  copy, typed range-name creation, F3 GOTO by name, and named ranges in
+  formulas.
 - `T04_tutorial_formatting_and_printing.tsv` covers Lesson 6 range
-  formatting by typed range, global column width, centered labels, row
-  insertion, and print-to-file output.
+  formatting by typed range, automatic currency/comma format inference,
+  global column width, centered labels, row insertion, and multi-range
+  print-to-file output.
 - `T05_tutorial_graph_setup_view_save.tsv` covers Lesson 7 graph data
-  ranges by typed range, X labels, graph type switching, graph view, and
-  graph save.
+  ranges and X labels selected by F3 NAMES, graph type switching, graph
+  view, and graph save.
 - `T06_tutorial_multiple_sheets_group_and_3d.tsv` covers Lessons 10-11
   sheet insertion/navigation, 3D copy destinations, GROUP formatting,
   and 3D `@SUM`.
@@ -31,12 +34,10 @@ workflows carry forward.
 
 ## Tutorial Areas Excluded Until Implemented
 
-- Cursor-position editing inside EDIT prompts.
-- Comma-separated ranges and F3 name-list selection inside POINT prompts.
 - Worksheet perspective/window views and physical printer background
   behavior.
-- Automatic formatting inferred from typed currency/comma/percent
-  literals.
+- Formula entry by pointer-splicing range arguments.
+- 3D print ranges.
 - Graph titles, legends, options, group assignment, and named graphs.
 - Data Sort, Query, Fill, Table, Distribution, Regression, and Parse.
 - Cross-file formula links, File Admin Link-Refresh, and selective

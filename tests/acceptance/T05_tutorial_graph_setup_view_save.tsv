@@ -44,25 +44,52 @@ RIGHT
 KEYS 8000
 ENTER
 
-# /Graph A selects the COG data range B13..E13 by typed range input.
+# Name the graph data and X-label ranges so the graph commands can use
+# F3 NAMES selection from their POINT prompts.
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS cog
+ENTER
+ASSERT_MODE        POINT
+KEYS B13..E13
+ENTER
+ASSERT_MODE        READY
+
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS quarters
+ENTER
+ASSERT_MODE        POINT
+KEYS B3..E3
+ENTER
+ASSERT_MODE        READY
+
+# /Graph A selects the COG data range B13..E13 via F3 NAMES.
 KEY /
 KEY G
 KEY A
 ASSERT_MODE        POINT
 ASSERT_PANEL_L3    Enter graph range
-KEYS B13..E13
-ASSERT_PANEL_L3    B13..E13
+F 3
+ASSERT_MODE        NAMES
+ASSERT_SCREEN      cog
 ENTER
 ASSERT_MODE        READY
 ASSERT_GRAPH_SERIES A  A:B13..A:E13
 
-# /Graph X selects the quarter labels B3..E3.
+# /Graph X selects the quarter labels B3..E3 via F3 NAMES.
 KEY /
 KEY G
 KEY X
 ASSERT_MODE        POINT
-KEYS B3..E3
-ASSERT_PANEL_L3    B3..E3
+F 3
+ASSERT_MODE        NAMES
+ASSERT_SCREEN      quarters
+DOWN
 ENTER
 ASSERT_MODE        READY
 ASSERT_GRAPH_SERIES X  A:B3..A:E3

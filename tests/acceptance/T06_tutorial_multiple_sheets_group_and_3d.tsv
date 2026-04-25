@@ -3,7 +3,7 @@
 # refer to a range spanning worksheets.
 #
 # Unsupported tutorial subflows intentionally not covered here:
-# perspective view and multi-range/3D print ranges.
+# perspective view and 3D print ranges.
 
 # Seed a tiny template on sheet A before creating the other worksheets.
 KEYS Store Template

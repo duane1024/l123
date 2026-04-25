@@ -5409,7 +5409,7 @@ impl App {
             pending: next,
             typed: String::new(),
         });
-        // mode stays POINT
+        self.mode = Mode::Point;
     }
 
     /// Apply the Lotus-tutorial /Copy dimension matrix:

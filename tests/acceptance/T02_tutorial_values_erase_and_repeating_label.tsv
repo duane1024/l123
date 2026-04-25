@@ -128,7 +128,8 @@ ASSERT_CELL       A:E4  ---------
 ASSERT_CELL       A:F4  ---------
 
 # Name the full separator line and use the name as the /Copy FROM
-# range, matching the later Lesson 4 workflow.
+# range, matching the later Lesson 4 workflow. The second copy uses
+# F3 NAMES selection from the FROM prompt.
 KEY /
 KEY R
 KEY N
@@ -157,8 +158,10 @@ ASSERT_CELL       A:F13  ---------
 
 KEY /
 KEY C
-KEYS LINE
-ASSERT_PANEL_L3   LINE
+ASSERT_MODE       POINT
+F 3
+ASSERT_MODE       NAMES
+ASSERT_SCREEN     line
 ENTER
 ASSERT_MODE       POINT
 KEYS A15

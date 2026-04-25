@@ -4,7 +4,6 @@
 # of a physical printer.
 #
 # Unsupported tutorial subflows intentionally not covered here:
-# automatic formatting from typed currency/comma literals and
 # /Print Printer Line/Page/background printer behavior.
 
 SIZE 120 25
@@ -36,15 +35,15 @@ DOWN
 DOWN
 KEYS Net Sales
 RIGHT
-KEYS 12000
+KEYS $12,000.00
 RIGHT
-KEYS 19000
+KEYS $19,000.00
 RIGHT
-KEYS 16000
+KEYS $16,000.00
 RIGHT
-KEYS 22000
+KEYS $22,000.00
 RIGHT
-KEYS 69000
+KEYS $69,000.00
 ENTER
 
 HOME
@@ -57,11 +56,15 @@ DOWN
 KEYS Costs and Expenses:
 ENTER
 
-# Currency-format the Net Sales row by typing the range at the POINT prompt.
+# The typed currency/comma literals inferred Currency 2 formatting.
 F 5
 KEYS B5
 ENTER
 ASSERT_POINTER    A:B5
+ASSERT_PANEL_L1   A:B5: (C2) 12000
+ASSERT_CELL       A:B5  $12000.00
+
+# Currency-format the Net Sales row by typing the range at the POINT prompt.
 KEY /
 KEY R
 KEY F
@@ -134,8 +137,9 @@ DOWN
 DOWN
 ASSERT_PANEL_L1   Costs and Expenses:
 
-# Print A1..F8 to a text file, matching the tutorial's print-range flow
-# but using /Print File for deterministic headless verification.
+# Print two worksheet ranges to a text file, matching the tutorial's
+# print-range flow but using /Print File for deterministic headless
+# verification.
 HOME
 KEY /
 KEY P
@@ -146,8 +150,8 @@ ENTER
 ASSERT_PANEL_L2   Range
 KEY R
 ASSERT_MODE       POINT
-KEYS A1..F8
-ASSERT_PANEL_L3   A1..F8
+KEYS A1..F5,A8..F8
+ASSERT_PANEL_L3   A1..F5,A8..F8
 ENTER
 ASSERT_PANEL_L2   Go
 KEY G
@@ -156,3 +160,4 @@ ASSERT_MODE       READY
 ASSERT_FILE_CONTAINS  $TMPDIR/tutorial_lesson6.prn  INCOME ST
 ASSERT_FILE_CONTAINS  $TMPDIR/tutorial_lesson6.prn  Q1
 ASSERT_FILE_CONTAINS  $TMPDIR/tutorial_lesson6.prn  $12000.00
+ASSERT_FILE_CONTAINS  $TMPDIR/tutorial_lesson6.prn  Costs and

@@ -1,9 +1,6 @@
 # Tutorial Chapter 1, Lesson 3: labels, long-label storage,
-# default apostrophe prefix, F5 GOTO, and pointer-key commit while
-# entering quarter headings.
-#
-# Unsupported tutorial subflows intentionally not covered here:
-# cursor-position editing inside F2 EDIT mode.
+# default apostrophe prefix, F5 GOTO, F2 cursor-position editing, and
+# pointer-key commit while entering quarter headings.
 
 ASSERT_POINTER    A:A1
 
@@ -32,9 +29,31 @@ ASSERT_PANEL_L3   Enter address to go to
 KEYS A5
 ENTER
 ASSERT_POINTER    A:A5
-KEYS Net Sales
+KEYS Net Slaes
 ENTER
 ASSERT_POINTER    A:A5
+ASSERT_CELL       A:A5  Net Slaes
+
+# Correct the transposed label in EDIT mode: move the cursor inside the
+# stored label, delete the misplaced `l`, then insert it after `a`.
+F 2
+ASSERT_MODE       EDIT
+ASSERT_PANEL_L2   'Net Slaes
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_ENTRY_CURSOR 6
+DEL
+ASSERT_PANEL_L2   'Net Saes
+RIGHT
+KEY l
+ASSERT_PANEL_L2   'Net Sales
+ENTER
+ASSERT_MODE       READY
 ASSERT_CELL       A:A5  Net Sales
 
 # Quarter labels use pointer-key commit: RIGHT stores the current

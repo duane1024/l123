@@ -3,7 +3,7 @@
 # relative references, and using a range name in a formula.
 #
 # Unsupported tutorial subflows intentionally not covered here:
-# formula entry by pointer-splicing the range argument and F3 NAME list.
+# formula entry by pointer-splicing the range argument.
 
 # Net Sales figures B5..E5, used later by QTRLY_NETSALES.
 HOME
@@ -210,6 +210,16 @@ KEYS B5..E5
 ASSERT_PANEL_L3   B5..E5
 ENTER
 ASSERT_MODE       READY
+
+# F5 GOTO + F3 NAMES can jump to the named range's first cell.
+F 5
+ASSERT_PANEL_L3   Enter address to go to
+F 3
+ASSERT_MODE       NAMES
+ASSERT_SCREEN     qtrly_netsales
+ENTER
+ASSERT_MODE       READY
+ASSERT_POINTER    A:B5
 
 F 5
 KEYS F5
