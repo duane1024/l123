@@ -1,0 +1,9 @@
+# Parens around a number negate without implying Currency or Comma:
+# `(123)` stores -123 with no format override (General readout).
+
+KEYS (123)
+ENTER
+HOME
+
+ASSERT_PANEL_L1   A:A1: (G) -123
+ASSERT_CELL       A:A1  -123

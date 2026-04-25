@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# See `l123-engine/Cargo.toml` for what this enables and the
+# additional manual step it requires.
+wk3 = ["l123-engine/wk3"]
+
 [dependencies]
 l123-core = { workspace = true }
 l123-engine = { workspace = true }

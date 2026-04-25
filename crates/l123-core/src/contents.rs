@@ -3,7 +3,7 @@
 //! SPEC §16. `Label` preserves its prefix (for round-trip and display);
 //! `Constant` carries a pure value; `Formula` is introduced in M2.
 
-use crate::{label::is_value_starter, LabelPrefix, Value};
+use crate::{format::Format, label::is_value_starter, LabelPrefix, Value};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum CellContents {
@@ -84,31 +84,160 @@ impl CellContents {
     /// Formulas (leading `+`/`@` that don't parse as numbers) land in M2;
     /// for now they become labels, which is safe and reversible.
     pub fn from_source(s: &str, default_prefix: LabelPrefix) -> CellContents {
+        Self::from_source_with_format(s, default_prefix).0
+    }
+
+    /// Like [`Self::from_source`] but also returns the inferred display
+    /// format for typed-value patterns (e.g. `$1234` → Currency 0).
+    /// Returns `None` for the format when no Lotus-style markers were
+    /// present, so the caller can leave any pre-existing cell format
+    /// intact.
+    pub fn from_source_with_format(
+        s: &str,
+        default_prefix: LabelPrefix,
+    ) -> (CellContents, Option<Format>) {
         let mut chars = s.chars();
         match chars.next() {
-            None => CellContents::Empty,
+            None => (CellContents::Empty, None),
             Some(c) if matches!(c, '\'' | '"' | '^' | '\\') => {
                 let prefix = LabelPrefix::from_char(c).expect("matched above");
-                CellContents::Label {
-                    prefix,
-                    text: chars.collect(),
-                }
+                (
+                    CellContents::Label {
+                        prefix,
+                        text: chars.collect(),
+                    },
+                    None,
+                )
             }
-            Some(c) if is_value_starter(c) => match s.parse::<f64>() {
-                Ok(n) => CellContents::Constant(Value::Number(n)),
-                // Anything else starting with a value-starter is a formula.
-                // The engine integration layer computes `cached_value`.
-                Err(_) => CellContents::Formula {
-                    expr: s.to_string(),
-                    cached_value: None,
+            Some(c) if is_value_starter(c) => match parse_typed_value(s) {
+                Some(iv) => (CellContents::Constant(Value::Number(iv.number)), iv.format),
+                None => (
+                    CellContents::Formula {
+                        expr: s.to_string(),
+                        cached_value: None,
+                    },
+                    None,
+                ),
+            },
+            Some(_) => (
+                CellContents::Label {
+                    prefix: default_prefix,
+                    text: s.to_string(),
                 },
-            },
-            Some(_) => CellContents::Label {
-                prefix: default_prefix,
-                text: s.to_string(),
-            },
+                None,
+            ),
         }
     }
+}
+
+/// Outcome of [`parse_typed_value`]: a numeric value plus the display
+/// format implied by the source markers (`$`, `%`, thousands `,`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InferredValue {
+    pub number: f64,
+    /// `None` when no format-bearing markers were present (plain number).
+    pub format: Option<Format>,
+}
+
+/// Parse a Lotus-style typed value: plain number, currency (`$1234`),
+/// percent (`12%`), thousands-separated (`1,234`), parenthesized
+/// negative (`(123)`), or any combination thereof. Returns `None` for
+/// inputs that aren't numeric (formulas, garbage, empty).
+pub fn parse_typed_value(s: &str) -> Option<InferredValue> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let mut t = s;
+    let mut negate = false;
+    let mut is_currency = false;
+    let mut is_percent = false;
+    let mut had_commas = false;
+
+    // Outer parens → negate (handles `(123)` and similar).
+    if let Some(inner) = t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        negate = !negate;
+        t = inner.trim();
+    }
+
+    // Leading sign.
+    if let Some(rest) = t.strip_prefix('-') {
+        negate = !negate;
+        t = rest.trim_start();
+    } else if let Some(rest) = t.strip_prefix('+') {
+        t = rest.trim_start();
+    }
+
+    // Leading `$`.
+    if let Some(rest) = t.strip_prefix('$') {
+        is_currency = true;
+        t = rest.trim_start();
+    }
+
+    // A second paren strip after `$` to handle `$(50)`.
+    if let Some(inner) = t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        negate = !negate;
+        t = inner.trim();
+    }
+
+    // Trailing `%`.
+    if let Some(rest) = t.strip_suffix('%') {
+        is_percent = true;
+        t = rest.trim_end();
+    }
+
+    // Any remaining parens at this point are unbalanced (e.g. `(123` or
+    // `123)`); reject so `f64::from_str` doesn't have to lie about it.
+    if t.contains('(') || t.contains(')') {
+        return None;
+    }
+
+    // Strip thousands `,` separators. Reject if `,` appears in the
+    // fractional part — that's neither a number nor a Lotus shape.
+    let cleaned: String = if t.contains(',') {
+        had_commas = true;
+        let (int_part, frac_part) = match t.find('.') {
+            Some(i) => (&t[..i], &t[i..]),
+            None => (t, ""),
+        };
+        if frac_part.contains(',') {
+            return None;
+        }
+        let mut s = String::with_capacity(t.len());
+        s.extend(int_part.chars().filter(|c| *c != ','));
+        s.push_str(frac_part);
+        s
+    } else {
+        t.to_string()
+    };
+
+    if cleaned.is_empty() {
+        return None;
+    }
+    let mut number: f64 = cleaned.parse().ok()?;
+    if is_percent {
+        number /= 100.0;
+    }
+    if negate {
+        number = -number;
+    }
+
+    let decimals = match cleaned.find('.') {
+        Some(i) => (cleaned.len() - i - 1).min(15) as u8,
+        None => 0,
+    };
+
+    let format = if is_currency {
+        Some(Format::currency(decimals))
+    } else if is_percent {
+        Some(Format::percent(decimals))
+    } else if had_commas {
+        Some(Format::comma(decimals))
+    } else {
+        None
+    };
+
+    Some(InferredValue { number, format })
 }
 
 fn render_value_source(v: &Value) -> String {
@@ -152,6 +281,7 @@ pub fn format_number_general(n: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::Format;
 
     #[test]
     fn empty_readout_is_empty() {
@@ -300,6 +430,90 @@ mod tests {
         };
         assert_eq!(f.display_text(), "");
         assert_eq!(f.value(), Value::Empty);
+    }
+
+    #[test]
+    fn parse_typed_value_plain_number() {
+        let iv = parse_typed_value("1234").unwrap();
+        assert_eq!(iv.number, 1234.0);
+        assert_eq!(iv.format, None);
+
+        let iv = parse_typed_value("1234.5").unwrap();
+        assert_eq!(iv.number, 1234.5);
+        assert_eq!(iv.format, None);
+
+        let iv = parse_typed_value("-1234").unwrap();
+        assert_eq!(iv.number, -1234.0);
+        assert_eq!(iv.format, None);
+    }
+
+    #[test]
+    fn parse_typed_value_currency() {
+        let iv = parse_typed_value("$1234").unwrap();
+        assert_eq!(iv.number, 1234.0);
+        assert_eq!(iv.format, Some(Format::currency(0)));
+
+        let iv = parse_typed_value("$1234.56").unwrap();
+        assert_eq!(iv.number, 1234.56);
+        assert_eq!(iv.format, Some(Format::currency(2)));
+
+        let iv = parse_typed_value("$1,234.50").unwrap();
+        assert_eq!(iv.number, 1234.5);
+        assert_eq!(iv.format, Some(Format::currency(2)));
+    }
+
+    #[test]
+    fn parse_typed_value_percent() {
+        let iv = parse_typed_value("12%").unwrap();
+        assert!((iv.number - 0.12).abs() < 1e-9);
+        assert_eq!(iv.format, Some(Format::percent(0)));
+
+        let iv = parse_typed_value("12.5%").unwrap();
+        assert!((iv.number - 0.125).abs() < 1e-9);
+        assert_eq!(iv.format, Some(Format::percent(1)));
+    }
+
+    #[test]
+    fn parse_typed_value_comma() {
+        let iv = parse_typed_value("1,234").unwrap();
+        assert_eq!(iv.number, 1234.0);
+        assert_eq!(iv.format, Some(Format::comma(0)));
+
+        let iv = parse_typed_value("1,234.567").unwrap();
+        assert!((iv.number - 1234.567).abs() < 1e-9);
+        assert_eq!(iv.format, Some(Format::comma(3)));
+    }
+
+    #[test]
+    fn parse_typed_value_paren_negate() {
+        let iv = parse_typed_value("(123)").unwrap();
+        assert_eq!(iv.number, -123.0);
+        assert_eq!(iv.format, None);
+    }
+
+    #[test]
+    fn parse_typed_value_dollar_paren_negate() {
+        let iv = parse_typed_value("$(50.00)").unwrap();
+        assert_eq!(iv.number, -50.0);
+        assert_eq!(iv.format, Some(Format::currency(2)));
+    }
+
+    #[test]
+    fn parse_typed_value_neg_dollar() {
+        let iv = parse_typed_value("-$50").unwrap();
+        assert_eq!(iv.number, -50.0);
+        assert_eq!(iv.format, Some(Format::currency(0)));
+    }
+
+    #[test]
+    fn parse_typed_value_rejects_formulas_and_garbage() {
+        assert!(parse_typed_value("+A1").is_none());
+        assert!(parse_typed_value("=A1+B1").is_none());
+        assert!(parse_typed_value("$$5").is_none());
+        assert!(parse_typed_value("1.2.3").is_none());
+        assert!(parse_typed_value("(123").is_none());
+        assert!(parse_typed_value("hello").is_none());
+        assert!(parse_typed_value("").is_none());
     }
 
     #[test]

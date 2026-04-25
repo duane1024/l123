@@ -1,0 +1,18 @@
+# VALUE — Delete key works mid-buffer too. Type 1234, Home, Delete drops
+# the leading 1 → 234.
+
+KEYS 1234
+ASSERT_MODE       VALUE
+ASSERT_PANEL_L2   1234
+ASSERT_ENTRY_CURSOR 4
+
+HOME
+ASSERT_ENTRY_CURSOR 0
+
+# Delete the char at the cursor (the '1'); buffer 234, cursor stays at 0.
+DEL
+ASSERT_PANEL_L2   234
+ASSERT_ENTRY_CURSOR 0
+
+ENTER
+ASSERT_CELL       A:A1  234

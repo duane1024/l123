@@ -24,20 +24,20 @@ pub mod value;
 pub use address::{Address, Range, SheetId};
 pub use alignment::{Alignment, HAlign, VAlign};
 pub use border::{Border, BorderEdge, BorderStyle};
-pub use color::RgbColor;
-pub use comment::Comment;
-pub use fill::{Fill, FillPattern};
-pub use font_style::FontStyle;
-pub use merge::Merge;
-pub use sheet_state::SheetState;
-pub use table::{Table, TableColumn, TableStyle};
 pub use cell_render::{
     center_pad, plan_row_spill, render_label, render_value_in_cell, repeat_to_width, right_pad,
     PaintedSlot, SpillSlot,
 };
-pub use contents::{format_number_general, CellContents};
+pub use color::RgbColor;
+pub use comment::Comment;
+pub use contents::{format_number_general, parse_typed_value, CellContents, InferredValue};
+pub use fill::{Fill, FillPattern};
+pub use font_style::FontStyle;
 pub use format::{format_number, Format, FormatKind};
 pub use label::LabelPrefix;
+pub use merge::Merge;
 pub use mode::Mode;
+pub use sheet_state::SheetState;
+pub use table::{Table, TableColumn, TableStyle};
 pub use text_style::TextStyle;
 pub use value::{ErrKind, Value};

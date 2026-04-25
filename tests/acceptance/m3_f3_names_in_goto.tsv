@@ -1,0 +1,44 @@
+# F3 (NAMES) in the F5 GOTO prompt.
+# Manual: "After you press GOTO (F5), press NAME (F3) to display a list
+# of range names in the current file…"
+#
+# Picking a name jumps the pointer to the range's start cell and returns
+# to READY (mirrors GOTO's "go to a cell" behavior — for a multi-cell
+# range, the start corner is the natural target).
+
+# Define `block` over B5..C9.
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS block
+ENTER
+ASSERT_MODE       POINT
+KEYS B5..C9
+ENTER
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1
+
+# F5 GOTO → prompt → F3 opens name list.
+F 5
+ASSERT_PANEL_L3   Enter address to go to
+
+F 3
+ASSERT_MODE       NAMES
+ASSERT_SCREEN     block
+
+# Enter picks `block`, jumps to its start corner, returns to READY.
+ENTER
+ASSERT_MODE       READY
+ASSERT_POINTER    A:B5
+
+# Esc from the name list returns to the underlying GOTO prompt.
+HOME
+F 5
+F 3
+ASSERT_MODE       NAMES
+ESC
+ASSERT_PANEL_L3   Enter address to go to
+ESC
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1

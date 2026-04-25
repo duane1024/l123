@@ -1,0 +1,71 @@
+# F3 (NAMES) in the /Range Name Delete prompt.
+# Manual: "After you select a command that automatically displays a list
+# of names (for example, /File Retrieve, /Graph Save, /Range Name Create,
+# or /Print [E,F,P] Options Name Use), press NAME (F3) to display a
+# full-screen list of names." We treat /Range Name Delete the same way:
+# F3 opens the picker; Enter on a row fills the prompt buffer with that
+# name. A second Enter commits the delete.
+
+# Define two names: sales over A1..A2, costs over B1.
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+HOME
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS sales
+ENTER
+ASSERT_MODE       POINT
+DOWN
+ENTER
+ASSERT_MODE       READY
+
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS costs
+ENTER
+ASSERT_MODE       POINT
+KEYS B1
+ENTER
+ASSERT_MODE       READY
+
+# /RND → name prompt → F3 list.
+KEY /
+KEY R
+KEY N
+KEY D
+ASSERT_PANEL_L3   Enter name to delete
+
+F 3
+ASSERT_MODE       NAMES
+ASSERT_SCREEN     costs
+ASSERT_SCREEN     sales
+
+# Names are sorted ascending — Down moves from costs to sales.
+DOWN
+ENTER
+# Buffer now holds "sales"; we're back in the prompt.
+ASSERT_PANEL_L2   sales
+ASSERT_PANEL_L3   Enter name to delete
+
+# Commit the delete.
+ENTER
+ASSERT_MODE       READY
+
+# Confirm sales is gone by re-defining it without a duplicate error.
+HOME
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS sales
+ENTER
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY

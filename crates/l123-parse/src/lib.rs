@@ -336,11 +336,7 @@ fn emit_shifted(r: ParsedRef, dx: i32, dy: i32) -> (String, usize) {
     } else {
         r.row as i32 + dy
     };
-    if new_col < 0
-        || new_col >= MAX_COLS as i32
-        || new_row < 1
-        || new_row > MAX_ROWS as i32
-    {
+    if new_col < 0 || new_col >= MAX_COLS as i32 || new_row < 1 || new_row > MAX_ROWS as i32 {
         return ("ERR".to_string(), r.end);
     }
     let mut out = String::new();
@@ -576,10 +572,7 @@ mod tests {
     #[test]
     fn shift_3d_range_keeps_sheet_span() {
         // Sheets stay at A..C; only col/row shift.
-        assert_eq!(
-            shift_refs("@SUM(A:B5..C:D10)", 1, 0),
-            "@SUM(A:C5..C:E10)"
-        );
+        assert_eq!(shift_refs("@SUM(A:B5..C:D10)", 1, 0), "@SUM(A:C5..C:E10)");
     }
 
     #[test]

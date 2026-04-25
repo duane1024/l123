@@ -1,0 +1,24 @@
+# Re-typing a plain number over a cell with an explicit format keeps the
+# format in place — typing `100` into a `(C2)` cell does not strip the
+# Currency-2 format.
+
+# Set up: type 50 in A1, apply /Range Format Currency 2 to A1..A1.
+KEYS 50
+ENTER
+HOME
+
+KEY /
+KEY R
+KEY F
+KEY C
+ENTER
+ENTER
+ASSERT_PANEL_L1   A:A1: (C2) 50
+
+# Re-type a plain number — inference yields no format, so the prior C2
+# stays.
+KEYS 100
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (C2) 100
+ASSERT_CELL       A:A1  $100.00

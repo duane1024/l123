@@ -1,0 +1,47 @@
+# /Print Options Advanced Device — pick the CUPS printer name that
+# `/Print Printer` will pass as `lp -d <name>`. The Advanced submenu
+# preserves 1-2-3's `/PFO Advanced` shape (AutoLf | Color | Device |
+# Fonts | Images | Layout | Priority | Wait | Quit); only Device and
+# Quit are wired today. Storage is unit-tested via
+# l123-print::encode::lp::lp_args; this transcript covers the menu
+# nav and prompt-commit wiring.
+
+# /P P → printer session, no path prompt.
+KEY /
+KEY P
+KEY P
+ASSERT_PANEL_L2   Range
+ASSERT_PANEL_L2   Options
+
+# /O Options.
+KEY O
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Advanced
+
+# /A descend into Advanced.
+KEY A
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Device
+ASSERT_PANEL_L2   AutoLf
+ASSERT_PANEL_L2   Quit
+
+# /D prompt for the printer name.
+KEY D
+ASSERT_PANEL_L3   Enter printer name
+KEYS Office_HP
+ENTER
+ASSERT_PANEL_L2   Device
+
+# /Q from Advanced returns to Options.
+KEY Q
+ASSERT_PANEL_L2   Header
+ASSERT_PANEL_L2   Advanced
+
+# /Q from Options returns to /PF menu.
+KEY Q
+ASSERT_PANEL_L2   Range
+ASSERT_PANEL_L2   Go
+
+# /Q from session menu drops the session and returns to READY.
+KEY Q
+ASSERT_MODE       READY

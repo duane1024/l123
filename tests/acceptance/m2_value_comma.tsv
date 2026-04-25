@@ -1,0 +1,13 @@
+# Automatic format inference: thousands `,` infers Comma format.
+# `1,234` stores 1234 with format ,0; `1,234.567` stores 1234.567 with ,3.
+
+KEYS 1,234
+ENTER
+ASSERT_PANEL_L1   A:A1: (,0) 1234
+ASSERT_CELL       A:A1  1,234
+
+DOWN
+KEYS 1,234.567
+ENTER
+ASSERT_PANEL_L1   A:A2: (,3) 1234.567
+ASSERT_CELL       A:A2  1,234.567

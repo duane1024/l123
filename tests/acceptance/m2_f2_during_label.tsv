@@ -1,0 +1,38 @@
+# F2 mid-entry promotes LABEL → EDIT preserving the buffer; cursor
+# starts at end. Once in EDIT, Left/Right move the cursor freely so the
+# user can fix mid-buffer typos without leaving the cell.
+
+KEYS hello world
+ASSERT_MODE       LABEL
+ASSERT_PANEL_L2   hello world
+ASSERT_ENTRY_CURSOR 11
+
+# F2 promotes to EDIT — buffer survives, cursor at end.
+F 2
+ASSERT_MODE       EDIT
+ASSERT_PANEL_L2   hello world
+ASSERT_ENTRY_CURSOR 11
+
+# Move cursor to byte 6 — between the space and 'w' of "world".
+LEFT
+LEFT
+LEFT
+LEFT
+LEFT
+ASSERT_ENTRY_CURSOR 6
+
+# Backspace ×6 deletes "hello " (6 bytes); cursor → 0; buffer "world".
+BACKSPACE
+BACKSPACE
+BACKSPACE
+BACKSPACE
+BACKSPACE
+BACKSPACE
+ASSERT_PANEL_L2   world
+ASSERT_ENTRY_CURSOR 0
+
+# Insert "Z" at cursor=0 → "Zworld"; commit.
+KEY Z
+ASSERT_PANEL_L2   Zworld
+ENTER
+ASSERT_CELL       A:A1  Zworld

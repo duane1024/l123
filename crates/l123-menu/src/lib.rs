@@ -126,24 +126,40 @@ pub enum Action {
     /// submenu (`PRINT_FILE_MENU`) with `/Print File`; Go branches on
     /// the session destination.
     PrintPrinter,
-    PrintFileRange,
-    PrintFileGo,
-    PrintFileQuit,
-    PrintFileAlign,
-    PrintFileClear,
-    PrintFileOptionsHeader,
-    PrintFileOptionsFooter,
-    PrintFileOptionsQuit,
-    PrintFileOptionsOtherAsDisplayed,
-    PrintFileOptionsOtherCellFormulas,
-    PrintFileOptionsOtherFormatted,
-    PrintFileOptionsOtherUnformatted,
-    PrintFileOptionsMarginLeft,
-    PrintFileOptionsMarginRight,
-    PrintFileOptionsMarginTop,
-    PrintFileOptionsMarginBottom,
-    PrintFileOptionsMarginsQuit,
-    PrintFileOptionsPgLength,
+    /// `/Print Encoded` — write setup-string + ASCII page bytes to a
+    /// `.ENC` file. Shares the session submenu with `/Print File` /
+    /// `/Print Printer`; Go writes raw printer-ready bytes.
+    PrintEncoded,
+    /// `/Print Cancel` — drop any active [`PrintSession`] and return
+    /// to READY. The "I changed my mind" exit at the top-level Print
+    /// menu (before a destination is chosen).
+    PrintCancel,
+    PrintSessionRange,
+    PrintSessionGo,
+    PrintSessionQuit,
+    PrintSessionAlign,
+    PrintSessionClear,
+    PrintSessionOptionsHeader,
+    PrintSessionOptionsFooter,
+    PrintSessionOptionsSetup,
+    PrintSessionOptionsQuit,
+    PrintSessionOptionsOtherAsDisplayed,
+    PrintSessionOptionsOtherCellFormulas,
+    PrintSessionOptionsOtherFormatted,
+    PrintSessionOptionsOtherUnformatted,
+    PrintSessionOptionsMarginLeft,
+    PrintSessionOptionsMarginRight,
+    PrintSessionOptionsMarginTop,
+    PrintSessionOptionsMarginBottom,
+    PrintSessionOptionsMarginsQuit,
+    PrintSessionOptionsPgLength,
+    /// `/Print Options Advanced Device` — set the CUPS queue name
+    /// passed to `lp -d`. Stored on the active [`PrintSession`] and
+    /// applied at Go-time when the destination is `Printer`.
+    PrintSessionOptionsAdvancedDevice,
+    /// `/Print Options Advanced Quit` — return to the Options
+    /// submenu without changing settings.
+    PrintSessionOptionsAdvancedQuit,
     RangeSearchFormulas,
     RangeSearchLabels,
     RangeSearchBoth,
@@ -1203,31 +1219,31 @@ const PRINT_FILE_OPTIONS_MARGINS_MENU: &[MenuItem] = &[
         letter: 'L',
         name: "Left",
         help: "Set the left margin (spaces prefixed to each printed line)",
-        body: MenuBody::Action(Action::PrintFileOptionsMarginLeft),
+        body: MenuBody::Action(Action::PrintSessionOptionsMarginLeft),
     },
     MenuItem {
         letter: 'R',
         name: "Right",
         help: "Set the right margin",
-        body: MenuBody::Action(Action::PrintFileOptionsMarginRight),
+        body: MenuBody::Action(Action::PrintSessionOptionsMarginRight),
     },
     MenuItem {
         letter: 'T',
         name: "Top",
         help: "Set the top margin (blank lines above the first row)",
-        body: MenuBody::Action(Action::PrintFileOptionsMarginTop),
+        body: MenuBody::Action(Action::PrintSessionOptionsMarginTop),
     },
     MenuItem {
         letter: 'B',
         name: "Bottom",
         help: "Set the bottom margin",
-        body: MenuBody::Action(Action::PrintFileOptionsMarginBottom),
+        body: MenuBody::Action(Action::PrintSessionOptionsMarginBottom),
     },
     MenuItem {
         letter: 'Q',
         name: "Quit",
         help: "Return to the Options menu",
-        body: MenuBody::Action(Action::PrintFileOptionsMarginsQuit),
+        body: MenuBody::Action(Action::PrintSessionOptionsMarginsQuit),
     },
 ];
 
@@ -1236,25 +1252,82 @@ const PRINT_FILE_OPTIONS_OTHER_MENU: &[MenuItem] = &[
         letter: 'A',
         name: "As-Displayed",
         help: "Print cells as they appear on screen (default)",
-        body: MenuBody::Action(Action::PrintFileOptionsOtherAsDisplayed),
+        body: MenuBody::Action(Action::PrintSessionOptionsOtherAsDisplayed),
     },
     MenuItem {
         letter: 'C',
         name: "Cell-Formulas",
         help: "Print the formula source in place of the computed value",
-        body: MenuBody::Action(Action::PrintFileOptionsOtherCellFormulas),
+        body: MenuBody::Action(Action::PrintSessionOptionsOtherCellFormulas),
     },
     MenuItem {
         letter: 'F',
         name: "Formatted",
         help: "Honor headers, footers, margins, and page breaks",
-        body: MenuBody::Action(Action::PrintFileOptionsOtherFormatted),
+        body: MenuBody::Action(Action::PrintSessionOptionsOtherFormatted),
     },
     MenuItem {
         letter: 'U',
         name: "Unformatted",
         help: "Dump the range with no page decorations",
-        body: MenuBody::Action(Action::PrintFileOptionsOtherUnformatted),
+        body: MenuBody::Action(Action::PrintSessionOptionsOtherUnformatted),
+    },
+];
+
+const PRINT_FILE_OPTIONS_ADVANCED_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "AutoLf",
+        help: "Send LF after each CR (Auto Line Feed)",
+        body: MenuBody::NotImplemented("pfo-advanced-autolf"),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Color",
+        help: "Color print options",
+        body: MenuBody::NotImplemented("pfo-advanced-color"),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Device",
+        help: "CUPS printer queue name (lp -d <name>)",
+        body: MenuBody::Action(Action::PrintSessionOptionsAdvancedDevice),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Fonts",
+        help: "Font selection",
+        body: MenuBody::NotImplemented("pfo-advanced-fonts"),
+    },
+    MenuItem {
+        letter: 'I',
+        name: "Images",
+        help: "Image rendering options",
+        body: MenuBody::NotImplemented("pfo-advanced-images"),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Layout",
+        help: "Layout options",
+        body: MenuBody::NotImplemented("pfo-advanced-layout"),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Priority",
+        help: "Print job priority",
+        body: MenuBody::NotImplemented("pfo-advanced-priority"),
+    },
+    MenuItem {
+        letter: 'W',
+        name: "Wait",
+        help: "Wait between pages",
+        body: MenuBody::NotImplemented("pfo-advanced-wait"),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to the Options submenu",
+        body: MenuBody::Action(Action::PrintSessionOptionsAdvancedQuit),
     },
 ];
 
@@ -1263,13 +1336,13 @@ const PRINT_FILE_OPTIONS_MENU: &[MenuItem] = &[
         letter: 'H',
         name: "Header",
         help: "Set a three-part header (L|C|R), printed above each page",
-        body: MenuBody::Action(Action::PrintFileOptionsHeader),
+        body: MenuBody::Action(Action::PrintSessionOptionsHeader),
     },
     MenuItem {
         letter: 'F',
         name: "Footer",
         help: "Set a three-part footer (L|C|R), printed below each page",
-        body: MenuBody::Action(Action::PrintFileOptionsFooter),
+        body: MenuBody::Action(Action::PrintSessionOptionsFooter),
     },
     MenuItem {
         letter: 'M',
@@ -1281,7 +1354,7 @@ const PRINT_FILE_OPTIONS_MENU: &[MenuItem] = &[
         letter: 'P',
         name: "Pg-Length",
         help: "Set page length (lines per page)",
-        body: MenuBody::Action(Action::PrintFileOptionsPgLength),
+        body: MenuBody::Action(Action::PrintSessionOptionsPgLength),
     },
     MenuItem {
         letter: 'B',
@@ -1293,7 +1366,7 @@ const PRINT_FILE_OPTIONS_MENU: &[MenuItem] = &[
         letter: 'S',
         name: "Setup",
         help: "Setup escape sequence for the printer",
-        body: MenuBody::NotImplemented("pfo-setup"),
+        body: MenuBody::Action(Action::PrintSessionOptionsSetup),
     },
     MenuItem {
         letter: 'O',
@@ -1310,14 +1383,14 @@ const PRINT_FILE_OPTIONS_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'A',
         name: "Advanced",
-        help: "Advanced options (AutoLf, Color, Fonts, …)",
-        body: MenuBody::NotImplemented("pfo-advanced"),
+        help: "Advanced options (AutoLf, Color, Device, Fonts, …)",
+        body: MenuBody::Submenu(PRINT_FILE_OPTIONS_ADVANCED_MENU),
     },
     MenuItem {
         letter: 'Q',
         name: "Quit",
         help: "Return to the print menu",
-        body: MenuBody::Action(Action::PrintFileOptionsQuit),
+        body: MenuBody::Action(Action::PrintSessionOptionsQuit),
     },
 ];
 
@@ -1328,7 +1401,7 @@ pub const PRINT_FILE_MENU: &[MenuItem] = &[
         letter: 'R',
         name: "Range",
         help: "Select the range of cells to print",
-        body: MenuBody::Action(Action::PrintFileRange),
+        body: MenuBody::Action(Action::PrintSessionRange),
     },
     MenuItem {
         letter: 'L',
@@ -1352,25 +1425,25 @@ pub const PRINT_FILE_MENU: &[MenuItem] = &[
         letter: 'C',
         name: "Clear",
         help: "Clear print settings (header, footer, margins, …)",
-        body: MenuBody::Action(Action::PrintFileClear),
+        body: MenuBody::Action(Action::PrintSessionClear),
     },
     MenuItem {
         letter: 'A',
         name: "Align",
         help: "Reset the page counter to 1",
-        body: MenuBody::Action(Action::PrintFileAlign),
+        body: MenuBody::Action(Action::PrintSessionAlign),
     },
     MenuItem {
         letter: 'G',
         name: "Go",
         help: "Write the selected range to the print file",
-        body: MenuBody::Action(Action::PrintFileGo),
+        body: MenuBody::Action(Action::PrintSessionGo),
     },
     MenuItem {
         letter: 'Q',
         name: "Quit",
         help: "Return to READY",
-        body: MenuBody::Action(Action::PrintFileQuit),
+        body: MenuBody::Action(Action::PrintSessionQuit),
     },
 ];
 
@@ -1391,13 +1464,13 @@ const PRINT_MENU: &[MenuItem] = &[
         letter: 'E',
         name: "Encoded",
         help: "Print to encoded file with printer codes",
-        body: MenuBody::NotImplemented("p-encoded"),
+        body: MenuBody::Action(Action::PrintEncoded),
     },
     MenuItem {
         letter: 'C',
         name: "Cancel",
         help: "Cancel current print job",
-        body: MenuBody::NotImplemented("p-cancel"),
+        body: MenuBody::Action(Action::PrintCancel),
     },
 ];
 

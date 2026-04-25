@@ -1,0 +1,92 @@
+# Phase 4 mouse support: drag-to-select.
+# A left-press in READY on a grid cell remembers the cell as the
+# drag origin. The first drag motion onto a different cell promotes
+# READY into POINT, anchored at the origin and free-end at the
+# dragged-over cell. Subsequent drag motions only move the free end
+# (anchor stays). Mouse-up does NOT exit POINT — it just ends the
+# drag, the highlight persists so a follow-up command (icon Bold,
+# /Range Format, etc.) can act on the range. Esc cancels the
+# selection in the usual two-step way.
+#
+# Layout (80×25): col A x [5,14), B [14,23), C [23,32), D [32,41),
+# rows y>=5.
+
+# Start at A1, READY, no live POINT state.
+ASSERT_POINTER A:A1
+ASSERT_MODE READY
+
+# Down on A1 — pointer moves there (it's already there); still READY.
+MOUSE_CLICK 7 5
+ASSERT_POINTER A:A1
+ASSERT_MODE READY
+
+# Drag to C3 — promote to POINT anchored at A1, free end at C3.
+MOUSE_DRAG 25 7
+ASSERT_MODE POINT
+ASSERT_POINTER A:C3
+ASSERT_PANEL_L3 A:A1..A:C3
+
+# Drag farther to D4 — anchor stays A1, free end follows.
+MOUSE_DRAG 35 8
+ASSERT_MODE POINT
+ASSERT_POINTER A:D4
+ASSERT_PANEL_L3 A:A1..A:D4
+
+# Drag back to B2 — range shrinks (anchor unchanged).
+MOUSE_DRAG 16 6
+ASSERT_POINTER A:B2
+ASSERT_PANEL_L3 A:A1..A:B2
+
+# Mouse-up — selection is finalized, mode and highlight persist.
+MOUSE_UP 16 6
+ASSERT_MODE POINT
+ASSERT_POINTER A:B2
+ASSERT_PANEL_L3 A:A1..A:B2
+
+# A subsequent click in POINT extends the existing anchor (Phase 2
+# behavior — drag does not change that). Click C3.
+MOUSE_CLICK 25 7
+ASSERT_MODE POINT
+ASSERT_POINTER A:C3
+ASSERT_PANEL_L3 A:A1..A:C3
+
+# Esc unanchors; second Esc exits to READY.
+ESC
+ASSERT_MODE POINT
+ESC
+ASSERT_MODE READY
+
+# A press+drag while in POINT (entered via /RE) just live-extends —
+# the press's cell is NOT used as a new anchor. Anchor stays at the
+# /RE auto-anchor cell (C3 here).
+KEY /
+KEY R
+KEY E
+ASSERT_MODE POINT
+ASSERT_PANEL_L3 A:C3..A:C3
+# Press B2 (Phase 2 — pointer moves, anchor C3 unchanged), drag D4.
+MOUSE_CLICK 16 6
+ASSERT_PANEL_L3 A:B2..A:C3
+MOUSE_DRAG 35 8
+ASSERT_MODE POINT
+ASSERT_POINTER A:D4
+ASSERT_PANEL_L3 A:C3..A:D4
+MOUSE_UP 35 8
+ASSERT_MODE POINT
+ASSERT_PANEL_L3 A:C3..A:D4
+ESC
+ESC
+ASSERT_MODE READY
+
+# A drag that *starts* outside the grid (e.g. column-header row)
+# must not promote to POINT. Move pointer somewhere known first,
+# then attempt a drag rooted on the header row at y=4.
+MOUSE_CLICK 7 5
+ASSERT_POINTER A:A1
+ASSERT_MODE READY
+MOUSE_CLICK 16 4
+ASSERT_MODE READY
+MOUSE_DRAG 25 7
+ASSERT_MODE READY
+ASSERT_POINTER A:A1
+MOUSE_UP 25 7

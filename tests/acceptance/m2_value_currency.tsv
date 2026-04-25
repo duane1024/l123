@@ -1,0 +1,9 @@
+# Automatic format inference: leading `$` infers Currency.
+# `$1234.56` stores 1234.56 with format C2 (decimals derived from input).
+
+KEYS $1234.56
+ENTER
+HOME
+
+ASSERT_PANEL_L1   A:A1: (C2) 1234.56
+ASSERT_CELL       A:A1  $1234.56

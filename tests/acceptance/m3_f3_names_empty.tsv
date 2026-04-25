@@ -1,0 +1,18 @@
+# F3 (NAMES) with no names defined — the overlay opens with an empty
+# placeholder, and Esc returns to the underlying prompt cleanly.
+
+ASSERT_MODE       READY
+
+# F5 GOTO prompt with zero defined range names.
+F 5
+ASSERT_PANEL_L3   Enter address to go to
+
+F 3
+ASSERT_MODE       NAMES
+ASSERT_SCREEN     no defined names
+
+# Esc returns to the underlying GOTO prompt.
+ESC
+ASSERT_PANEL_L3   Enter address to go to
+ESC
+ASSERT_MODE       READY

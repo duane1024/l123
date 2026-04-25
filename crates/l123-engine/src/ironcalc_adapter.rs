@@ -21,6 +21,7 @@ use ironcalc_xlsx::base::{
 use ironcalc_xlsx::export::save_to_xlsx;
 use ironcalc_xlsx::import::load_from_xlsx;
 
+#[cfg(feature = "wk3")]
 use ironcalc_lotus::load_from_wk3_bytes;
 
 use l123_core::{
@@ -252,6 +253,7 @@ impl Engine for IronCalcEngine {
         Ok(())
     }
 
+    #[cfg(feature = "wk3")]
     fn load_wk3(&mut self, path: &Path) -> Result<()> {
         // ironcalc_lotus's `load_from_wk3<'a>` ties `'a` across the path,
         // locale, tz, and language args, which collapses `Model<'a>` to
@@ -353,7 +355,9 @@ impl Engine for IronCalcEngine {
         self.extend_sheets_to(sheet)?;
         // IronCalc's `set_sheet_color` accepts a `"#RRGGBB"` hex string
         // (with leading `#`) or an empty string to clear.
-        let hex = color.map(|c| format!("#{}", c.to_rgb_hex())).unwrap_or_default();
+        let hex = color
+            .map(|c| format!("#{}", c.to_rgb_hex()))
+            .unwrap_or_default();
         self.model
             .set_sheet_color(self.sheet_index(sheet), &hex)
             .map_err(EngineError::Backend)
@@ -465,7 +469,11 @@ impl Engine for IronCalcEngine {
 
     fn unset_merged_range(&mut self, merge: Merge) -> Result<()> {
         let s = merge_to_a1_range(merge);
-        let Ok(ws) = self.model.workbook.worksheet_mut(self.sheet_index(merge.anchor.sheet)) else {
+        let Ok(ws) = self
+            .model
+            .workbook
+            .worksheet_mut(self.sheet_index(merge.anchor.sheet))
+        else {
             return Ok(());
         };
         ws.merge_cells.retain(|r| r != &s);
@@ -1680,6 +1688,7 @@ mod tests {
         let _ = std::fs::remove_dir(&dir);
     }
 
+    #[cfg(feature = "wk3")]
     #[test]
     fn load_wk3_reads_committed_fixture() {
         // Loads `tests/acceptance/fixtures/wk3/FILE0001.WK3` (a sparse
@@ -1977,7 +1986,8 @@ mod tests {
         let path = dir.join("table.xlsx");
 
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "'h").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "'h")
+            .unwrap();
         let r = Range {
             start: Address::new(SheetId::A, 0, 0),
             end: Address::new(SheetId::A, 1, 2),
@@ -2037,7 +2047,8 @@ mod tests {
         e.insert_sheet_at(2).unwrap();
         // A: visible (default), B: hidden, C: very-hidden.
         e.set_sheet_state(SheetId(1), SheetState::Hidden).unwrap();
-        e.set_sheet_state(SheetId(2), SheetState::VeryHidden).unwrap();
+        e.set_sheet_state(SheetId(2), SheetState::VeryHidden)
+            .unwrap();
         e.save_xlsx(&path).unwrap();
 
         let mut e2 = IronCalcEngine::new().unwrap();
@@ -2059,11 +2070,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "l123_engine_frozen_rt_{}_{}",
-            process::id(),
-            nanos
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("l123_engine_frozen_rt_{}_{}", process::id(), nanos));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("frozen_rt.xlsx");
 
@@ -2100,11 +2108,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "l123_engine_merge_rt_{}_{}",
-            process::id(),
-            nanos
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("l123_engine_merge_rt_{}_{}", process::id(), nanos));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("merge_rt.xlsx");
 
@@ -2196,7 +2201,8 @@ mod tests {
         let path = dir.join("comment.xlsx");
 
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "1").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "1")
+            .unwrap();
         e.set_comment(Comment::new(
             Address::new(SheetId::A, 0, 0),
             "Alice",
@@ -2234,7 +2240,8 @@ mod tests {
         };
         e.set_user_input(Address::new(SheetId::A, 0, 0), "'x")
             .unwrap();
-        e.set_cell_border(Address::new(SheetId::A, 0, 0), b).unwrap();
+        e.set_cell_border(Address::new(SheetId::A, 0, 0), b)
+            .unwrap();
         let got: std::collections::HashMap<Address, Border> =
             e.used_cell_borders().into_iter().collect();
         assert_eq!(got.get(&Address::new(SheetId::A, 0, 0)).copied(), Some(b));
@@ -2262,7 +2269,8 @@ mod tests {
         let path = dir.join("dotted.xlsx");
 
         let mut e = IronCalcEngine::new().unwrap();
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "'x").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "'x")
+            .unwrap();
         e.set_cell_border(
             Address::new(SheetId::A, 0, 0),
             Border {
@@ -2305,11 +2313,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "l123_engine_border_rt_{}_{}",
-            process::id(),
-            nanos
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("l123_engine_border_rt_{}_{}", process::id(), nanos));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("border_rt.xlsx");
 
@@ -2427,7 +2432,8 @@ mod tests {
             g: 0x66,
             b: 0xCC,
         };
-        e.set_user_input(Address::new(SheetId::A, 0, 0), "'red").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "'red")
+            .unwrap();
         e.set_cell_font_style(
             Address::new(SheetId::A, 0, 0),
             FontStyle {
@@ -2448,7 +2454,8 @@ mod tests {
         )
         .unwrap();
         // A3 — no font override; should NOT appear in used_cell_font_styles.
-        e.set_user_input(Address::new(SheetId::A, 0, 2), "'plain").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 2), "'plain")
+            .unwrap();
         e.recalc();
         e.save_xlsx(&path).unwrap();
 
@@ -2591,7 +2598,11 @@ mod tests {
         // the fault is in IronCalc's serializer (field choice).
         use l123_core::{Fill, FillPattern, RgbColor};
         let mut e = IronCalcEngine::new().unwrap();
-        let red = RgbColor { r: 0xFF, g: 0, b: 0 };
+        let red = RgbColor {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        };
         e.set_user_input(Address::new(SheetId::A, 0, 0), "'x")
             .unwrap();
         e.set_cell_fill(Address::new(SheetId::A, 0, 0), Fill::solid(red))
@@ -2622,8 +2633,16 @@ mod tests {
         let path = dir.join("fill_rt.xlsx");
 
         let mut e = IronCalcEngine::new().unwrap();
-        let red = RgbColor { r: 0xFF, g: 0, b: 0 };
-        let blue = RgbColor { r: 0x33, g: 0x66, b: 0xCC };
+        let red = RgbColor {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        };
+        let blue = RgbColor {
+            r: 0x33,
+            g: 0x66,
+            b: 0xCC,
+        };
         e.set_user_input(Address::new(SheetId::A, 0, 0), "'red bg")
             .unwrap();
         e.set_cell_fill(Address::new(SheetId::A, 0, 0), Fill::solid(red))

@@ -67,14 +67,28 @@ mod tests {
     #[test]
     fn from_hex_rgb_6_chars() {
         let c = RgbColor::from_hex("FFCCEE").unwrap();
-        assert_eq!(c, RgbColor { r: 0xFF, g: 0xCC, b: 0xEE });
+        assert_eq!(
+            c,
+            RgbColor {
+                r: 0xFF,
+                g: 0xCC,
+                b: 0xEE
+            }
+        );
     }
 
     #[test]
     fn from_hex_argb_8_chars_drops_alpha() {
         let c = RgbColor::from_hex("FFCCEEFF").unwrap();
         // AA = FF, RR = CC, GG = EE, BB = FF → alpha dropped, RGB kept.
-        assert_eq!(c, RgbColor { r: 0xCC, g: 0xEE, b: 0xFF });
+        assert_eq!(
+            c,
+            RgbColor {
+                r: 0xCC,
+                g: 0xEE,
+                b: 0xFF
+            }
+        );
     }
 
     #[test]
@@ -101,7 +115,12 @@ mod tests {
     #[test]
     fn to_argb_hex_emits_fully_opaque() {
         assert_eq!(
-            RgbColor { r: 0x12, g: 0x34, b: 0x56 }.to_argb_hex(),
+            RgbColor {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56
+            }
+            .to_argb_hex(),
             "FF123456"
         );
     }
@@ -109,14 +128,23 @@ mod tests {
     #[test]
     fn to_rgb_hex_omits_alpha() {
         assert_eq!(
-            RgbColor { r: 0x12, g: 0x34, b: 0x56 }.to_rgb_hex(),
+            RgbColor {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56
+            }
+            .to_rgb_hex(),
             "123456"
         );
     }
 
     #[test]
     fn hex_round_trip_via_argb() {
-        let c = RgbColor { r: 0xDE, g: 0xAD, b: 0xBE };
+        let c = RgbColor {
+            r: 0xDE,
+            g: 0xAD,
+            b: 0xBE,
+        };
         assert_eq!(RgbColor::from_hex(&c.to_argb_hex()), Some(c));
     }
 }

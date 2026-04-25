@@ -1,0 +1,9 @@
+# Automatic format inference: trailing `%` infers Percent and divides
+# the typed digits by 100. `12.5%` stores 0.125 with format P1.
+
+KEYS 12.5%
+ENTER
+HOME
+
+ASSERT_PANEL_L1   A:A1: (P1) 0.125
+ASSERT_CELL       A:A1  12.5%

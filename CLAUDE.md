@@ -89,6 +89,36 @@ CI gate (once added): fmt clean + clippy -D warnings + all tests pass.
 
 ---
 
+## Build modes — public-clean vs. WK3-enabled
+
+The committed default is **public-clean**: `cargo build` and
+`cargo test --workspace` work against crates.io IronCalc, with no
+sibling `../IronCalc` checkout required. `.WK3` (Lotus 1-2-3 R3) read
+support is gated behind a `wk3` cargo feature that is **off by
+default** and pulls `ironcalc_lotus` from a local fork at
+`../IronCalc/lotus` (it is not on crates.io and not in upstream
+ironcalc/ironcalc).
+
+Use the `Makefile` to flip between modes — it sed-toggles two
+`Cargo.toml` files in place. Do **not** commit those edits.
+
+| Task | Command |
+|---|---|
+| Toggle WK3 on  | `make wk3-on`       |
+| Toggle WK3 off | `make wk3-off`      |
+| Show state     | `make wk3-status`   |
+| Build with WK3 | `make build-wk3`    (= wk3-on + `cargo build -p l123 --features wk3`) |
+| Test with WK3  | `make test-wk3`     (= wk3-on + `cargo test --workspace --features l123-ui/wk3`) |
+| Public build   | `make build`        (= wk3-off + `cargo build --workspace`) |
+
+When WK3 is on, the `[patch.crates-io]` block in the workspace
+`Cargo.toml` redirects `ironcalc` and `ironcalc_base` to the local
+fork too — required to avoid two copies of `ironcalc_base` (crates.io
+and the path version `ironcalc_lotus` transitively depends on)
+colliding in the dep graph.
+
+---
+
 ## Crate layering — do not violate
 
 ```

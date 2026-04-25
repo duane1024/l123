@@ -1,0 +1,17 @@
+# /Print Cancel — `/P C` from the top-level Print menu drops any
+# active print session and returns to READY. Reuses the same
+# session-teardown that `/PF Q` uses; the difference is /P C lives
+# at the PRINT_MENU level so it works as an "I changed my mind"
+# exit before any destination is chosen.
+
+# Direct path: just exercise the Cancel action from PRINT_MENU.
+KEY /
+KEY P
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Printer
+ASSERT_PANEL_L2   File
+ASSERT_PANEL_L2   Encoded
+ASSERT_PANEL_L2   Cancel
+
+KEY C
+ASSERT_MODE       READY

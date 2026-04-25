@@ -48,6 +48,12 @@ use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
 const ROW_GUTTER: u16 = 5;
 const PANEL_HEIGHT: u16 = 4; // 3 content lines + 1 bottom border
 
+/// Rows shifted per scroll-wheel tick. Conventional 3-row step; small
+/// enough that the user can land on the row they want without
+/// overshooting, large enough that wheeling through a long sheet
+/// doesn't feel sluggish.
+const MOUSE_SCROLL_STEP: u32 = 3;
+
 /// Glyph painted at the top-right of a commented cell (mimics
 /// Excel's red-triangle "this cell has a note" indicator).  Sits on
 /// the rightmost column of the cell's slot in red; suppressed on the
@@ -126,6 +132,10 @@ impl ZeroDisplay {
 struct Entry {
     kind: EntryKind,
     buffer: String,
+    /// Byte index into `buffer`, 0..=buffer.len(). Always lands on a
+    /// char boundary. Initialized to `buffer.len()` (cursor at end —
+    /// matches typing-into-an-empty-buffer behavior).
+    cursor: usize,
 }
 
 /// All per-file state — one instance per active file. Session-level
@@ -359,6 +369,10 @@ pub struct App {
     /// Overlay state for /File List. When present, the mode is Files
     /// and the grid is obscured by a horizontal picker on lines 2/3.
     file_list: Option<FileListState>,
+    /// Overlay state for F3 NAMES. When present, the mode is Names and
+    /// the grid is obscured by a vertical name picker. Underlying
+    /// POINT / prompt state is preserved so dismissal returns to it.
+    name_list: Option<NameListState>,
     /// Active files in session order. A single-file session is a Vec
     /// of length 1; `/File Open` appends or inserts. Ctrl-End +
     /// Ctrl-PgUp/PgDn rotates `current` through the Vec.
@@ -411,6 +425,12 @@ pub struct App {
     /// visible window. Cleared at the top of each frame; re-set by
     /// `render_grid`.
     last_grid_area: Cell<Option<Rect>>,
+    /// Cell where the user pressed the left mouse button inside the
+    /// grid, set on the Down event and cleared on Up. While `Some`, a
+    /// subsequent Drag promotes Ready into POINT anchored here, or
+    /// extends an existing POINT. `None` ⇒ Drag events are ignored
+    /// (e.g. press landed off the grid, or no press at all).
+    drag_anchor: Option<Address>,
     /// Startup welcome screen. `Some` while the splash is up; any
     /// keypress consumes the state and drops to READY without
     /// dispatching. Always `None` for `App::new()` so existing
@@ -485,6 +505,10 @@ enum PrintDestination {
     /// `/Print Printer`: pipe the ASCII stream (plus setup string) to
     /// CUPS `lp` with these options.
     Printer(LpOptions),
+    /// `/Print Encoded`: write `setup_string` followed by the ASCII
+    /// page bytes to this path. Raw printer-ready output — no PDF
+    /// branching, no `lp` invocation.
+    Encoded(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -495,6 +519,16 @@ struct PrintSession {
     header: String,
     /// Three-part footer string (`L|C|R`). Empty means no footer.
     footer: String,
+    /// Printer init/escape string. Prepended verbatim to the output —
+    /// ahead of the ASCII page bytes for a `.prn` file write, or piped
+    /// to CUPS `lp` ahead of the ASCII stream for `/Print Printer`.
+    /// Empty = no setup. PDF output ignores it (escape codes are
+    /// meaningless inside a PDF body).
+    setup_string: String,
+    /// CUPS queue name passed as `lp -d <name>` for `/Print Printer`.
+    /// Empty = use the system default printer. Stored regardless of
+    /// destination kind; only consumed when destination is `Printer`.
+    lp_destination: String,
     /// As-Displayed (default) or Cell-Formulas.
     content_mode: PrintContentMode,
     /// Formatted (default — emits header/footer) or Unformatted
@@ -527,12 +561,18 @@ impl PrintSession {
         Self::with_destination(PrintDestination::Printer(LpOptions::default()))
     }
 
+    fn new_encoded(path: PathBuf) -> Self {
+        Self::with_destination(PrintDestination::Encoded(path))
+    }
+
     fn with_destination(destination: PrintDestination) -> Self {
         Self {
             destination,
             range: None,
             header: String::new(),
             footer: String::new(),
+            setup_string: String::new(),
+            lp_destination: String::new(),
             content_mode: PrintContentMode::AsDisplayed,
             format_mode: PrintFormatMode::Formatted,
             margin_left: 0,
@@ -550,6 +590,8 @@ impl PrintSession {
     fn clear_all(&mut self) {
         self.header.clear();
         self.footer.clear();
+        self.setup_string.clear();
+        self.lp_destination.clear();
         self.content_mode = PrintContentMode::AsDisplayed;
         self.format_mode = PrintFormatMode::Formatted;
         self.margin_left = 0;
@@ -710,10 +752,17 @@ enum PromptNext {
     /// After the user types a print destination path, start a
     /// [`PrintSession`] and descend into the `/PF` submenu.
     PrintFileFilename,
+    /// After the user types an encoded-output destination path, start
+    /// a [`PrintSession`] (Encoded variant) and descend into the
+    /// shared `/PF` submenu.
+    PrintEncodedFilename,
     /// After the user types a header or footer string, store it on
     /// the active [`PrintSession`] and re-enter the Options submenu.
     PrintFileHeader,
     PrintFileFooter,
+    /// After the user types a setup/escape string, store it on the
+    /// active [`PrintSession`] and re-enter the Options submenu.
+    PrintFileSetup,
     /// Numeric margin prompts (0..=1000). Each stores onto the
     /// active [`PrintSession`] and re-enters the Margins submenu.
     PrintFileMarginLeft,
@@ -722,6 +771,9 @@ enum PromptNext {
     PrintFileMarginBottom,
     /// Numeric page-length prompt (0..=1000). 0 means no pagination.
     PrintFilePgLength,
+    /// After the user types a CUPS queue name, store it on the active
+    /// [`PrintSession`] and re-enter the Advanced submenu.
+    PrintSessionOptionsAdvancedDevice,
     /// After the user types the search string, open the Find|Replace
     /// submenu. `scope` and `range` were captured earlier.
     RangeSearchString {
@@ -773,6 +825,31 @@ pub(crate) struct FileListState {
 /// render clamps to the actual area anyway.
 const FILE_LIST_PAGE_SIZE: usize = 10;
 
+/// Where F3 was pressed — determines what Enter on the name picker does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NameListOrigin {
+    /// F3 in POINT: Enter commits the picked range to the pending command.
+    Point,
+    /// F3 in the F5 GOTO prompt: Enter moves the pointer to the range's
+    /// start corner and exits to READY.
+    Goto,
+    /// F3 in a name-typing prompt (e.g. `/Range Name Delete`): Enter
+    /// fills the prompt buffer with the chosen name and returns to the
+    /// underlying prompt.
+    PromptName,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NameListState {
+    /// (name, range) sorted ascending by lowercased name.
+    entries: Vec<(String, Range)>,
+    highlight: usize,
+    view_offset: usize,
+    origin: NameListOrigin,
+}
+
+const NAME_LIST_PAGE_SIZE: usize = 10;
+
 impl PromptNext {
     fn accepts_char(self, c: char) -> bool {
         match self {
@@ -794,10 +871,19 @@ impl PromptNext {
             | PromptNext::FileDirPath
             | PromptNext::FileOpenFilename { .. }
             | PromptNext::PrintFileFilename
+            | PromptNext::PrintEncodedFilename
             | PromptNext::GraphSaveFilename => is_path_char(c),
             // Header and footer are free-form text with the `|`
             // separator carving them into L|C|R.
-            PromptNext::PrintFileHeader | PromptNext::PrintFileFooter => c != '\n' && c != '\t',
+            PromptNext::PrintFileHeader
+            | PromptNext::PrintFileFooter
+            | PromptNext::PrintFileSetup => c != '\n' && c != '\t',
+            // CUPS queue names are conventionally alphanumeric with
+            // `_`/`-`; reject whitespace so a stray space doesn't end
+            // up as part of the `lp -d` argument.
+            PromptNext::PrintSessionOptionsAdvancedDevice => {
+                c.is_ascii_alphanumeric() || c == '_' || c == '-'
+            }
             // Search / replacement strings are free text.
             PromptNext::RangeSearchString { .. } | PromptNext::RangeSearchReplacement => {
                 c != '\n' && c != '\t'
@@ -933,6 +1019,32 @@ fn set_line(buf: &mut Buffer, x: u16, y: u16, text: &str, width: u16, style: Sty
     }
 }
 
+/// Build the line-2 control panel rendering of an active entry,
+/// showing a reverse-video cursor cell at the buffer cursor position.
+/// When the cursor sits at the end of the buffer, the highlighted cell
+/// is a single space (the canonical "I-beam at end" appearance).
+fn render_entry_l2(e: &Entry) -> Line<'static> {
+    let cursor = e.cursor.min(e.buffer.len());
+    let before = &e.buffer[..cursor];
+    let (cursor_cell, after) = match e.buffer[cursor..].chars().next() {
+        Some(c) => {
+            let len = c.len_utf8();
+            (
+                e.buffer[cursor..cursor + len].to_string(),
+                e.buffer[cursor + len..].to_string(),
+            )
+        }
+        None => (" ".to_string(), String::new()),
+    };
+    let cursor_style = Style::default().add_modifier(Modifier::REVERSED);
+    Line::from(vec![
+        Span::raw(" "),
+        Span::raw(before.to_string()),
+        Span::styled(cursor_cell, cursor_style),
+        Span::raw(after),
+    ])
+}
+
 /// Keep the /File List view window centered around the highlighted
 /// row: `view_offset <= highlight < view_offset + FILE_LIST_PAGE_SIZE`.
 fn adjust_file_list_view(fl: &mut FileListState) {
@@ -943,9 +1055,17 @@ fn adjust_file_list_view(fl: &mut FileListState) {
     }
 }
 
-/// List every worksheet file (`.xlsx` or `.WK3`) in `dir`, sorted by
-/// filename (case-insensitive ordering isn't worth the extra code
-/// today). Hidden files and non-file entries are skipped.
+fn adjust_name_list_view(nl: &mut NameListState) {
+    if nl.highlight < nl.view_offset {
+        nl.view_offset = nl.highlight;
+    } else if nl.highlight >= nl.view_offset + NAME_LIST_PAGE_SIZE {
+        nl.view_offset = nl.highlight + 1 - NAME_LIST_PAGE_SIZE;
+    }
+}
+
+/// List every worksheet file (`.xlsx`, plus `.WK3` when built with
+/// the `wk3` feature) in `dir`, sorted by filename. Hidden files and
+/// non-file entries are skipped.
 fn list_worksheet_files_in(dir: &Path) -> Vec<PathBuf> {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -956,7 +1076,16 @@ fn list_worksheet_files_in(dir: &Path) -> Vec<PathBuf> {
         .map(|e| e.path())
         .filter(|p| {
             p.extension()
-                .map(|x| x.eq_ignore_ascii_case("xlsx") || x.eq_ignore_ascii_case("wk3"))
+                .map(|x| {
+                    if x.eq_ignore_ascii_case("xlsx") {
+                        return true;
+                    }
+                    #[cfg(feature = "wk3")]
+                    if x.eq_ignore_ascii_case("wk3") {
+                        return true;
+                    }
+                    false
+                })
                 .unwrap_or(false)
         })
         .collect();
@@ -1140,6 +1269,11 @@ enum PendingCommand {
     /// POINT step of `/Worksheet Column Display`. On commit, unhide
     /// every column in the selected range.
     ColumnDisplay,
+    /// Free-form selection started by a mouse drag from READY. There
+    /// is no command to commit; Enter just returns to READY, leaving
+    /// the highlight available for follow-up actions (e.g. SmartIcons
+    /// Bold) before they happen.
+    MouseSelect,
 }
 
 impl PendingCommand {
@@ -1162,6 +1296,9 @@ impl PendingCommand {
             PendingCommand::ColumnRangeResetWidth => "Enter range of columns to reset:",
             PendingCommand::ColumnHide => "Enter range of columns to hide:",
             PendingCommand::ColumnDisplay => "Enter range of columns to display:",
+            // Free mouse-drag selection has no prompt — line 3 keeps
+            // showing the live range, but no command label is shown.
+            PendingCommand::MouseSelect => "",
         }
     }
 }
@@ -1239,6 +1376,7 @@ impl App {
             save_confirm: None,
             pending_xtract_path: None,
             file_list: None,
+            name_list: None,
             active_files: vec![Workbook::new()],
             current: 0,
             file_nav_pending: false,
@@ -1251,6 +1389,7 @@ impl App {
             icon_panel_area: Cell::new(None),
             hovered_icon: None,
             last_grid_area: Cell::new(None),
+            drag_anchor: None,
             splash: None,
             beep_enabled: true,
             beep_count: 0,
@@ -1406,6 +1545,12 @@ impl App {
 
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    /// Byte index of the entry buffer cursor, or `None` if no entry is
+    /// active. Always lands on a UTF-8 char boundary.
+    pub fn entry_cursor(&self) -> Option<usize> {
+        self.entry.as_ref().map(|e| e.cursor)
     }
 
     /// Address of the first cell whose cached formula value is a
@@ -1645,6 +1790,13 @@ impl App {
             self.splash = None;
             return;
         }
+        // F3 NAMES overlay takes precedence over everything else — it
+        // sits on top of the underlying POINT / prompt state and owns
+        // the keyboard in NAMES mode until Esc or Enter.
+        if self.name_list.is_some() {
+            self.handle_key_names(k);
+            return;
+        }
         // /File List overlay takes precedence when active — it owns the
         // keyboard in FILES mode.
         if self.file_list.is_some() {
@@ -1767,19 +1919,35 @@ impl App {
             .get(&pointer)
             .map(|c| c.source_form())
             .unwrap_or_default();
+        let cursor = source.len();
         self.entry = Some(Entry {
             kind: EntryKind::Edit,
             buffer: source,
+            cursor,
         });
         self.mode = Mode::Edit;
     }
 
+    /// F2 mid-entry: promote LABEL/VALUE to EDIT preserving the buffer
+    /// and cursor. No-op when already in EDIT.
+    fn promote_entry_to_edit(&mut self) {
+        if let Some(e) = self.entry.as_mut() {
+            if !matches!(e.kind, EntryKind::Edit) {
+                e.kind = EntryKind::Edit;
+            }
+        }
+        if self.entry.is_some() {
+            self.mode = Mode::Edit;
+        }
+    }
+
     fn handle_key_entry(&mut self, k: KeyEvent) {
+        let in_edit = matches!(self.entry.as_ref().map(|e| e.kind), Some(EntryKind::Edit));
         match k.code {
             KeyCode::Enter => self.commit_entry(),
             KeyCode::Esc => self.cancel_entry(),
-            // Arrow/Tab: commit then move. Pressing these during entry is
-            // the canonical fast-entry idiom (see Tutorial §2.4).
+            // Up/Down always commit-and-move (no in-buffer vertical
+            // navigation in either initial entry or EDIT).
             KeyCode::Up => {
                 self.commit_entry();
                 self.move_pointer(0, -1);
@@ -1788,26 +1956,124 @@ impl App {
                 self.commit_entry();
                 self.move_pointer(0, 1);
             }
+            // Left/Right: in LABEL/VALUE, commit-and-move (Lotus
+            // tutorial §2.4 fast-entry idiom). In EDIT, move the cursor
+            // within the buffer.
+            KeyCode::Left if in_edit => {
+                self.move_entry_cursor_left();
+            }
             KeyCode::Left => {
                 self.commit_entry();
                 self.move_pointer(-1, 0);
             }
-            KeyCode::Right | KeyCode::Tab => {
+            KeyCode::Right if in_edit => {
+                self.move_entry_cursor_right();
+            }
+            KeyCode::Right => {
                 self.commit_entry();
                 self.move_pointer(1, 0);
             }
-            KeyCode::Backspace => {
+            // Tab always commits-and-moves right; an in-buffer Tab has
+            // no Lotus precedent.
+            KeyCode::Tab => {
+                self.commit_entry();
+                self.move_pointer(1, 0);
+            }
+            // Home/End move the cursor in all three entry modes.
+            KeyCode::Home => {
                 if let Some(e) = self.entry.as_mut() {
-                    e.buffer.pop();
+                    e.cursor = 0;
                 }
             }
-            KeyCode::Char(c) => {
+            KeyCode::End => {
                 if let Some(e) = self.entry.as_mut() {
-                    e.buffer.push(c);
+                    e.cursor = e.buffer.len();
                 }
             }
+            KeyCode::Backspace => self.entry_backspace(),
+            KeyCode::Delete => self.entry_delete(),
+            // F2 mid-entry: promote LABEL/VALUE to EDIT preserving the
+            // buffer; cursor stays where it is (typically at the end of
+            // what the user just typed).
+            KeyCode::F(2) => self.promote_entry_to_edit(),
+            KeyCode::Char(c) => self.entry_insert_char(c),
             _ => {}
         }
+    }
+
+    /// Step `cursor` left by one char (UTF-8 safe).
+    fn move_entry_cursor_left(&mut self) {
+        let Some(e) = self.entry.as_mut() else {
+            return;
+        };
+        if e.cursor == 0 {
+            return;
+        }
+        let new_cursor = e.buffer[..e.cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        e.cursor = new_cursor;
+    }
+
+    /// Step `cursor` right by one char (UTF-8 safe).
+    fn move_entry_cursor_right(&mut self) {
+        let Some(e) = self.entry.as_mut() else {
+            return;
+        };
+        if e.cursor >= e.buffer.len() {
+            return;
+        }
+        let next = e.buffer[e.cursor..]
+            .char_indices()
+            .nth(1)
+            .map(|(i, _)| e.cursor + i)
+            .unwrap_or(e.buffer.len());
+        e.cursor = next;
+    }
+
+    /// Delete the char before the cursor; cursor moves to the deleted
+    /// char's start byte. No-op at cursor=0.
+    fn entry_backspace(&mut self) {
+        let Some(e) = self.entry.as_mut() else {
+            return;
+        };
+        if e.cursor == 0 {
+            return;
+        }
+        let prev = e.buffer[..e.cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        e.buffer.replace_range(prev..e.cursor, "");
+        e.cursor = prev;
+    }
+
+    /// Delete the char at the cursor; cursor stays put. No-op at end.
+    fn entry_delete(&mut self) {
+        let Some(e) = self.entry.as_mut() else {
+            return;
+        };
+        if e.cursor >= e.buffer.len() {
+            return;
+        }
+        let next = e.buffer[e.cursor..]
+            .char_indices()
+            .nth(1)
+            .map(|(i, _)| e.cursor + i)
+            .unwrap_or(e.buffer.len());
+        e.buffer.replace_range(e.cursor..next, "");
+    }
+
+    /// Insert `c` at the cursor; cursor advances past the new char.
+    fn entry_insert_char(&mut self, c: char) {
+        let Some(e) = self.entry.as_mut() else {
+            return;
+        };
+        e.buffer.insert(e.cursor, c);
+        e.cursor += c.len_utf8();
     }
 
     fn cancel_entry(&mut self) {
@@ -1817,9 +2083,12 @@ impl App {
 
     fn begin_entry(&mut self, c: char) {
         if is_value_starter(c) {
+            let buffer = c.to_string();
+            let cursor = buffer.len();
             self.entry = Some(Entry {
                 kind: EntryKind::Value,
-                buffer: c.to_string(),
+                buffer,
+                cursor,
             });
             self.mode = Mode::Value;
         } else if matches!(c, '\'' | '"' | '^' | '\\' | '|') {
@@ -1829,14 +2098,18 @@ impl App {
             self.entry = Some(Entry {
                 kind: EntryKind::Label(prefix),
                 buffer: String::new(),
+                cursor: 0,
             });
             self.mode = Mode::Label;
         } else {
             // Any other non-value-starter: default `'` prefix auto-inserted;
             // the typed char is the first char of the label text.
+            let buffer = c.to_string();
+            let cursor = buffer.len();
             self.entry = Some(Entry {
                 kind: EntryKind::Label(self.default_label_prefix),
-                buffer: c.to_string(),
+                buffer,
+                cursor,
             });
             self.mode = Mode::Label;
         }
@@ -1859,21 +2132,29 @@ impl App {
                 prev_format,
             });
         }
-        let mut contents = match entry.kind {
-            EntryKind::Label(prefix) => CellContents::Label {
-                prefix,
-                text: entry.buffer,
-            },
-            EntryKind::Value => match entry.buffer.parse::<f64>() {
-                Ok(n) => CellContents::Constant(Value::Number(n)),
-                Err(_) => CellContents::Formula {
-                    expr: entry.buffer,
-                    cached_value: None,
+        let (mut contents, inferred_format) = match entry.kind {
+            EntryKind::Label(prefix) => (
+                CellContents::Label {
+                    prefix,
+                    text: entry.buffer,
                 },
+                None,
+            ),
+            EntryKind::Value => match l123_core::parse_typed_value(&entry.buffer) {
+                Some(iv) => (CellContents::Constant(Value::Number(iv.number)), iv.format),
+                None => (
+                    CellContents::Formula {
+                        expr: entry.buffer,
+                        cached_value: None,
+                    },
+                    None,
+                ),
             },
             // EDIT commits re-parse the full source buffer so the user can
             // change prefix or type (label ↔ value) via the first-char rule.
-            EntryKind::Edit => CellContents::from_source(&entry.buffer, self.default_label_prefix),
+            EntryKind::Edit => {
+                CellContents::from_source_with_format(&entry.buffer, self.default_label_prefix)
+            }
         };
         self.push_to_engine(&contents);
         match self.recalc_mode {
@@ -1901,6 +2182,13 @@ impl App {
             self.wb_mut().cells.remove(&p);
         } else {
             self.wb_mut().cells.insert(p, contents);
+        }
+        // Apply the inferred display format (Currency / Percent / Comma)
+        // when the typed value carried Lotus-style markers. A plain
+        // numeric commit leaves any pre-existing format alone — re-typing
+        // `100` over a `(C2)` cell keeps the C2 format, matching 1-2-3.
+        if let Some(fmt) = inferred_format {
+            self.wb_mut().cell_formats.insert(p, fmt);
         }
         self.mode = Mode::Ready;
     }
@@ -2572,52 +2860,57 @@ impl App {
             Action::FileOpenAfter => self.start_file_open_prompt(false),
             Action::PrintFile => self.start_print_file_prompt(),
             Action::PrintPrinter => self.start_print_printer(),
-            Action::PrintFileRange => self.begin_point(PendingCommand::PrintFileRange),
-            Action::PrintFileGo => self.execute_print_go(),
-            Action::PrintFileQuit => self.finish_print_session(),
-            Action::PrintFileAlign => {
+            Action::PrintEncoded => self.start_print_encoded_prompt(),
+            Action::PrintCancel => self.finish_print_session(),
+            Action::PrintSessionRange => self.begin_point(PendingCommand::PrintFileRange),
+            Action::PrintSessionGo => self.execute_print_go(),
+            Action::PrintSessionQuit => self.finish_print_session(),
+            Action::PrintSessionAlign => {
                 if let Some(s) = self.print.as_mut() {
                     s.next_page = 1;
                 }
                 self.enter_print_file_menu();
             }
-            Action::PrintFileClear => {
+            Action::PrintSessionClear => {
                 if let Some(s) = self.print.as_mut() {
                     s.clear_all();
                 }
                 self.enter_print_file_menu();
             }
-            Action::PrintFileOptionsHeader => self.start_print_header_prompt(),
-            Action::PrintFileOptionsFooter => self.start_print_footer_prompt(),
-            Action::PrintFileOptionsQuit => self.enter_print_file_menu(),
-            Action::PrintFileOptionsOtherAsDisplayed => {
+            Action::PrintSessionOptionsHeader => self.start_print_header_prompt(),
+            Action::PrintSessionOptionsFooter => self.start_print_footer_prompt(),
+            Action::PrintSessionOptionsSetup => self.start_print_setup_prompt(),
+            Action::PrintSessionOptionsQuit => self.enter_print_file_menu(),
+            Action::PrintSessionOptionsOtherAsDisplayed => {
                 self.set_print_content_mode(PrintContentMode::AsDisplayed)
             }
-            Action::PrintFileOptionsOtherCellFormulas => {
+            Action::PrintSessionOptionsOtherCellFormulas => {
                 self.set_print_content_mode(PrintContentMode::CellFormulas)
             }
-            Action::PrintFileOptionsOtherFormatted => {
+            Action::PrintSessionOptionsOtherFormatted => {
                 self.set_print_format_mode(PrintFormatMode::Formatted)
             }
-            Action::PrintFileOptionsOtherUnformatted => {
+            Action::PrintSessionOptionsOtherUnformatted => {
                 self.set_print_format_mode(PrintFormatMode::Unformatted)
             }
-            Action::PrintFileOptionsMarginLeft => {
+            Action::PrintSessionOptionsMarginLeft => {
                 self.start_print_margin_prompt(PromptNext::PrintFileMarginLeft, "left")
             }
-            Action::PrintFileOptionsMarginRight => {
+            Action::PrintSessionOptionsMarginRight => {
                 self.start_print_margin_prompt(PromptNext::PrintFileMarginRight, "right")
             }
-            Action::PrintFileOptionsMarginTop => {
+            Action::PrintSessionOptionsMarginTop => {
                 self.start_print_margin_prompt(PromptNext::PrintFileMarginTop, "top")
             }
-            Action::PrintFileOptionsMarginBottom => {
+            Action::PrintSessionOptionsMarginBottom => {
                 self.start_print_margin_prompt(PromptNext::PrintFileMarginBottom, "bottom")
             }
-            Action::PrintFileOptionsMarginsQuit => self.enter_print_options_menu(),
-            Action::PrintFileOptionsPgLength => {
+            Action::PrintSessionOptionsMarginsQuit => self.enter_print_options_menu(),
+            Action::PrintSessionOptionsPgLength => {
                 self.start_print_pg_length_prompt();
             }
+            Action::PrintSessionOptionsAdvancedDevice => self.start_print_advanced_device_prompt(),
+            Action::PrintSessionOptionsAdvancedQuit => self.enter_print_options_menu(),
             Action::RangeSearchFormulas => self.begin_point(PendingCommand::RangeSearchRange {
                 scope: SearchScope::Formulas,
             }),
@@ -2751,6 +3044,92 @@ impl App {
         }
     }
 
+    fn handle_key_names(&mut self, k: KeyEvent) {
+        let Some(nl) = self.name_list.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Esc => self.dismiss_name_list(),
+            KeyCode::Up | KeyCode::Left => {
+                if nl.highlight > 0 {
+                    nl.highlight -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Right => {
+                if nl.highlight + 1 < nl.entries.len() {
+                    nl.highlight += 1;
+                }
+            }
+            KeyCode::PageUp => {
+                nl.highlight = nl.highlight.saturating_sub(NAME_LIST_PAGE_SIZE);
+            }
+            KeyCode::PageDown => {
+                if !nl.entries.is_empty() {
+                    nl.highlight = (nl.highlight + NAME_LIST_PAGE_SIZE).min(nl.entries.len() - 1);
+                }
+            }
+            KeyCode::Home => nl.highlight = 0,
+            KeyCode::End => {
+                if !nl.entries.is_empty() {
+                    nl.highlight = nl.entries.len() - 1;
+                }
+            }
+            KeyCode::Enter => self.commit_name_list(),
+            _ => return,
+        }
+        if let Some(nl) = self.name_list.as_mut() {
+            adjust_name_list_view(nl);
+        }
+    }
+
+    /// Esc from the name list: clear the overlay and restore the
+    /// underlying mode (POINT or the prompt's MENU mode).
+    fn dismiss_name_list(&mut self) {
+        let Some(nl) = self.name_list.take() else {
+            return;
+        };
+        self.mode = match nl.origin {
+            NameListOrigin::Point => Mode::Point,
+            NameListOrigin::Goto | NameListOrigin::PromptName => Mode::Menu,
+        };
+    }
+
+    /// Enter on the name list: dispatch per origin.
+    fn commit_name_list(&mut self) {
+        let Some(nl) = self.name_list.take() else {
+            return;
+        };
+        // Empty list — nothing to commit; fall back to dismiss.
+        let Some((name, range)) = nl.entries.get(nl.highlight).cloned() else {
+            self.mode = match nl.origin {
+                NameListOrigin::Point => Mode::Point,
+                NameListOrigin::Goto | NameListOrigin::PromptName => Mode::Menu,
+            };
+            return;
+        };
+        match nl.origin {
+            NameListOrigin::Point => {
+                let Some(ps) = self.point.take() else {
+                    self.mode = Mode::Ready;
+                    return;
+                };
+                self.apply_pending_with_range(ps.pending, range);
+            }
+            NameListOrigin::Goto => {
+                self.prompt = None;
+                self.move_pointer_to(range.start);
+                self.mode = Mode::Ready;
+            }
+            NameListOrigin::PromptName => {
+                if let Some(p) = self.prompt.as_mut() {
+                    p.buffer = name;
+                    p.fresh = false;
+                }
+                self.mode = Mode::Menu;
+            }
+        }
+    }
+
     /// /FN — wipe the current workbook back to a blank slate. Both the
     /// `/Worksheet Erase Yes` — drop every active file and replace the
     /// workspace with a single blank workbook. Session-level prompts,
@@ -2817,6 +3196,20 @@ impl App {
         self.enter_print_file_menu();
     }
 
+    /// `/Print Encoded`: prompt for the destination path. On commit a
+    /// session is opened with [`PrintDestination::Encoded`] and the
+    /// shared `/PF` submenu is entered.
+    fn start_print_encoded_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter encoded file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::PrintEncodedFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
     fn enter_print_file_menu(&mut self) {
         self.menu = Some(MenuState::rooted_at(menu::PRINT_FILE_MENU));
         self.mode = Mode::Menu;
@@ -2860,6 +3253,36 @@ impl App {
             highlight: 0,
             message: None,
             override_root: Some(menu::PRINT_FILE_MENU),
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Re-enter the Advanced sub-sub-menu at path=['O', 'A'] under
+    /// the /PF root so each Advanced leaf returns to its sibling list
+    /// (mirrors `enter_print_margins_menu`).
+    fn enter_print_advanced_menu(&mut self) {
+        self.menu = Some(MenuState {
+            path: vec!['O', 'A'],
+            highlight: 0,
+            message: None,
+            override_root: Some(menu::PRINT_FILE_MENU),
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_print_advanced_device_prompt(&mut self) {
+        self.menu = None;
+        let buffer = self
+            .print
+            .as_ref()
+            .map(|s| s.lp_destination.clone())
+            .unwrap_or_default();
+        let fresh = !buffer.is_empty();
+        self.prompt = Some(PromptState {
+            label: "Enter printer name:".into(),
+            buffer,
+            next: PromptNext::PrintSessionOptionsAdvancedDevice,
+            fresh,
         });
         self.mode = Mode::Menu;
     }
@@ -2928,6 +3351,23 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    fn start_print_setup_prompt(&mut self) {
+        self.menu = None;
+        let buffer = self
+            .print
+            .as_ref()
+            .map(|s| s.setup_string.clone())
+            .unwrap_or_default();
+        let fresh = !buffer.is_empty();
+        self.prompt = Some(PromptState {
+            label: "Enter setup string:".into(),
+            buffer,
+            next: PromptNext::PrintFileSetup,
+            fresh,
+        });
+        self.mode = Mode::Menu;
+    }
+
     fn finish_print_session(&mut self) {
         self.print = None;
         self.close_menu();
@@ -2979,19 +3419,38 @@ impl App {
                         &l123_print::encode::pdf::PdfOptions::default(),
                     )
                 } else {
-                    l123_print::to_ascii(&grid).into_bytes()
+                    let mut out = session.setup_string.as_bytes().to_vec();
+                    out.extend_from_slice(l123_print::to_ascii(&grid).as_bytes());
+                    out
                 };
                 let _ = std::fs::write(path, bytes);
             }
             PrintDestination::Printer(lp_opts) => {
                 #[cfg(unix)]
                 {
-                    let _ = l123_print::encode::lp::to_lp(&grid, lp_opts);
+                    let mut effective = lp_opts.clone();
+                    if !session.setup_string.is_empty() {
+                        effective.setup_string = Some(session.setup_string.clone());
+                    }
+                    if !session.lp_destination.is_empty() {
+                        effective.destination = Some(session.lp_destination.clone());
+                    }
+                    let _ = l123_print::encode::lp::to_lp(&grid, &effective);
                 }
                 #[cfg(not(unix))]
                 {
                     let _ = lp_opts; // hold field live on non-unix
                 }
+            }
+            PrintDestination::Encoded(path) => {
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                }
+                let mut out = session.setup_string.as_bytes().to_vec();
+                out.extend_from_slice(l123_print::to_ascii(&grid).as_bytes());
+                let _ = std::fs::write(path, out);
             }
         }
         // Session stays alive so the user can issue further commands
@@ -3301,13 +3760,21 @@ impl App {
     /// Load an xlsx from disk, wiping the current in-memory workbook
     /// and repopulating the UI cache from the loaded engine model.
     fn load_workbook_from(&mut self, path: PathBuf) {
+        #[cfg(feature = "wk3")]
         let is_wk3 = path
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.eq_ignore_ascii_case("wk3"))
             .unwrap_or(false);
+        #[cfg(not(feature = "wk3"))]
+        let is_wk3 = false;
         let load_result = if is_wk3 {
-            self.wb_mut().engine.load_wk3(&path)
+            #[cfg(feature = "wk3")]
+            {
+                self.wb_mut().engine.load_wk3(&path)
+            }
+            #[cfg(not(feature = "wk3"))]
+            unreachable!()
         } else {
             self.wb_mut().engine.load_xlsx(&path)
         };
@@ -3865,6 +4332,7 @@ impl App {
             KeyCode::PageUp => self.move_pointer(0, -20),
             KeyCode::Enter => self.commit_point(),
             KeyCode::Esc => self.esc_in_point(),
+            KeyCode::F(3) => self.open_name_list(NameListOrigin::Point),
             KeyCode::Backspace => {
                 if let Some(ps) = self.point.as_mut() {
                     ps.typed.pop();
@@ -4004,7 +4472,15 @@ impl App {
                 None => Range::single(self.wb_mut().pointer),
             },
         };
-        match ps.pending {
+        self.apply_pending_with_range(ps.pending, range);
+    }
+
+    /// Dispatch a [`PendingCommand`] with a fully-resolved range.
+    /// Reused by [`Self::commit_point`] (highlight/typed-buffer path)
+    /// and by F3 NAMES selection in POINT (named-range path) so the
+    /// per-command effects don't drift out of sync.
+    fn apply_pending_with_range(&mut self, pending: PendingCommand, range: Range) {
+        match pending {
             PendingCommand::RangeErase => {
                 self.execute_range_erase(range);
                 self.mode = Mode::Ready;
@@ -4084,6 +4560,15 @@ impl App {
             }
             PendingCommand::ColumnDisplay => {
                 self.execute_col_hide_display(range, false);
+                self.mode = Mode::Ready;
+            }
+            // Mouse-drag selection has no command to execute. Enter
+            // just clears the POINT state and lands back in READY; any
+            // command the user invokes next can read the highlight if
+            // they entered POINT first via /…  or click an icon while
+            // POINT is still active.
+            PendingCommand::MouseSelect => {
+                let _ = range;
                 self.mode = Mode::Ready;
             }
         }
@@ -4397,6 +4882,38 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    /// Snapshot the workbook's defined range names into the F3 NAMES
+    /// overlay, keyed by ascii-lowercase ordering. Underlying state
+    /// (POINT or prompt) is left untouched so dismissal returns to it.
+    fn open_name_list(&mut self, origin: NameListOrigin) {
+        let mut entries: Vec<(String, Range)> = self
+            .wb()
+            .named_ranges
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        self.name_list = Some(NameListState {
+            entries,
+            highlight: 0,
+            view_offset: 0,
+            origin,
+        });
+        self.mode = Mode::Names;
+    }
+
+    /// F3 from a command-argument prompt. Only opens the picker for
+    /// prompts where a range-name selection is meaningful (GOTO and
+    /// `/Range Name Delete`); other prompts ignore F3.
+    fn open_name_list_from_prompt(&mut self) {
+        let origin = match self.prompt.as_ref().map(|p| p.next) {
+            Some(PromptNext::Goto) => NameListOrigin::Goto,
+            Some(PromptNext::RangeNameDelete) => NameListOrigin::PromptName,
+            _ => return,
+        };
+        self.open_name_list(origin);
+    }
+
     /// Width of `col` in `sheet`. Returns the per-column override if
     /// one is set, otherwise the workbook's global default width.
     fn col_width_of(&self, sheet: SheetId, col: u16) -> u8 {
@@ -4411,6 +4928,7 @@ impl App {
         match k.code {
             KeyCode::Enter => self.commit_prompt(),
             KeyCode::Esc => self.cancel_prompt(),
+            KeyCode::F(3) => self.open_name_list_from_prompt(),
             KeyCode::Backspace => {
                 if let Some(p) = self.prompt.as_mut() {
                     if p.fresh {
@@ -4587,6 +5105,15 @@ impl App {
                 self.print = Some(PrintSession::new_file(path));
                 self.enter_print_file_menu();
             }
+            PromptNext::PrintEncodedFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(&p.buffer);
+                self.print = Some(PrintSession::new_encoded(path));
+                self.enter_print_file_menu();
+            }
             PromptNext::PrintFileHeader => {
                 if let Some(s) = self.print.as_mut() {
                     s.header = p.buffer;
@@ -4596,6 +5123,12 @@ impl App {
             PromptNext::PrintFileFooter => {
                 if let Some(s) = self.print.as_mut() {
                     s.footer = p.buffer;
+                }
+                self.enter_print_options_menu();
+            }
+            PromptNext::PrintFileSetup => {
+                if let Some(s) = self.print.as_mut() {
+                    s.setup_string = p.buffer;
                 }
                 self.enter_print_options_menu();
             }
@@ -4643,6 +5176,12 @@ impl App {
                     s.pg_length = v;
                 }
                 self.enter_print_options_menu();
+            }
+            PromptNext::PrintSessionOptionsAdvancedDevice => {
+                if let Some(s) = self.print.as_mut() {
+                    s.lp_destination = p.buffer;
+                }
+                self.enter_print_advanced_menu();
             }
         }
     }
@@ -5307,7 +5846,9 @@ impl App {
         // width; everything else (grid, menu, point) keeps room for the
         // panel on the right.
         let (main_area, icon_area) = self.split_for_icon_panel(chunks[1]);
-        if self.file_list.is_some() {
+        if self.name_list.is_some() {
+            self.render_name_list_overlay(chunks[1], buf);
+        } else if self.file_list.is_some() {
             self.render_file_list_overlay(chunks[1], buf);
         } else if self.mode == Mode::Graph {
             self.render_graph_overlay(chunks[1], buf);
@@ -5450,6 +5991,7 @@ impl App {
         if self.icon_panel.is_none()
             || self.mode == Mode::Graph
             || self.file_list.is_some()
+            || self.name_list.is_some()
             || area.width < Self::ICON_PANEL_MIN_GRID_COLS + Self::ICON_PANEL_COLS
         {
             return (area, None);
@@ -5543,6 +6085,10 @@ impl App {
                 };
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                // Each fresh press resets the drag-anchor; the only
+                // path that re-arms it is a grid-cell hit in
+                // Ready/Point below.
+                self.drag_anchor = None;
                 // Icon panel wins over the grid when both would hit —
                 // it sits on top visually.
                 if let (true, Some(g)) = (inside_icon, icon_geom) {
@@ -5554,7 +6100,13 @@ impl App {
                         // extends (or shrinks) to the clicked cell
                         // naturally; unanchored POINT just moves the
                         // pointer.
-                        Mode::Ready | Mode::Point => self.move_pointer_to(addr),
+                        Mode::Ready | Mode::Point => {
+                            self.move_pointer_to(addr);
+                            // Remember where the press landed so a
+                            // follow-up Drag can promote READY into
+                            // POINT anchored here. Cleared on Up.
+                            self.drag_anchor = Some(addr);
+                        }
                         // Mid-formula: splice the clicked cell's
                         // address into the entry buffer if the buffer
                         // is in a cell-ref-accepting position. The
@@ -5564,6 +6116,49 @@ impl App {
                         _ => {}
                     }
                 }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                // Drag-to-select. Only acts if a prior Down landed on
+                // a grid cell (`drag_anchor` set). Off-grid drag
+                // motion freezes the pointer rather than snapping.
+                let Some(anchor) = self.drag_anchor else {
+                    return;
+                };
+                let Some(addr) = self.cell_at_screen(m.column, m.row) else {
+                    return;
+                };
+                match self.mode {
+                    Mode::Ready => {
+                        // Promote into POINT anchored at the press
+                        // cell, then move the free end to where the
+                        // cursor is now.
+                        self.menu = None;
+                        self.point = Some(PointState {
+                            anchor: Some(anchor),
+                            pending: PendingCommand::MouseSelect,
+                            typed: String::new(),
+                        });
+                        self.mode = Mode::Point;
+                        self.move_pointer_to(addr);
+                    }
+                    Mode::Point => {
+                        // Existing POINT (e.g. /RE) — its anchor is
+                        // already set; live-extend by moving pointer.
+                        self.move_pointer_to(addr);
+                    }
+                    _ => {}
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.drag_anchor = None;
+            }
+            MouseEventKind::ScrollDown => {
+                let wb = self.wb_mut();
+                wb.viewport_row_offset = wb.viewport_row_offset.saturating_add(MOUSE_SCROLL_STEP);
+            }
+            MouseEventKind::ScrollUp => {
+                let wb = self.wb_mut();
+                wb.viewport_row_offset = wb.viewport_row_offset.saturating_sub(MOUSE_SCROLL_STEP);
             }
             _ => {}
         }
@@ -5577,12 +6172,12 @@ impl App {
         self.scroll_into_view();
     }
 
-    /// Append `addr` (short form, e.g. `C3`) to the current entry
-    /// buffer — but only when the buffer is in a position where a
-    /// cell reference is grammatically valid (empty, or ending in an
-    /// operator/paren/comma/dot/comparison/logical token). Called
-    /// from mouse click-in-grid during VALUE/EDIT, so the user can
-    /// build formulas by clicking instead of typing references.
+    /// Insert `addr` (short form, e.g. `C3`) at the entry buffer
+    /// cursor — but only when the position before the cursor is one
+    /// where a cell reference is grammatically valid (start of buffer,
+    /// or after an operator/paren/comma/dot/comparison/logical token).
+    /// Called from mouse click-in-grid during VALUE/EDIT, so the user
+    /// can build formulas by clicking instead of typing references.
     fn splice_cell_ref_into_entry(&mut self, addr: Address) {
         let Some(entry) = self.entry.as_mut() else {
             return;
@@ -5590,7 +6185,7 @@ impl App {
         if !matches!(entry.kind, EntryKind::Value | EntryKind::Edit) {
             return;
         }
-        let accepts_ref = match entry.buffer.chars().last() {
+        let accepts_ref = match entry.buffer[..entry.cursor].chars().last() {
             None => true,
             // `.` covers both the range separator `..` and an
             // in-progress `.`; `#` covers `#AND#`/`#OR#`/`#NOT#`.
@@ -5602,7 +6197,9 @@ impl App {
         if !accepts_ref {
             return;
         }
-        entry.buffer.push_str(&addr.display_short());
+        let s = addr.display_short();
+        entry.buffer.insert_str(entry.cursor, &s);
+        entry.cursor += s.len();
     }
 
     /// Map a screen coordinate to the cell address it sits on, or
@@ -5695,9 +6292,7 @@ impl App {
         match l123_graph::icon_action(id) {
             l123_graph::IconAction::MenuPath(path) => self.dispatch_menu_path(path),
             l123_graph::IconAction::WysiwygMenuPath(path) => self.dispatch_wysiwyg_menu_path(path),
-            l123_graph::IconAction::TextStyleToggle { bits } => {
-                self.dispatch_icon_text_style(bits)
-            }
+            l123_graph::IconAction::TextStyleToggle { bits } => self.dispatch_icon_text_style(bits),
             l123_graph::IconAction::SysKey(act) => self.dispatch_sys_action(act),
             l123_graph::IconAction::PageNav => {} // reached only via slot 16
             l123_graph::IconAction::Noop => {}
@@ -5979,10 +6574,13 @@ impl App {
             Span::raw(" "),
         ]);
 
-        // Line 2 & 3 depend on mode. File-list and save-confirm take
-        // absolute precedence (they own the keyboard); then a
-        // command-argument prompt; then mode-specific rendering.
-        let (line2, line3) = if self.file_list.is_some() {
+        // Line 2 & 3 depend on mode. F3 NAMES, file-list and
+        // save-confirm take absolute precedence (they own the
+        // keyboard); then a command-argument prompt; then
+        // mode-specific rendering.
+        let (line2, line3) = if self.name_list.is_some() {
+            self.render_name_list_lines()
+        } else if self.file_list.is_some() {
             self.render_file_list_lines()
         } else if self.save_confirm.is_some() {
             self.render_save_confirm_lines()
@@ -6002,7 +6600,7 @@ impl App {
                 Mode::Point => self.render_point_lines(),
                 _ => {
                     let l2 = match self.entry.as_ref() {
-                        Some(e) => Line::from(format!(" {}", e.buffer)),
+                        Some(e) => render_entry_l2(e),
                         None => Line::from(""),
                     };
                     // Icon-hover description — gated on entry being
@@ -6111,6 +6709,79 @@ impl App {
                 .unwrap_or_default();
             let row = format_file_list_row(&name, &size, name_col_width, size_col_width, width);
             let style = if idx == fl.highlight {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            set_line(buf, area.x, area.y + 1 + i as u16, &row, area.width, style);
+        }
+    }
+
+    fn render_name_list_lines(&self) -> (Line<'_>, Line<'_>) {
+        let Some(nl) = self.name_list.as_ref() else {
+            return (Line::from(""), Line::from(""));
+        };
+        let header = " Name List";
+        let tail = if nl.entries.is_empty() {
+            " (no defined names)".to_string()
+        } else {
+            let (name, range) = &nl.entries[nl.highlight];
+            format!(
+                " {}  {}..{}   [{}/{}]   Enter: select  Esc: cancel",
+                name,
+                range.start.display_full(),
+                range.end.display_full(),
+                nl.highlight + 1,
+                nl.entries.len(),
+            )
+        };
+        (Line::from(header), Line::from(tail))
+    }
+
+    /// Draw the scrollable name picker in `area`. Each row shows the
+    /// range name and the range it points at. Highlighted row is
+    /// reverse-video.
+    fn render_name_list_overlay(&self, area: Rect, buf: &mut Buffer) {
+        let Some(nl) = self.name_list.as_ref() else {
+            return;
+        };
+        let width = area.width as usize;
+        let rows = area.height as usize;
+        if rows == 0 || width == 0 {
+            return;
+        }
+
+        let range_col_width: usize = 24;
+        let name_col_width = width.saturating_sub(range_col_width + 3);
+
+        let header = format_file_list_row("NAME", "RANGE", name_col_width, range_col_width, width);
+        set_line(buf, area.x, area.y, &header, area.width, Style::default());
+
+        if nl.entries.is_empty() {
+            set_line(
+                buf,
+                area.x,
+                area.y + 1,
+                "(no defined names)",
+                area.width,
+                Style::default(),
+            );
+            return;
+        }
+
+        let visible_rows = rows.saturating_sub(1);
+        let start = nl.view_offset.min(nl.entries.len());
+        let end = (start + visible_rows).min(nl.entries.len());
+        for (i, (name, range)) in nl.entries[start..end].iter().enumerate() {
+            let idx = start + i;
+            let range_str = format!(
+                "{}..{}",
+                range.start.display_full(),
+                range.end.display_full()
+            );
+            let row =
+                format_file_list_row(name, &range_str, name_col_width, range_col_width, width);
+            let style = if idx == nl.highlight {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
                 Style::default()
@@ -7021,6 +7692,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "wk3")]
     #[test]
     fn new_with_file_routes_wk3_by_extension() {
         // Open a `.WK3` via the CLI entry point: it should land in
@@ -7931,9 +8603,10 @@ mod tests {
         let _ = std::fs::remove_dir(&dir);
     }
 
-    /// Worksheet listing is an alphabetical list of xlsx + WK3 files
-    /// in the given directory. Pure function of the directory's
-    /// contents so we can test it without touching process CWD.
+    /// Worksheet listing is an alphabetical list of `.xlsx` files
+    /// (plus `.WK3` when built with `--features wk3`) in the given
+    /// directory. Pure function of the directory's contents so we can
+    /// test it without touching process CWD.
     #[test]
     fn list_worksheet_files_in_returns_xlsx_sorted() {
         let dir = temp_test_dir("list_ws");
@@ -7953,16 +8626,17 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(
-            names,
-            vec![
-                "alpha.xlsx",
-                "legacy.WK3",
-                "lower.wk3",
-                "mid.XLSX",
-                "zeta.xlsx",
-            ]
-        );
+        #[cfg(feature = "wk3")]
+        let expected = vec![
+            "alpha.xlsx",
+            "legacy.WK3",
+            "lower.wk3",
+            "mid.XLSX",
+            "zeta.xlsx",
+        ];
+        #[cfg(not(feature = "wk3"))]
+        let expected = vec!["alpha.xlsx", "mid.XLSX", "zeta.xlsx"];
+        assert_eq!(names, expected);
         for name in names_in {
             let _ = std::fs::remove_file(dir.join(name));
         }
@@ -8819,6 +9493,222 @@ mod tests {
         enter_point_via_range_erase(&mut app);
         click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
         assert_eq!(app.mode, Mode::Point, "click must not drop out of POINT");
+    }
+
+    // ---- Phase 4: drag-to-select ----
+
+    /// Simulate a left-button drag at `(col, row)` — used after a
+    /// preceding [`click_at`] to drive the drag-to-select path.
+    fn drag_at(app: &mut App, col: u16, row: u16) {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    /// Simulate the left-button release ending a drag.
+    fn release_at(app: &mut App, col: u16, row: u16) {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    #[test]
+    fn mouse_drag_from_ready_enters_point_anchored_at_press_cell() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_A_X, BODY_TOP_Y); // Press at A1.
+        drag_at(&mut app, COL_C_X, BODY_TOP_Y + 2); // Drag to C3.
+        assert_eq!(app.mode, Mode::Point);
+        assert_eq!(app.pointer().display_full(), "A:C3");
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), Some(Address::A1));
+    }
+
+    #[test]
+    fn mouse_drag_extends_then_shrinks_with_anchor_fixed() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_A_X, BODY_TOP_Y);
+        drag_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        drag_at(&mut app, COL_D_X, BODY_TOP_Y + 3);
+        assert_eq!(app.pointer().display_full(), "A:D4");
+        drag_at(&mut app, COL_B_X, BODY_TOP_Y + 1);
+        assert_eq!(app.pointer().display_full(), "A:B2");
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), Some(Address::A1));
+    }
+
+    #[test]
+    fn mouse_release_does_not_exit_point() {
+        // Up just ends the drag; selection persists for follow-up
+        // commands (Bold icon, /Range Format, …).
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_A_X, BODY_TOP_Y);
+        drag_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        release_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Point);
+        assert_eq!(app.pointer().display_full(), "A:C3");
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), Some(Address::A1));
+    }
+
+    #[test]
+    fn mouse_drag_inside_existing_point_does_not_reanchor() {
+        // Already in POINT via /RE — anchor at A1. Press on B2 (Phase 2
+        // moves pointer; anchor stays), then drag to C3. The /RE anchor
+        // must persist — we never overwrite an existing POINT anchor
+        // with the mouse-press cell.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_point_via_range_erase(&mut app);
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), Some(Address::A1));
+        click_at(&mut app, COL_B_X, BODY_TOP_Y + 1); // Press at B2.
+        drag_at(&mut app, COL_C_X, BODY_TOP_Y + 2); // Drag to C3.
+        assert_eq!(app.mode, Mode::Point);
+        assert_eq!(app.pointer().display_full(), "A:C3");
+        assert_eq!(app.point.as_ref().and_then(|p| p.anchor), Some(Address::A1));
+    }
+
+    #[test]
+    fn mouse_drag_without_press_on_grid_is_ignored() {
+        // A drag that wasn't preceded by a press inside the grid (e.g.
+        // mouse-down landed on the column header, then drag onto the
+        // body) must not promote into POINT.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_B_X, HEADER_Y); // Header click is ignored.
+        drag_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Ready);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+    }
+
+    #[test]
+    fn mouse_drag_in_value_mode_is_ignored() {
+        // Mid-formula entry: a stray drag must not corrupt the buffer
+        // or change mode. Phase 3 splicing is press-driven, not drag.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "+");
+        assert_eq!(app.mode, Mode::Value);
+        drag_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Value);
+        assert_eq!(entry_buffer(&app), "+");
+    }
+
+    #[test]
+    fn mouse_drag_off_grid_does_not_move_pointer() {
+        // While dragging, if the cursor leaves the grid (onto the
+        // column header or row gutter), the pointer freezes — it does
+        // not snap to the last in-grid cell or jump to the gutter.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_A_X, BODY_TOP_Y);
+        drag_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        let pinned = app.pointer().display_full();
+        drag_at(&mut app, 2, BODY_TOP_Y + 2); // Onto row gutter.
+        assert_eq!(app.pointer().display_full(), pinned);
+        assert_eq!(app.mode, Mode::Point);
+    }
+
+    #[test]
+    fn mouse_release_clears_drag_state_so_next_drag_needs_a_press() {
+        // After Up, a follow-up Drag without a fresh press is a no-op:
+        // we shouldn't keep extending the previous selection just
+        // because the OS sends spurious motion events.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        click_at(&mut app, COL_A_X, BODY_TOP_Y);
+        drag_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        release_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        // Now exit POINT — Esc, Esc.
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+        // Bare Drag (no press): must NOT promote to POINT.
+        drag_at(&mut app, COL_D_X, BODY_TOP_Y + 3);
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    // ---- Phase 5: scroll wheel ----
+
+    fn wheel(app: &mut App, kind: MouseEventKind) {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    #[test]
+    fn scroll_down_advances_viewport_row_offset_by_scroll_step() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        assert_eq!(app.wb().viewport_row_offset, 0);
+        wheel(&mut app, MouseEventKind::ScrollDown);
+        assert_eq!(app.wb().viewport_row_offset, MOUSE_SCROLL_STEP);
+    }
+
+    #[test]
+    fn scroll_up_retreats_viewport_row_offset_saturating_at_zero() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        app.wb_mut().viewport_row_offset = 50;
+        wheel(&mut app, MouseEventKind::ScrollUp);
+        assert_eq!(app.wb().viewport_row_offset, 50 - MOUSE_SCROLL_STEP);
+        // Many up-scrolls saturate at 0 (no underflow / panic).
+        for _ in 0..100 {
+            wheel(&mut app, MouseEventKind::ScrollUp);
+        }
+        assert_eq!(app.wb().viewport_row_offset, 0);
+    }
+
+    #[test]
+    fn scroll_does_not_move_pointer() {
+        // Modern spreadsheet convention: the wheel scrolls the
+        // viewport only, leaving the cell pointer where it sits — even
+        // if it ends up off-screen. The next keyboard arrow press will
+        // pull it back into view via scroll_into_view.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+        wheel(&mut app, MouseEventKind::ScrollDown);
+        wheel(&mut app, MouseEventKind::ScrollDown);
+        assert_eq!(app.pointer().display_full(), "A:A1");
+    }
+
+    #[test]
+    fn scroll_does_not_change_mode() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        wheel(&mut app, MouseEventKind::ScrollDown);
+        assert_eq!(app.mode, Mode::Ready);
+
+        // In POINT, scrolling must keep POINT alive — selection
+        // persists, viewport just moves.
+        enter_point_via_range_erase(&mut app);
+        assert_eq!(app.mode, Mode::Point);
+        wheel(&mut app, MouseEventKind::ScrollDown);
+        assert_eq!(app.mode, Mode::Point);
+    }
+
+    #[test]
+    fn scroll_works_during_value_entry_without_corrupting_buffer() {
+        // The wheel is a navigation gesture, not an entry gesture — it
+        // must never touch the entry buffer or commit/cancel the
+        // current entry.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "+A1");
+        assert_eq!(app.mode, Mode::Value);
+        wheel(&mut app, MouseEventKind::ScrollDown);
+        assert_eq!(app.mode, Mode::Value);
+        assert_eq!(entry_buffer(&app), "+A1");
+        assert!(app.wb().viewport_row_offset > 0);
     }
 
     // ---- Phase 3: mid-entry cell-reference splicing on click ----

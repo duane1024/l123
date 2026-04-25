@@ -1,0 +1,46 @@
+# F2 EDIT — Backspace deletes char before cursor; Delete deletes char at cursor.
+
+KEYS hello
+ENTER
+HOME
+
+# Buffer is `'hello`, cursor at end (6).
+F 2
+ASSERT_PANEL_L2   'hello
+ASSERT_ENTRY_CURSOR 6
+
+# Backspace at end → deletes 'o'; cursor → 5; buffer `'hell`.
+BACKSPACE
+ASSERT_PANEL_L2   'hell
+ASSERT_ENTRY_CURSOR 5
+
+# Home → 0, then Right ×2 to land between 'h' and 'e' (cursor=2 within
+# `'hell`, where bytes are 0:' 1:h 2:e 3:l 4:l).
+HOME
+RIGHT
+RIGHT
+ASSERT_ENTRY_CURSOR 2
+
+# Delete removes the char at the cursor — the 'e'. Cursor stays at 2;
+# buffer becomes `'hll`.
+DEL
+ASSERT_PANEL_L2   'hll
+ASSERT_ENTRY_CURSOR 2
+
+# Backspace at cursor=2 deletes 'h' before it; cursor → 1; buffer `'ll`.
+BACKSPACE
+ASSERT_PANEL_L2   'll
+ASSERT_ENTRY_CURSOR 1
+
+# Backspace at cursor=1 deletes the prefix `'`; cursor → 0; buffer `ll`.
+# This re-applies the first-char rule on commit (label vs value vs prefix).
+BACKSPACE
+ASSERT_ENTRY_CURSOR 0
+
+# Backspace at cursor=0 is a no-op.
+BACKSPACE
+ASSERT_ENTRY_CURSOR 0
+
+# Commit — `ll` (no prefix → default-prefix label).
+ENTER
+ASSERT_CELL       A:A1  ll

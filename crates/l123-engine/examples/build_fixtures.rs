@@ -87,7 +87,14 @@ fn build_alignment(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         HorizontalAlignment::Center,
         false,
     )?;
-    write_cell_with_alignment(&mut model, 1, 3, "'right", HorizontalAlignment::Right, false)?;
+    write_cell_with_alignment(
+        &mut model,
+        1,
+        3,
+        "'right",
+        HorizontalAlignment::Right,
+        false,
+    )?;
     write_cell_with_alignment(&mut model, 1, 4, "1234", HorizontalAlignment::Left, false)?;
     write_cell_with_alignment(&mut model, 1, 5, "'wrap", HorizontalAlignment::Left, true)?;
     let path_str = path
@@ -151,11 +158,7 @@ fn build_sheet_color(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 /// copy that has `<sheetPr><tabColor rgb="..."/></sheetPr>` inserted
 /// as the first child of `<worksheet>`.  Every other member is
 /// copied byte-for-byte so the patched file stays a valid xlsx.
-fn patch_tab_color(
-    path: &Path,
-    member: &str,
-    rgb: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn patch_tab_color(path: &Path, member: &str, rgb: &str) -> Result<(), Box<dyn std::error::Error>> {
     let bytes = std::fs::read(path)?;
     let reader = std::io::Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(reader)?;
@@ -163,8 +166,8 @@ fn patch_tab_color(
     let mut out_buf: Vec<u8> = Vec::new();
     {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut out_buf));
-        let opts = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
             let name = entry.name().to_string();
@@ -491,14 +494,15 @@ fn add_to_xlsx(path: &Path, additions: &[(&str, &str)]) -> Result<(), Box<dyn st
     let bytes = std::fs::read(path)?;
     let reader = std::io::Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(reader)?;
-    let existing: std::collections::HashSet<String> =
-        (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+    let existing: std::collections::HashSet<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .collect();
 
     let mut out_buf: Vec<u8> = Vec::new();
     {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut out_buf));
-        let opts = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
             let name = entry.name().to_string();

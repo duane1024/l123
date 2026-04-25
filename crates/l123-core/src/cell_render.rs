@@ -520,7 +520,10 @@ mod tests {
 
     #[test]
     fn apply_halign_general_is_identity() {
-        assert_eq!(apply_halign_to_rendered("    12345", HAlign::General, 9), "    12345");
+        assert_eq!(
+            apply_halign_to_rendered("    12345", HAlign::General, 9),
+            "    12345"
+        );
     }
 
     #[test]
@@ -561,14 +564,20 @@ mod tests {
 
     #[test]
     fn apply_halign_preserves_blank_slot() {
-        assert_eq!(apply_halign_to_rendered("         ", HAlign::Right, 9), "         ");
+        assert_eq!(
+            apply_halign_to_rendered("         ", HAlign::Right, 9),
+            "         "
+        );
     }
 
     #[test]
     fn apply_halign_fill_repeats() {
         // Text "x" in width 9 → "x        ". Fill repeats the trimmed
         // content to fill the whole width.
-        assert_eq!(apply_halign_to_rendered("x        ", HAlign::Fill, 9), "xxxxxxxxx");
+        assert_eq!(
+            apply_halign_to_rendered("x        ", HAlign::Fill, 9),
+            "xxxxxxxxx"
+        );
     }
 
     #[test]

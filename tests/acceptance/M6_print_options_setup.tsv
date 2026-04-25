@@ -1,0 +1,47 @@
+# /Print File Options Setup — printer init/escape string.
+#
+# Stored on the active /PF session and prepended verbatim to the .prn
+# output stream (and piped ahead of the ASCII bytes when /Print
+# Printer sends to CUPS `lp`). We use printable ASCII here so the
+# transcript can spell the value out; `\NNN` byte-escape decoding for
+# real ESC sequences is a follow-on task.
+
+RM_FILE $TMPDIR/m6_print_setup.prn
+
+KEYS 'Hello
+ENTER
+
+HOME
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_print_setup.prn
+ENTER
+
+# Pick the range first so /G has something to write.
+KEY R
+ENTER
+ASSERT_PANEL_L2   Options
+
+# Descend into Options.
+KEY O
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Setup
+
+# /S prompts for the setup string.
+KEY S
+ASSERT_PANEL_L3   Enter setup
+KEYS INIT_PRINTER
+ENTER
+ASSERT_PANEL_L2   Setup
+
+# /Q lands back in the /PF submenu.
+KEY Q
+ASSERT_PANEL_L2   Range
+ASSERT_PANEL_L2   Go
+
+# /G writes the file. Setup bytes precede the ASCII page stream.
+KEY G
+KEY Q
+ASSERT_MODE       READY
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_setup.prn  INIT_PRINTERHello

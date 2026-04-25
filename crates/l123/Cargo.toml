@@ -8,6 +8,11 @@ license.workspace = true
 name = "l123"
 path = "src/main.rs"
 
+[features]
+# See `l123-engine/Cargo.toml` for what this enables and the
+# additional manual step it requires.
+wk3 = ["l123-ui/wk3", "l123-engine/wk3"]
+
 [dependencies]
 l123-core = { workspace = true }
 l123-engine = { workspace = true }

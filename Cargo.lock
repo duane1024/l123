@@ -1293,6 +1293,8 @@ dependencies = [
 [[package]]
 name = "ironcalc"
 version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e07dd44af17a9e14e7df372347ee0bfc3f0bbbf38894aba5e9abfb53f32ba95"
 dependencies = [
  "bitcode",
  "chrono",
@@ -1308,6 +1310,8 @@ dependencies = [
 [[package]]
 name = "ironcalc_base"
 version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f208abea2365061ed7ce3f6a70e7c1537181ea11780de4974aae3082bf4c6d9"
 dependencies = [
  "bitcode",
  "chrono",
@@ -1319,15 +1323,6 @@ dependencies = [
  "ryu",
  "serde",
  "statrs",
-]
-
-[[package]]
-name = "ironcalc_lotus"
-version = "0.7.1"
-dependencies = [
- "bitcode",
- "ironcalc_base",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1431,7 +1426,6 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "ironcalc",
- "ironcalc_lotus",
  "l123-core",
  "thiserror 2.0.18",
  "tracing",

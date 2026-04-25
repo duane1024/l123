@@ -1,0 +1,39 @@
+# F2 EDIT — cursor moves with Left/Right/Home/End within the buffer.
+#
+# Buffer for a default-prefix label `hello` is `'hello` (6 bytes).
+# Cursor starts at end (byte index 6) when EDIT begins.
+
+KEYS hello
+ENTER
+HOME
+ASSERT_CELL       A:A1  hello
+
+# F2 loads the source form `'hello`; cursor at end.
+F 2
+ASSERT_MODE       EDIT
+ASSERT_PANEL_L2   'hello
+ASSERT_ENTRY_CURSOR 6
+
+# Left moves the cursor one byte at a time (ASCII).
+LEFT
+ASSERT_ENTRY_CURSOR 5
+LEFT
+LEFT
+ASSERT_ENTRY_CURSOR 3
+
+# Right moves it back.
+RIGHT
+ASSERT_ENTRY_CURSOR 4
+RIGHT
+ASSERT_ENTRY_CURSOR 5
+
+# Home jumps to the start; End to the end.
+HOME
+ASSERT_ENTRY_CURSOR 0
+END
+ASSERT_ENTRY_CURSOR 6
+
+# Esc cancels — buffer never committed; cell unchanged.
+ESC
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  hello

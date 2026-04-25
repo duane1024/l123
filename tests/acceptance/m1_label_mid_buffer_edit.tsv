@@ -1,0 +1,40 @@
+# LABEL — Home/End jump cursor; insert and Delete work mid-buffer.
+# Left/Right preserve the Lotus fast-entry idiom (commit-and-move) and are
+# not exercised here.
+
+KEYS world
+ASSERT_MODE       LABEL
+ASSERT_PANEL_L2   world
+ASSERT_ENTRY_CURSOR 5
+
+# Home jumps cursor to 0 (still in LABEL mode).
+HOME
+ASSERT_MODE       LABEL
+ASSERT_ENTRY_CURSOR 0
+
+# Insert at cursor=0: type 'Z' → buffer "Zworld"; cursor advances to 1.
+KEY Z
+ASSERT_PANEL_L2   Zworld
+ASSERT_ENTRY_CURSOR 1
+
+# End jumps cursor to buffer length (6).
+END
+ASSERT_ENTRY_CURSOR 6
+
+# Append "!" at end.
+KEY !
+ASSERT_PANEL_L2   Zworld!
+ASSERT_ENTRY_CURSOR 7
+
+# Mid-buffer Delete: Home → 0, Delete drops the leading 'Z'.
+# (Left/Right would commit-and-move in LABEL mode, so cursor navigation
+# inside the buffer relies on Home/End plus Delete/Backspace here.)
+HOME
+ASSERT_ENTRY_CURSOR 0
+DEL
+ASSERT_PANEL_L2   world!
+ASSERT_ENTRY_CURSOR 0
+
+# Commit — label is the resulting string.
+ENTER
+ASSERT_CELL       A:A1  world!

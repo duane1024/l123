@@ -1,0 +1,49 @@
+# Phase 5 mouse support: scroll wheel.
+# The wheel scrolls the viewport without moving the cell pointer —
+# modern convention. Several wheel-down ticks reveal lower rows; the
+# pointer stays at A1 (and may scroll off-screen). Wheel-up reverses
+# and saturates at row 0. Scroll never changes the mode.
+
+ASSERT_POINTER A:A1
+ASSERT_MODE READY
+
+# Wheel down three times — body should now show rows starting well
+# below row 1. Default body shows ~20 rows, so 3 ticks * 3 rows/tick
+# is enough that row 1 has scrolled out of the viewport but the
+# pointer (still A:A1) just goes off-screen.
+SCROLL_DOWN
+SCROLL_DOWN
+SCROLL_DOWN
+ASSERT_POINTER A:A1
+ASSERT_MODE READY
+
+# Wheel up twice — viewport rolls back toward the top.
+SCROLL_UP
+SCROLL_UP
+ASSERT_POINTER A:A1
+ASSERT_MODE READY
+
+# Many more wheel-ups — must saturate at row 0, not underflow.
+SCROLL_UP
+SCROLL_UP
+SCROLL_UP
+SCROLL_UP
+SCROLL_UP
+SCROLL_UP
+SCROLL_UP
+SCROLL_UP
+SCROLL_UP
+SCROLL_UP
+ASSERT_POINTER A:A1
+ASSERT_MODE READY
+
+# Scroll while a value-entry is in progress is non-disruptive: the
+# buffer survives, mode stays VALUE.
+KEYS +A1
+ASSERT_MODE VALUE
+ASSERT_PANEL_L2 +A1
+SCROLL_DOWN
+ASSERT_MODE VALUE
+ASSERT_PANEL_L2 +A1
+ESC
+ASSERT_MODE READY

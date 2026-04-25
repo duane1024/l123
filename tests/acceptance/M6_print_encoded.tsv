@@ -1,0 +1,44 @@
+# /Print Encoded — write setup-string + ASCII page bytes to a `.ENC`
+# file. Same submenu as /Print File and /Print Printer (sourced from
+# PRINT_FILE_MENU); the only difference is the destination at Go-time
+# is a path that always receives the setup string ahead of the body
+# (PDF branching does not apply — Encoded is raw printer bytes).
+
+RM_FILE $TMPDIR/m6_print_enc.enc
+
+KEYS 'Hello
+ENTER
+
+HOME
+KEY /
+KEY P
+KEY E
+ASSERT_PANEL_L3   Enter encoded file name
+
+KEYS $TMPDIR/m6_print_enc.enc
+ENTER
+ASSERT_PANEL_L2   Range
+ASSERT_PANEL_L2   Options
+ASSERT_PANEL_L2   Go
+
+# Pick the range first.
+KEY R
+ENTER
+ASSERT_PANEL_L2   Options
+
+# Set a setup string so we can confirm it lands ahead of the body.
+KEY O
+KEY S
+ASSERT_PANEL_L3   Enter setup
+KEYS HEAD_
+ENTER
+ASSERT_PANEL_L2   Setup
+
+KEY Q
+ASSERT_PANEL_L2   Range
+ASSERT_PANEL_L2   Go
+
+KEY G
+KEY Q
+ASSERT_MODE       READY
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_enc.enc  HEAD_Hello

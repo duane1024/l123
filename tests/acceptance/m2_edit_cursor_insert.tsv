@@ -1,0 +1,29 @@
+# F2 EDIT — typed chars insert at the cursor and advance it.
+
+KEYS hello
+ENTER
+HOME
+
+# Buffer `'hello`; bytes 0:' 1:h 2:e 3:l 4:l 5:o.
+F 2
+ASSERT_PANEL_L2   'hello
+ASSERT_ENTRY_CURSOR 6
+
+# Position cursor between 'e' and the first 'l': Home → 0, Right ×3 → 3.
+HOME
+RIGHT
+RIGHT
+RIGHT
+ASSERT_ENTRY_CURSOR 3
+
+# Insert "XX" at cursor → buffer `'heXXllo`; cursor advances to 5.
+KEY X
+ASSERT_PANEL_L2   'heXllo
+ASSERT_ENTRY_CURSOR 4
+KEY X
+ASSERT_PANEL_L2   'heXXllo
+ASSERT_ENTRY_CURSOR 5
+
+# Commit — cell becomes the new label.
+ENTER
+ASSERT_CELL       A:A1  heXXllo

@@ -1,0 +1,9 @@
+# `$(50.00)` combines Currency inference with paren-negate: stores -50
+# with format C2.
+
+KEYS $(50.00)
+ENTER
+HOME
+
+ASSERT_PANEL_L1   A:A1: (C2) -50
+ASSERT_CELL       A:A1  -$50.00

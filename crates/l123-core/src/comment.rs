@@ -66,7 +66,11 @@ mod tests {
 
     #[test]
     fn summary_flattens_newlines_and_collapses_whitespace() {
-        let c = Comment::new(Address::new(SheetId::A, 0, 0), "Bob", "line one\nline two\n\n  three");
+        let c = Comment::new(
+            Address::new(SheetId::A, 0, 0),
+            "Bob",
+            "line one\nline two\n\n  three",
+        );
         assert_eq!(c.summary(), "Bob: line one line two three");
     }
 }

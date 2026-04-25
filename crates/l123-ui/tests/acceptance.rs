@@ -89,6 +89,7 @@ fn run_transcript(path: &Path) {
             "ESC" => app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             "TAB" => app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
             "BACKSPACE" => app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+            "DEL" => app.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
             "UP" => app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
             "DOWN" => app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
             "LEFT" => app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
@@ -133,6 +134,26 @@ fn run_transcript(path: &Path) {
                     got,
                     rest,
                     "{}:{line_no}: mode expected {rest} got {got}",
+                    path.display()
+                );
+            }
+            "ASSERT_ENTRY_CURSOR" => {
+                let want: usize = rest.parse().unwrap_or_else(|e| {
+                    panic!(
+                        "{}:{line_no}: ASSERT_ENTRY_CURSOR needs a number, got {rest:?} ({e})",
+                        path.display()
+                    )
+                });
+                let got = app.entry_cursor().unwrap_or_else(|| {
+                    panic!(
+                        "{}:{line_no}: ASSERT_ENTRY_CURSOR with no active entry",
+                        path.display()
+                    )
+                });
+                assert_eq!(
+                    got,
+                    want,
+                    "{}:{line_no}: entry cursor expected {want} got {got}",
                     path.display()
                 );
             }
@@ -263,13 +284,11 @@ fn run_transcript(path: &Path) {
                 let want = if raw == "SPACE" { " " } else { raw };
                 let buf = app.render_to_buffer(width, height);
                 let got = app.cell_right_edge_char(&buf, addr).unwrap_or_else(|| {
-                    panic!(
-                        "{}:{line_no}: cell {addr} not in viewport",
-                        path.display()
-                    )
+                    panic!("{}:{line_no}: cell {addr} not in viewport", path.display())
                 });
                 assert_eq!(
-                    got, want,
+                    got,
+                    want,
                     "{}:{line_no}: cell {addr} right-edge expected {want:?} got {got:?}",
                     path.display()
                 );
@@ -560,6 +579,77 @@ fn run_transcript(path: &Path) {
                     modifiers: KeyModifiers::NONE,
                 });
             }
+            // "MOUSE_DRAG <col> <row>" — synthesize a left-button mouse
+            // drag (button held, cursor moved). The harness assumes a
+            // prior MOUSE_CLICK has primed the grid-area cache; we render
+            // again here defensively so a transcript that drags without a
+            // preceding click still has geometry to hit-test against.
+            "MOUSE_DRAG" => {
+                let mut parts = rest.split_ascii_whitespace();
+                let col: u16 = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: MOUSE_DRAG expects `<col> <row>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                let row: u16 = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: MOUSE_DRAG expects `<col> <row>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                let _ = app.render_to_buffer(width, height);
+                app.handle_mouse(MouseEvent {
+                    kind: MouseEventKind::Drag(MouseButton::Left),
+                    column: col,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                });
+            }
+            // "MOUSE_UP <col> <row>" — synthesize the left-button release
+            // ending a drag. Pairs with MOUSE_CLICK / MOUSE_DRAG to
+            // exercise the full press → drag → release lifecycle.
+            "MOUSE_UP" => {
+                let mut parts = rest.split_ascii_whitespace();
+                let col: u16 = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: MOUSE_UP expects `<col> <row>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                let row: u16 = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: MOUSE_UP expects `<col> <row>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                app.handle_mouse(MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Left),
+                    column: col,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                });
+            }
+            // "SCROLL_DOWN" / "SCROLL_UP" — synthesize a scroll-wheel
+            // tick. No coordinates: scroll affects the viewport
+            // regardless of cursor position. Position 10,10 is fed to
+            // the event for completeness; the handler ignores it.
+            "SCROLL_DOWN" => {
+                app.handle_mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: 10,
+                    row: 10,
+                    modifiers: KeyModifiers::NONE,
+                });
+            }
+            "SCROLL_UP" => {
+                app.handle_mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    column: 10,
+                    row: 10,
+                    modifiers: KeyModifiers::NONE,
+                });
+            }
             // "ASSERT_FILE_CONTAINS <path>  <substr>" — split on the
             // first whitespace run. The remainder is matched as a
             // substring inside the file's text contents. `\n`, `\t`,
@@ -735,7 +825,19 @@ transcripts! {
     m1_commit_on_arrow => "M1_commit_on_arrow.tsv",
     m1_edit_f2         => "M1_edit_f2.tsv",
     m1_goto_f5         => "m1_goto_f5.tsv",
+    m1_label_mid_buffer_edit => "m1_label_mid_buffer_edit.tsv",
+    m1_value_delete_key      => "m1_value_delete_key.tsv",
     m2_formula_entry   => "M2_formula_entry.tsv",
+    m2_value_currency               => "m2_value_currency.tsv",
+    m2_value_percent                => "m2_value_percent.tsv",
+    m2_value_comma                  => "m2_value_comma.tsv",
+    m2_value_paren_negate           => "m2_value_paren_negate.tsv",
+    m2_value_dollar_paren_negate    => "m2_value_dollar_paren_negate.tsv",
+    m2_value_plain_preserves_format => "m2_value_plain_preserves_format.tsv",
+    m2_edit_cursor_movement          => "m2_edit_cursor_movement.tsv",
+    m2_edit_cursor_backspace_delete  => "m2_edit_cursor_backspace_delete.tsv",
+    m2_edit_cursor_insert            => "m2_edit_cursor_insert.tsv",
+    m2_f2_during_label               => "m2_f2_during_label.tsv",
     m2_f9_calc         => "M2_f9_calc.tsv",
     m2_format_tag      => "M2_format_tag.tsv",
     m3_menu_navigation => "M3_menu_navigation.tsv",
@@ -761,13 +863,16 @@ transcripts! {
     m3_wg_col_width    => "M3_wg_col_width.tsv",
     m3_wg_label        => "M3_wg_label.tsv",
     m3_range_name      => "M3_range_name.tsv",
+    m3_f3_names_in_point        => "m3_f3_names_in_point.tsv",
+    m3_f3_names_in_goto         => "m3_f3_names_in_goto.tsv",
+    m3_f3_names_in_name_delete  => "m3_f3_names_in_name_delete.tsv",
+    m3_f3_names_empty           => "m3_f3_names_empty.tsv",
     m3_beep_edge       => "M3_beep_edge.tsv",
     m4_file_save       => "M4_file_save.tsv",
     m4_file_save_replace => "M4_file_save_replace.tsv",
     m4_file_retrieve   => "M4_file_retrieve.tsv",
     m4_file_retrieve_error => "M4_file_retrieve_error.tsv",
     m4_file_retrieve_csv   => "M4_file_retrieve_csv.tsv",
-    wk3_retrieve_saves_as_xlsx => "wk3_retrieve_saves_as_xlsx.tsv",
     m4_file_xtract     => "M4_file_xtract.tsv",
     m4_file_import_numbers => "M4_file_import_numbers.tsv",
     m4_file_new        => "M4_file_new.tsv",
@@ -783,6 +888,10 @@ transcripts! {
     m5_undo_coverage   => "M5_undo_coverage.tsv",
     m6_print_file      => "M6_print_file.tsv",
     m6_print_options_header => "M6_print_options_header.tsv",
+    m6_print_options_setup  => "M6_print_options_setup.tsv",
+    m6_print_encoded        => "M6_print_encoded.tsv",
+    m6_print_cancel         => "M6_print_cancel.tsv",
+    m6_print_advanced_device => "M6_print_advanced_device.tsv",
     m6_print_pipe_row  => "M6_print_pipe_row.tsv",
     m6_range_search_replace => "M6_range_search_replace.tsv",
     m6_print_cell_formulas  => "M6_print_cell_formulas.tsv",
@@ -814,6 +923,8 @@ transcripts! {
     m10_mouse_click_cell        => "M10_mouse_click_cell.tsv",
     m10_mouse_click_point_extend => "M10_mouse_click_point_extend.tsv",
     m10_mouse_click_splice       => "M10_mouse_click_splice.tsv",
+    m10_mouse_drag_select        => "M10_mouse_drag_select.tsv",
+    m10_mouse_scroll_wheel       => "M10_mouse_scroll_wheel.tsv",
     xlsx_alignment               => "xlsx_alignment.tsv",
     xlsx_fill                    => "xlsx_fill.tsv",
     xlsx_sheet_color             => "xlsx_sheet_color.tsv",
@@ -831,4 +942,11 @@ transcripts! {
     t05_tutorial_graph_setup_view_save => "T05_tutorial_graph_setup_view_save.tsv",
     t06_tutorial_multiple_sheets_group_and_3d => "T06_tutorial_multiple_sheets_group_and_3d.tsv",
     t07_tutorial_file_retrieve_and_open => "T07_tutorial_file_retrieve_and_open.tsv",
+}
+
+#[cfg(feature = "wk3")]
+#[test]
+fn wk3_retrieve_saves_as_xlsx() {
+    let p = workspace_root().join("tests/acceptance/wk3_retrieve_saves_as_xlsx.tsv");
+    run_transcript(&p);
 }

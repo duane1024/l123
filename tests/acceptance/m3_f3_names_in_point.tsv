@@ -1,0 +1,54 @@
+# F3 (NAMES) in POINT — pick a previously-defined range name from a list.
+# Manual: "After you select a command that prompts you for a range
+# (for example, /Range Format or /Print [E,F,P] Range), press NAME (F3)
+# to display a list of range names…"
+#
+# Here we use /Range Format Fixed: it prompts for decimals, then descends
+# into POINT for the range. F3 in POINT opens the name picker, Enter
+# selects, and the format applies to the selected range.
+
+# Seed two cells.
+KEYS 1234.5
+ENTER
+DOWN
+KEYS 99.25
+ENTER
+HOME
+
+# Define a range name `block` over A1..A2.
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS block
+ENTER
+ASSERT_MODE       POINT
+DOWN
+ASSERT_PANEL_L3   A:A1..A:A2
+ENTER
+ASSERT_MODE       READY
+
+# Pointer somewhere irrelevant — F3 in POINT must work regardless of position.
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER    A:A5
+
+# /RFF → decimals prompt (default 2) → POINT → F3 → name list.
+KEY /
+KEY R
+KEY F
+KEY F
+ENTER
+ASSERT_MODE       POINT
+
+F 3
+ASSERT_MODE       NAMES
+ASSERT_SCREEN     block
+
+# Enter selects the highlighted (single) name and applies the format
+# to A1..A2. We return to READY.
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  1234.50
+ASSERT_CELL       A:A2  99.25
