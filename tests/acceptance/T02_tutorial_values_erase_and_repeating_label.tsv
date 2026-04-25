@@ -1,0 +1,127 @@
+# Tutorial Chapter 1, Lesson 4: numeric VALUE entry, range erase,
+# vertical pointer-key commit, and the repeating-label prefix used
+# for worksheet separator lines.
+#
+# Unsupported tutorial subflows intentionally not covered here:
+# typed range addresses at POINT prompts, single-cell copy to a
+# larger TO range, and named ranges as /Copy source arguments.
+
+# Enter quarterly Net Sales values in B5..E5 using RIGHT as commit.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+ASSERT_POINTER    A:B5
+
+KEYS 12000
+ASSERT_MODE       VALUE
+RIGHT
+ASSERT_POINTER    A:C5
+ASSERT_CELL       A:B5  12000
+
+KEYS 19000
+RIGHT
+ASSERT_POINTER    A:D5
+ASSERT_CELL       A:C5  19000
+
+KEYS 16000
+RIGHT
+ASSERT_POINTER    A:E5
+ASSERT_CELL       A:D5  16000
+
+KEYS 22000
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:E5  22000
+
+# Seed C8..D12 with temporary Costs and Expenses data.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+RIGHT
+ASSERT_POINTER    A:C8
+
+KEYS 2000
+DOWN
+KEYS 1400
+DOWN
+KEYS 600
+DOWN
+KEYS 2000
+DOWN
+KEYS 4200
+ENTER
+
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER    A:D8
+KEYS 2100
+DOWN
+KEYS 1500
+DOWN
+KEYS 700
+DOWN
+KEYS 2200
+DOWN
+KEYS 4300
+ENTER
+
+ASSERT_CELL       A:C8   2000
+ASSERT_CELL       A:D12  4300
+
+# Erase C8..D12 by highlighting the range in POINT mode.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+RIGHT
+KEY /
+KEY R
+KEY E
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   Enter range to erase
+RIGHT
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_PANEL_L3   A:C8..A:D12
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:C8
+ASSERT_CELL       A:D12
+
+# Create the separator line in A4 with the repeating label prefix.
+HOME
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER    A:A4
+KEY \
+ASSERT_MODE       LABEL
+KEY -
+ENTER
+ASSERT_PANEL_L1   A:A4: \-
+ASSERT_CELL       A:A4  ---------

@@ -1,0 +1,118 @@
+# Tutorial Chapter 2, Lesson 7: graph data ranges, X-axis labels,
+# graph type switching, viewing, and saving the current graph.
+#
+# Unsupported tutorial graph subflows intentionally not covered here:
+# graph titles, legends, options, Group, and named graphs.
+
+RM_FILE $TMPDIR/tutorial_graph.svg
+
+# Labels B3..E3.
+HOME
+DOWN
+DOWN
+RIGHT
+KEYS Q1
+RIGHT
+KEYS Q2
+RIGHT
+KEYS Q3
+RIGHT
+KEYS Q4
+ENTER
+
+# COG values B13..E13.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+KEYS 4000
+RIGHT
+KEYS 4200
+RIGHT
+KEYS 5000
+RIGHT
+KEYS 8000
+ENTER
+
+# /Graph A selects the COG data range B13..E13.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+KEY /
+KEY G
+KEY A
+ASSERT_MODE        POINT
+ASSERT_PANEL_L3    Enter graph range
+RIGHT
+RIGHT
+RIGHT
+ENTER
+ASSERT_MODE        READY
+ASSERT_GRAPH_SERIES A  A:B13..A:E13
+
+# /Graph X selects the quarter labels B3..E3.
+HOME
+DOWN
+DOWN
+RIGHT
+KEY /
+KEY G
+KEY X
+ASSERT_MODE        POINT
+RIGHT
+RIGHT
+RIGHT
+ENTER
+ASSERT_MODE        READY
+ASSERT_GRAPH_SERIES X  A:B3..A:E3
+
+# Switch to Bar, view the graph, return, then switch back to Line.
+KEY /
+KEY G
+KEY T
+KEY B
+ASSERT_GRAPH_TYPE  BAR
+
+KEY /
+KEY G
+KEY V
+ASSERT_MODE        GRAPH
+ESC
+ASSERT_MODE        READY
+
+KEY /
+KEY G
+KEY T
+KEY L
+ASSERT_GRAPH_TYPE  LINE
+
+# Save writes an SVG representation of the current graph.
+KEY /
+KEY G
+KEY S
+ASSERT_PANEL_L3    Enter graph file name
+KEYS $TMPDIR/tutorial_graph.svg
+ENTER
+ASSERT_MODE        READY
+ASSERT_FILE_CONTAINS  $TMPDIR/tutorial_graph.svg  <svg

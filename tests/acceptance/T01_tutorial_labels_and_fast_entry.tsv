@@ -1,0 +1,73 @@
+# Tutorial Chapter 1, Lesson 3: labels, long-label storage,
+# default apostrophe prefix, and pointer-key commit while entering
+# quarter headings.
+#
+# Unsupported tutorial subflows intentionally not covered here:
+# F5 GOTO and cursor-position editing inside F2 EDIT mode.
+
+ASSERT_POINTER    A:A1
+
+KEYS INCOME STATEMENT 1989: Sloane Camera and Video
+ASSERT_MODE       LABEL
+ASSERT_PANEL_L2   INCOME STATEMENT 1989
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: 'INCOME STATEMENT 1989: Sloane Camera and Video
+ASSERT_SCREEN     INCOME STATEMENT 1989
+
+# Moving to B1 proves the long label is stored in A1, not spread into
+# the blank cells it visually spills across. The rendered B1 cell may
+# still show spill text, so the control panel is the storage assertion.
+RIGHT
+ASSERT_POINTER    A:B1
+ASSERT_PANEL_L1   A:B1:
+
+HOME
+ASSERT_POINTER    A:A1
+ASSERT_PANEL_L1   Sloane Camera and Video
+
+# Lesson 3 enters "Net Sales" at A5.
+DOWN
+DOWN
+DOWN
+DOWN
+KEYS Net Sales
+ENTER
+ASSERT_POINTER    A:A5
+ASSERT_CELL       A:A5  Net Sales
+
+# Quarter labels use pointer-key commit: RIGHT stores the current
+# label and moves to the next cell.
+HOME
+DOWN
+DOWN
+RIGHT
+ASSERT_POINTER    A:B3
+
+KEYS Q1
+ASSERT_MODE       LABEL
+RIGHT
+ASSERT_POINTER    A:C3
+ASSERT_CELL       A:B3  Q1
+
+KEYS Q2
+RIGHT
+ASSERT_POINTER    A:D3
+ASSERT_CELL       A:C3  Q2
+
+KEYS Q3
+RIGHT
+ASSERT_POINTER    A:E3
+ASSERT_CELL       A:D3  Q3
+
+KEYS Q4
+RIGHT
+ASSERT_POINTER    A:F3
+ASSERT_CELL       A:E3  Q4
+
+KEYS YTD
+ENTER
+ASSERT_MODE       READY
+ASSERT_POINTER    A:F3
+ASSERT_PANEL_L1   A:F3: 'YTD
+ASSERT_CELL       A:F3  YTD

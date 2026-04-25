@@ -1,0 +1,70 @@
+# Tutorial Chapters 1 and 3: /File Save, /File Retrieve replacing
+# in-memory changes with the saved workbook, /File Open adding another
+# active file, and Ctrl-End Ctrl-PgDn file navigation.
+#
+# The tutorial uses WK3 sample files; L123's implemented persistence
+# target is xlsx, so the acceptance test uses xlsx files.
+
+SIZE 160 25
+RM_FILE $TMPDIR/tutorial_first.xlsx
+RM_FILE $TMPDIR/tutorial_second.xlsx
+
+# Save the first workbook.
+KEYS 42
+ENTER
+UP
+KEY /
+KEY F
+KEY S
+ASSERT_PANEL_L3   Enter save file name
+KEYS $TMPDIR/tutorial_first.xlsx
+ENTER
+ASSERT_MODE       READY
+ASSERT_STATUS     tutorial_first.xlsx
+
+# Create and save a second workbook.
+KEY /
+KEY F
+KEY N
+KEY A
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1
+KEYS 777
+ENTER
+UP
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/tutorial_second.xlsx
+ENTER
+ASSERT_MODE       READY
+ASSERT_STATUS     tutorial_second.xlsx
+
+# Retrieve the first file; the second workbook's in-memory value is
+# replaced by the saved first workbook.
+KEY /
+KEY F
+KEY R
+ASSERT_PANEL_L3   Enter file to retrieve
+KEYS $TMPDIR/tutorial_first.xlsx
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  42
+ASSERT_STATUS     tutorial_first.xlsx
+
+# Open the second file after the current active file. Focus remains on
+# the first file until Ctrl-End Ctrl-PgDn rotates active files.
+KEY /
+KEY F
+KEY O
+KEY A
+ASSERT_PANEL_L3   Enter file to open
+KEYS $TMPDIR/tutorial_second.xlsx
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  42
+
+CTRL_END
+CTRL_PGDN
+ASSERT_CELL       A:A1  777
+ASSERT_STATUS     tutorial_second.xlsx

@@ -1,0 +1,175 @@
+# Tutorial Chapter 1, Lesson 6: range formatting, global column
+# width, label centering, row insertion, and printing a worksheet
+# range. L123 prints to a file in headless acceptance tests instead
+# of a physical printer.
+#
+# Unsupported tutorial subflows intentionally not covered here:
+# automatic formatting from typed currency/comma literals and
+# /Print Printer Line/Page/background printer behavior.
+
+SIZE 120 25
+RM_FILE $TMPDIR/tutorial_lesson6.prn
+
+# Minimal income-statement skeleton.
+KEYS INCOME STATEMENT 1989: Sloane Camera and Video
+ENTER
+
+HOME
+DOWN
+DOWN
+RIGHT
+KEYS Q1
+RIGHT
+KEYS Q2
+RIGHT
+KEYS Q3
+RIGHT
+KEYS Q4
+RIGHT
+KEYS YTD
+ENTER
+
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+KEYS Net Sales
+RIGHT
+KEYS 12000
+RIGHT
+KEYS 19000
+RIGHT
+KEYS 16000
+RIGHT
+KEYS 22000
+RIGHT
+KEYS 69000
+ENTER
+
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+KEYS Costs and Expenses:
+ENTER
+
+# Currency-format the Net Sales row.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+ASSERT_POINTER    A:B5
+KEY /
+KEY R
+KEY F
+KEY C
+ASSERT_PANEL_L3   decimal places
+ENTER
+ASSERT_MODE       POINT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_PANEL_L3   A:B5..A:F5
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:B5  $12000.00
+ASSERT_CELL       A:F5  $69000.00
+ASSERT_PANEL_L1   (C2)
+
+# The tutorial widens columns globally after currency formatting.
+KEY /
+KEY W
+KEY G
+KEY C
+ASSERT_PANEL_L3   default column width
+KEYS 12
+ENTER
+ASSERT_MODE       READY
+
+# Center the quarter headings B3..F3.
+HOME
+DOWN
+DOWN
+RIGHT
+KEY /
+KEY R
+KEY L
+KEY C
+ASSERT_MODE       POINT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:F3: ^YTD
+ASSERT_CELL       A:B3  Q1
+
+# Insert a blank row above row 7; existing row 7 moves to row 8.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+RIGHT
+ASSERT_POINTER    A:C7
+KEY /
+KEY W
+KEY I
+KEY R
+ASSERT_MODE       READY
+ASSERT_CELL       A:A7
+ASSERT_CELL       A:A8  Costs and Ex
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_PANEL_L1   Costs and Expenses:
+
+# Print A1..F8 to a text file, matching the tutorial's print-range flow
+# but using /Print File for deterministic headless verification.
+HOME
+KEY /
+KEY P
+KEY F
+ASSERT_PANEL_L3   Enter print file name
+KEYS $TMPDIR/tutorial_lesson6.prn
+ENTER
+ASSERT_PANEL_L2   Range
+KEY R
+ASSERT_MODE       POINT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_PANEL_L3   A:A1..A:F8
+ENTER
+ASSERT_PANEL_L2   Go
+KEY G
+KEY Q
+ASSERT_MODE       READY
+ASSERT_FILE_CONTAINS  $TMPDIR/tutorial_lesson6.prn  INCOME ST
+ASSERT_FILE_CONTAINS  $TMPDIR/tutorial_lesson6.prn  Q1
+ASSERT_FILE_CONTAINS  $TMPDIR/tutorial_lesson6.prn  $12000.00

@@ -1,0 +1,191 @@
+# Tutorial Chapter 1, Lesson 5: arithmetic formulas, @SUM, automatic
+# recalculation after a referenced value changes, and using a range
+# name in a formula.
+#
+# Unsupported tutorial subflows intentionally not covered here:
+# formula entry by pointer-splicing the range argument, F3 NAME list,
+# and relative-reference adjustment when formulas are copied.
+
+# Net Sales figures B5..E5, used later by QTRLY_NETSALES.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+KEYS 12000
+RIGHT
+KEYS 19000
+RIGHT
+KEYS 16000
+RIGHT
+KEYS 22000
+ENTER
+
+# Q1 Costs and Expenses in B8..B12.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+KEYS 2000
+DOWN
+KEYS 1200
+DOWN
+KEYS 600
+DOWN
+KEYS 900
+DOWN
+KEYS 4000
+ENTER
+
+# Q2 Costs and Expenses in C8..C12.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+RIGHT
+KEYS 2000
+DOWN
+KEYS 1400
+DOWN
+KEYS 600
+DOWN
+KEYS 2000
+DOWN
+KEYS 4200
+ENTER
+
+# B14 totals Q1 with an explicit arithmetic formula.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+ASSERT_POINTER    A:B14
+KEYS +B8+B9+B10+B11+B12
+ASSERT_MODE       VALUE
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   +B8+B9+B10+B11+B12
+ASSERT_CELL       A:B14  8700
+
+# Changing B10 recalculates B14, then changing it back restores the
+# original total.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+ASSERT_POINTER    A:B10
+KEYS 1000
+ENTER
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+ASSERT_CELL       A:B14  9100
+
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+KEYS 600
+ENTER
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+ASSERT_CELL       A:B14  8700
+
+# C14 totals Q2 with Lotus @SUM and the .. range separator.
+RIGHT
+ASSERT_POINTER    A:C14
+KEYS @SUM(C8..C12)
+ENTER
+ASSERT_PANEL_L1   @SUM(C8..C12)
+ASSERT_CELL       A:C14  10200
+
+# Create QTRLY_NETSALES over B5..E5, then use it in F5.
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+ASSERT_POINTER    A:B5
+KEY /
+KEY R
+KEY N
+KEY C
+ASSERT_PANEL_L3   Enter name
+KEYS qtrly_netsales
+ENTER
+ASSERT_MODE       POINT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_PANEL_L3   A:B5..A:E5
+ENTER
+ASSERT_MODE       READY
+
+RIGHT
+ASSERT_POINTER    A:F5
+KEYS @SUM(qtrly_netsales)
+ENTER
+ASSERT_PANEL_L1   @SUM(qtrly_netsales)
+ASSERT_CELL       A:F5  69000
