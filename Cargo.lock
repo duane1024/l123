@@ -1322,6 +1322,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironcalc_lotus"
+version = "0.7.1"
+dependencies = [
+ "bitcode",
+ "ironcalc_base",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "itertools"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1422,6 +1431,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "ironcalc",
+ "ironcalc_lotus",
  "l123-core",
  "thiserror 2.0.18",
  "tracing",

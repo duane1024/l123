@@ -1,0 +1,46 @@
+# /File Retrieve a `.WK3` (Lotus 1-2-3 R3 binary) — content loads, and
+# the active save target becomes "<orig>.WK3.xlsx" so the next /File
+# Save converts to xlsx without overwriting the legacy file.
+#
+# Fixture FILE0001.WK3 (514 B) carries one sheet "A" with the text
+# "Hello" at A1 and A6.
+
+SIZE 200 25
+COPY_FILE  tests/acceptance/fixtures/wk3/FILE0001.WK3  $TMPDIR/legacy.WK3
+RM_FILE    $TMPDIR/legacy.WK3.xlsx
+
+# /FR loads the WK3 file. Cell content surfaces in the UI cache; the
+# control panel shows the underlying value, while ASSERT_CELL reads
+# the on-screen render. FILE0001.WK3 has a custom column-A width of
+# ~2 chars (carried over from the source), so "Hello" renders truncated.
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS $TMPDIR/legacy.WK3
+ENTER
+ASSERT_MODE      READY
+ASSERT_POINTER   A:A1
+ASSERT_PANEL_L1  A:A1: [W2] 'Hello
+ASSERT_CELL      A:A1  He
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER   A:A6
+ASSERT_PANEL_L1  A:A6: [W2] 'Hello
+ASSERT_CELL      A:A6  He
+
+# Save target swap: the status line shows the prefilled save path —
+# original filename plus an `.xlsx` suffix appended (NOT replacing
+# `.WK3`). The original `.WK3` file is left untouched.
+ASSERT_STATUS    legacy.WK3.xlsx
+
+# /FS prefills active_path; pressing Enter writes the xlsx alongside.
+KEY /
+KEY F
+KEY S
+ENTER
+ASSERT_MODE      READY

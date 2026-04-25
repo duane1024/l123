@@ -29,8 +29,10 @@ xlsx-compatible, Unicode-correct, cross-platform.
 - A DOS emulator. No INT21h, no 8.3 filenames, no code pages. Strings are
   UTF-8 end-to-end. 1-2-3's LMBCS character set is a compatibility input only.
 - A reimplementation of the 1-2-3 compute core. We delegate to IronCalc.
-- A macro player for existing `.WK3` files. Read-only `.WK3` import (values
-  only) is a stretch goal.
+- A macro player for existing `.WK3` files (the macro language is in scope
+  per §18; replaying macros embedded in legacy `.WK3` files is not). Note:
+  read-only `.WK3` import — values, formulas, basic styles, column widths —
+  *is* shipped via `ironcalc_lotus`; see §14.
 
 ---
 
@@ -42,7 +44,7 @@ xlsx-compatible, Unicode-correct, cross-platform.
 | TUI | **ratatui** + **crossterm** | De facto Rust TUI stack; custom grid widget required |
 | Engine | **IronCalc 0.7.x** | Native `.xlsx` round-trip; row/col/move ops shipped in v0.6; active TUI reference in `TironCalc` |
 | `.xls` read | `calamine` | Only practical option, read-only |
-| `.wk3` read | Port of `libwps`, behind feature flag | Values-only, stretch |
+| `.wk3` read | `ironcalc_lotus` (sibling crate to `ironcalc`/`ironcalc_base`) | Read-only; values, formulas, basic styles, col widths |
 | CSV | `csv` crate | Standard |
 
 **Δ from v0.1:** IronCalc is confirmed as primary (not "or Formualizer");
@@ -55,7 +57,9 @@ setter we build around.
   foundation for `/Worksheet Learn` macro recording).
 - `set_user_input` couples parse+mutation → we wrap it with a routing shim
   that respects 1-2-3's value-vs-label first-char rule and label prefixes.
-- IronCalc has no `.wk3` reader → separate module.
+- `.wk3` read lives in `ironcalc_lotus` (read-only; sibling to
+  `ironcalc_base`/`ironcalc`). l123-engine's adapter wires it in via the
+  `Engine::load_wk3` slot.
 
 ---
 
@@ -467,7 +471,7 @@ active files = multiple in-memory IronCalc workbooks. Cross-file refs
 
 | Command | What it does |
 |---|---|
-| `/File Retrieve` | Replace all active files with one from disk |
+| `/File Retrieve` | Replace all active files with one from disk. `.WK3` source files load read-only and retarget the save path to `<orig>.WK3.xlsx` so `/File Save` writes xlsx without overwriting the legacy file. |
 | `/File Open` | Add file to active set (Before/After), enabling multi-file |
 | `/File Save` | Save all active files |
 | `/File Combine Copy/Add/Subtract` | Merge disk file into current cell, element-wise |
@@ -495,7 +499,9 @@ To save a *subset*: `/File Xtract`. L123 must match this model.
   (`/Worksheet Global Default Ext Save .xlsx`); save to `.xlsx` by default for
   modern workflow.
 - `.csv` — /File Import Text / Numbers target
-- `.wk3` — stretch, read-only (values only)
+- `.wk3` — read-only import (values, formulas, basic styles, col
+  widths). Save converts to `.xlsx` (`<orig>.WK3.xlsx`); writing `.wk3`
+  is a non-goal.
 
 ---
 
@@ -651,7 +657,8 @@ label prefixes verbatim (since IronCalc would re-parse).
 - MVP @function set (§15)
 - Undo (journal-based; honors /WGD Other Undo Enable)
 - 3D model: multi-sheet, Ctrl-PgUp/Dn, GROUP, 3D ranges in formulas
-- `.xlsx` round-trip via IronCalc; `.csv` import/export
+- `.xlsx` round-trip via IronCalc; `.csv` import/export; `.wk3` read-only
+  import via `ironcalc_lotus` (save converts to `.xlsx`)
 
 ### Complete (v1.x)
 
@@ -664,7 +671,6 @@ label prefixes verbatim (since IronCalc would re-parse).
 - `/Range Input` form mode
 - `/File Admin` (Reservation, Seal)
 - Full @function catalog
-- `.wk3` read-only import (values)
 - Macros: `/X` commands, `{BRANCH}`, `{IF}`, `{LET}`, `{GETLABEL}`,
   `{GETNUMBER}`, `{MENUBRANCH}`, `{QUIT}`, `{RETURN}`, subroutine calls,
   `\A..\Z` naming, `\0` autoexec, `/Worksheet Learn`

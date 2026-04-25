@@ -247,8 +247,10 @@ quarterly ranges; F10 shows a bar chart.
   help; ERROR → help for the last error).
 - Compose key (Alt-F1) for LMBCS characters.
 - CRT themes (green, amber, classic blue-on-black) as `--theme` flag.
-- `.wk3` read-only import (values): port of libwps's WK3 parser.
 - Documentation pass on `docs/AT_FUNCTIONS.md`, `docs/MENU.md`, README.
+
+(Read-only `.wk3` import landed earlier via `ironcalc_lotus`; saving
+converts to `<orig>.WK3.xlsx`.)
 
 ---
 

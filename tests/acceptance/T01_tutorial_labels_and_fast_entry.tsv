@@ -1,9 +1,9 @@
 # Tutorial Chapter 1, Lesson 3: labels, long-label storage,
-# default apostrophe prefix, and pointer-key commit while entering
-# quarter headings.
+# default apostrophe prefix, F5 GOTO, and pointer-key commit while
+# entering quarter headings.
 #
 # Unsupported tutorial subflows intentionally not covered here:
-# F5 GOTO and cursor-position editing inside F2 EDIT mode.
+# cursor-position editing inside F2 EDIT mode.
 
 ASSERT_POINTER    A:A1
 
@@ -26,11 +26,12 @@ HOME
 ASSERT_POINTER    A:A1
 ASSERT_PANEL_L1   Sloane Camera and Video
 
-# Lesson 3 enters "Net Sales" at A5.
-DOWN
-DOWN
-DOWN
-DOWN
+# Lesson 3 uses GOTO (F5) to jump to A5 before entering "Net Sales".
+F 5
+ASSERT_PANEL_L3   Enter address to go to
+KEYS A5
+ENTER
+ASSERT_POINTER    A:A5
 KEYS Net Sales
 ENTER
 ASSERT_POINTER    A:A5

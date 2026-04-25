@@ -116,6 +116,11 @@ pub trait Engine {
     fn load_xlsx(&mut self, _path: &Path) -> Result<()> {
         Err(EngineError::Unsupported("load_xlsx"))
     }
+    /// Read a Lotus 1-2-3 R3 `.WK3` file. Read-only — the engine has no
+    /// `save_wk3`; downstream callers convert to xlsx on save.
+    fn load_wk3(&mut self, _path: &Path) -> Result<()> {
+        Err(EngineError::Unsupported("load_wk3"))
+    }
     /// Set a column's width in L123 character units (1..240). Stored so
     /// `save_xlsx` round-trips it; UI layers mirror it for on-screen
     /// geometry.

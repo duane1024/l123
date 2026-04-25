@@ -9,29 +9,30 @@ workflows carry forward.
 ## Executable Transcripts
 
 - `T01_tutorial_labels_and_fast_entry.tsv` covers Lesson 3 label entry,
-  long-label storage, auto apostrophe prefix, and pointer-key commit.
+  long-label storage, auto apostrophe prefix, F5 GOTO, and pointer-key
+  commit.
 - `T02_tutorial_values_erase_and_repeating_label.tsv` covers Lesson 4
-  value entry, range erase by POINT highlighting, and repeating labels.
+  value entry, typed range erase, repeating labels, single-cell-to-range
+  copy, and named ranges as command range input.
 - `T03_tutorial_calculation_and_named_ranges.tsv` covers Lesson 5
-  arithmetic formulas, `@SUM`, recalculation, and named ranges in
-  formulas.
+  arithmetic formulas, `@SUM`, recalculation, relative-reference formula
+  copy, typed range-name creation, and named ranges in formulas.
 - `T04_tutorial_formatting_and_printing.tsv` covers Lesson 6 range
-  formatting, global column width, centered labels, row insertion, and
-  print-to-file output.
+  formatting by typed range, global column width, centered labels, row
+  insertion, and print-to-file output.
 - `T05_tutorial_graph_setup_view_save.tsv` covers Lesson 7 graph data
-  ranges, X labels, graph type switching, graph view, and graph save.
+  ranges by typed range, X labels, graph type switching, graph view, and
+  graph save.
 - `T06_tutorial_multiple_sheets_group_and_3d.tsv` covers Lessons 10-11
-  sheet insertion/navigation, GROUP formatting, and 3D `@SUM`.
+  sheet insertion/navigation, 3D copy destinations, GROUP formatting,
+  and 3D `@SUM`.
 - `T07_tutorial_file_retrieve_and_open.tsv` covers file save, retrieve,
   open, and active-file navigation using L123's xlsx persistence path.
 
 ## Tutorial Areas Excluded Until Implemented
 
-- F5 GOTO prompts and cursor-position editing inside EDIT prompts.
-- Typed range addresses, comma-separated ranges, and F3 name-list
-  selection inside POINT prompts.
-- Copying one source cell across a larger destination range, 3D copy
-  destinations, and relative-reference adjustment when copying formulas.
+- Cursor-position editing inside EDIT prompts.
+- Comma-separated ranges and F3 name-list selection inside POINT prompts.
 - Worksheet perspective/window views and physical printer background
   behavior.
 - Automatic formatting inferred from typed currency/comma/percent

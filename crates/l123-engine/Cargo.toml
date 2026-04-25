@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 l123-core = { workspace = true }
 ironcalc_xlsx = { workspace = true }
+ironcalc_lotus = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

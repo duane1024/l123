@@ -1,10 +1,9 @@
 # Tutorial Chapter 1, Lesson 5: arithmetic formulas, @SUM, automatic
-# recalculation after a referenced value changes, and using a range
-# name in a formula.
+# recalculation after a referenced value changes, formula copy with
+# relative references, and using a range name in a formula.
 #
 # Unsupported tutorial subflows intentionally not covered here:
-# formula entry by pointer-splicing the range argument, F3 NAME list,
-# and relative-reference adjustment when formulas are copied.
+# formula entry by pointer-splicing the range argument and F3 NAME list.
 
 # Net Sales figures B5..E5, used later by QTRLY_NETSALES.
 HOME
@@ -160,13 +159,44 @@ ENTER
 ASSERT_PANEL_L1   @SUM(C8..C12)
 ASSERT_CELL       A:C14  10200
 
-# Create QTRLY_NETSALES over B5..E5, then use it in F5.
-HOME
-DOWN
-DOWN
-DOWN
-DOWN
-RIGHT
+# Copy C14 to D14..F14. Copied formulas should shift relative
+# references to D8..D12, E8..E12, and F8..F12.
+KEY /
+KEY C
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       POINT
+KEYS D14..F14
+ASSERT_PANEL_L3   D14..F14
+ENTER
+ASSERT_MODE       READY
+
+F 5
+KEYS D14
+ENTER
+ASSERT_POINTER    A:D14
+ASSERT_PANEL_L1   @SUM(D8..D12)
+ASSERT_CELL       A:D14  0
+
+F 5
+KEYS E14
+ENTER
+ASSERT_POINTER    A:E14
+ASSERT_PANEL_L1   @SUM(E8..E12)
+ASSERT_CELL       A:E14  0
+
+F 5
+KEYS F14
+ENTER
+ASSERT_POINTER    A:F14
+ASSERT_PANEL_L1   @SUM(F8..F12)
+ASSERT_CELL       A:F14  0
+
+# Create QTRLY_NETSALES over B5..E5 by typing the range address, then
+# use it in F5.
+F 5
+KEYS B5
+ENTER
 ASSERT_POINTER    A:B5
 KEY /
 KEY R
@@ -176,14 +206,14 @@ ASSERT_PANEL_L3   Enter name
 KEYS qtrly_netsales
 ENTER
 ASSERT_MODE       POINT
-RIGHT
-RIGHT
-RIGHT
-ASSERT_PANEL_L3   A:B5..A:E5
+KEYS B5..E5
+ASSERT_PANEL_L3   B5..E5
 ENTER
 ASSERT_MODE       READY
 
-RIGHT
+F 5
+KEYS F5
+ENTER
 ASSERT_POINTER    A:F5
 KEYS @SUM(qtrly_netsales)
 ENTER

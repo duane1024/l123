@@ -469,6 +469,33 @@ fn run_transcript(path: &Path) {
             "RM_FILE" => {
                 let _ = std::fs::remove_file(rest);
             }
+            // "COPY_FILE <src>  <dst>" — copy a binary fixture into the
+            // transcript sandbox. Two args separated by ≥2 spaces or a
+            // tab so paths with single spaces still parse.
+            "COPY_FILE" => {
+                let (src, dst) = rest
+                    .split_once('\t')
+                    .or_else(|| rest.split_once("  "))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{}:{line_no}: COPY_FILE expects `<src>  <dst>` (tab- or 2+space-separated), got {rest:?}",
+                            path.display()
+                        )
+                    });
+                let src = src.trim();
+                let dst = dst.trim();
+                if let Some(parent) = std::path::Path::new(dst).parent() {
+                    if !parent.as_os_str().is_empty() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                }
+                std::fs::copy(src, dst).unwrap_or_else(|e| {
+                    panic!(
+                        "{}:{line_no}: COPY_FILE {src} -> {dst} failed: {e}",
+                        path.display()
+                    )
+                });
+            }
             // "HOVER_ICON <panel> <slot>" — pin the icon-hover state
             // as if the mouse were over (`panel`, `slot`). The headless
             // render buffer has no real icon panel to hit-test against,
@@ -740,6 +767,7 @@ transcripts! {
     m4_file_retrieve   => "M4_file_retrieve.tsv",
     m4_file_retrieve_error => "M4_file_retrieve_error.tsv",
     m4_file_retrieve_csv   => "M4_file_retrieve_csv.tsv",
+    wk3_retrieve_saves_as_xlsx => "wk3_retrieve_saves_as_xlsx.tsv",
     m4_file_xtract     => "M4_file_xtract.tsv",
     m4_file_import_numbers => "M4_file_import_numbers.tsv",
     m4_file_new        => "M4_file_new.tsv",

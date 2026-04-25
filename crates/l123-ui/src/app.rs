@@ -943,9 +943,9 @@ fn adjust_file_list_view(fl: &mut FileListState) {
     }
 }
 
-/// List every `.xlsx` file in `dir`, sorted by filename (case-
-/// insensitive ordering isn't worth the extra code today). Hidden
-/// files and non-file entries are skipped.
+/// List every worksheet file (`.xlsx` or `.WK3`) in `dir`, sorted by
+/// filename (case-insensitive ordering isn't worth the extra code
+/// today). Hidden files and non-file entries are skipped.
 fn list_worksheet_files_in(dir: &Path) -> Vec<PathBuf> {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -956,7 +956,7 @@ fn list_worksheet_files_in(dir: &Path) -> Vec<PathBuf> {
         .map(|e| e.path())
         .filter(|p| {
             p.extension()
-                .map(|x| x.eq_ignore_ascii_case("xlsx"))
+                .map(|x| x.eq_ignore_ascii_case("xlsx") || x.eq_ignore_ascii_case("wk3"))
                 .unwrap_or(false)
         })
         .collect();
@@ -3301,7 +3301,17 @@ impl App {
     /// Load an xlsx from disk, wiping the current in-memory workbook
     /// and repopulating the UI cache from the loaded engine model.
     fn load_workbook_from(&mut self, path: PathBuf) {
-        if let Err(e) = self.wb_mut().engine.load_xlsx(&path) {
+        let is_wk3 = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.eq_ignore_ascii_case("wk3"))
+            .unwrap_or(false);
+        let load_result = if is_wk3 {
+            self.wb_mut().engine.load_wk3(&path)
+        } else {
+            self.wb_mut().engine.load_xlsx(&path)
+        };
+        if let Err(e) = load_result {
             self.set_error(format!("Cannot open {}: {e}", path.display()));
             return;
         }
@@ -3387,7 +3397,18 @@ impl App {
             }
         }
 
-        self.wb_mut().active_path = Some(path);
+        // For a `.WK3` source, set the save target to "<orig>.WK3.xlsx"
+        // so /File Save converts to xlsx without overwriting the legacy
+        // file. The original WK3 stays untouched on disk; there is no
+        // engine-side `save_wk3`.
+        let active = if is_wk3 {
+            let mut buf = path.into_os_string();
+            buf.push(".xlsx");
+            PathBuf::from(buf)
+        } else {
+            path
+        };
+        self.wb_mut().active_path = Some(active);
         self.mode = Mode::Ready;
     }
 
@@ -6965,6 +6986,51 @@ mod tests {
     }
 
     #[test]
+    fn new_with_file_routes_wk3_by_extension() {
+        // Open a `.WK3` via the CLI entry point: it should land in
+        // READY (not ERROR) with the workbook content visible, and
+        // `active_path` swapped to "<original>.WK3.xlsx" so /File
+        // Save defaults to writing xlsx alongside the legacy file.
+        let dir = temp_test_dir("new_with_wk3");
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root above crates/l123-ui")
+            .join("tests/acceptance/fixtures/wk3/FILE0001.WK3");
+        if !src.exists() {
+            eprintln!(
+                "skipping new_with_file_routes_wk3_by_extension: {} missing",
+                src.display()
+            );
+            let _ = std::fs::remove_dir(&dir);
+            return;
+        }
+        let wk3_path = dir.join("legacy.WK3");
+        std::fs::copy(&src, &wk3_path).unwrap();
+
+        let app = App::new_with_file(wk3_path.clone());
+        assert_eq!(
+            app.mode,
+            Mode::Ready,
+            "CLI-opening a .WK3 should land in READY (error={:?})",
+            app.error_message,
+        );
+        match app.wb().cells.get(&Address::A1) {
+            Some(CellContents::Label { text, .. }) => assert_eq!(text, "Hello"),
+            other => panic!("A1 expected Label(Hello), got {other:?}"),
+        }
+        let expected_save = wk3_path.with_file_name("legacy.WK3.xlsx");
+        assert_eq!(
+            app.wb().active_path.as_deref(),
+            Some(expected_save.as_path()),
+            "active_path should be original.WK3.xlsx so /File Save writes xlsx",
+        );
+
+        let _ = std::fs::remove_file(&wk3_path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
     fn arrow_nav() {
         let mut app = App::new();
         app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
@@ -7829,13 +7895,21 @@ mod tests {
         let _ = std::fs::remove_dir(&dir);
     }
 
-    /// Worksheet listing is an alphabetical list of xlsx files in the
-    /// given directory. Pure function of the directory's contents so
-    /// we can test it without touching process CWD.
+    /// Worksheet listing is an alphabetical list of xlsx + WK3 files
+    /// in the given directory. Pure function of the directory's
+    /// contents so we can test it without touching process CWD.
     #[test]
     fn list_worksheet_files_in_returns_xlsx_sorted() {
         let dir = temp_test_dir("list_ws");
-        for name in ["zeta.xlsx", "alpha.xlsx", "other.txt", "mid.XLSX"] {
+        let names_in = [
+            "zeta.xlsx",
+            "alpha.xlsx",
+            "other.txt",
+            "mid.XLSX",
+            "legacy.WK3",
+            "lower.wk3",
+        ];
+        for name in names_in {
             std::fs::write(dir.join(name), b"placeholder").unwrap();
         }
         let got = list_worksheet_files_in(&dir);
@@ -7843,8 +7917,17 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec!["alpha.xlsx", "mid.XLSX", "zeta.xlsx"]);
-        for name in ["zeta.xlsx", "alpha.xlsx", "other.txt", "mid.XLSX"] {
+        assert_eq!(
+            names,
+            vec![
+                "alpha.xlsx",
+                "legacy.WK3",
+                "lower.wk3",
+                "mid.XLSX",
+                "zeta.xlsx",
+            ]
+        );
+        for name in names_in {
             let _ = std::fs::remove_file(dir.join(name));
         }
         let _ = std::fs::remove_dir(&dir);

@@ -1,10 +1,18 @@
 # Tutorial Chapter 3, Lessons 10-11: multiple worksheets, GROUP
-# formatting propagation, and formulas that refer to a range spanning
-# worksheets.
+# formatting propagation, 3D copy destinations, and formulas that
+# refer to a range spanning worksheets.
 #
 # Unsupported tutorial subflows intentionally not covered here:
-# perspective view, 3D copy TO ranges, multi-range/3D print ranges,
-# and relative-reference adjustment when copied formulas span sheets.
+# perspective view and multi-range/3D print ranges.
+
+# Seed a tiny template on sheet A before creating the other worksheets.
+KEYS Store Template
+ENTER
+F 5
+KEYS B2
+ENTER
+KEYS 5
+ENTER
 
 # Add worksheets B and C after A.
 KEY /
@@ -25,26 +33,64 @@ ASSERT_MODE       READY
 CTRL_PGDN
 ASSERT_POINTER    C:A1
 
+# Copy the template from sheet A into both sheets B and C with a 3D
+# destination range.
+F 5
+KEYS A:A1
+ENTER
+KEY /
+KEY C
+KEYS A:A1..A:B2
+ASSERT_PANEL_L3   A:A1..A:B2
+ENTER
+ASSERT_MODE       POINT
+KEYS B:A1..C:A1
+ASSERT_PANEL_L3   B:A1..C:A1
+ENTER
+ASSERT_MODE       READY
+
+CTRL_PGDN
+ASSERT_POINTER    B:A1
+ASSERT_CELL       B:A1  Store Tem
+F 5
+KEYS B:B2
+ENTER
+ASSERT_CELL       B:B2  5
+
+CTRL_PGDN
+ASSERT_POINTER    C:A1
+ASSERT_CELL       C:A1  Store Tem
+F 5
+KEYS C:B2
+ENTER
+ASSERT_CELL       C:B2  5
+
 # Enter store values on sheets B and C.
+F 5
+KEYS C:B5
+ENTER
 KEYS 10000
 ENTER
-UP
-ASSERT_CELL       C:A1  10000
+ASSERT_CELL       C:B5  10000
 
 CTRL_PGUP
-ASSERT_POINTER    B:A1
+F 5
+KEYS B:B5
+ENTER
 KEYS 12000
 ENTER
-UP
-ASSERT_CELL       B:A1  12000
+ASSERT_CELL       B:B5  12000
 
-# Back to A:A1, enter a 3D @SUM across B:A1..C:A1.
+# Back to A:B5, enter a 3D @SUM across B:B5..C:B5.
 CTRL_PGUP
-ASSERT_POINTER    A:A1
-KEYS @SUM(B:A1..C:A1)
+F 5
+KEYS A:B5
 ENTER
-ASSERT_CELL       A:A1  22000
-ASSERT_PANEL_L1   @SUM(B:A1..C:A1)
+ASSERT_POINTER    A:B5
+KEYS @SUM(B:B5..C:B5)
+ENTER
+ASSERT_CELL       A:B5  22000
+ASSERT_PANEL_L1   @SUM(B:B5..C:B5)
 
 # GROUP mode propagates a range format from A to every sheet.
 KEY /
@@ -62,17 +108,25 @@ KEY F
 KEY C
 KEY 0
 ENTER
+KEYS A:B5
+ASSERT_PANEL_L3   A:B5
 ENTER
 ASSERT_MODE       READY
-ASSERT_CELL       A:A1  $22000
+ASSERT_CELL       A:B5  $22000
 
 CTRL_PGDN
 ASSERT_POINTER    B:A1
-ASSERT_CELL       B:A1  $12000
+F 5
+KEYS B:B5
+ENTER
+ASSERT_CELL       B:B5  $12000
 
 CTRL_PGDN
 ASSERT_POINTER    C:A1
-ASSERT_CELL       C:A1  $10000
+F 5
+KEYS C:B5
+ENTER
+ASSERT_CELL       C:B5  $10000
 
 # Disable GROUP before leaving the transcript.
 KEY /

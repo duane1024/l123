@@ -1,10 +1,6 @@
 # Tutorial Chapter 1, Lesson 4: numeric VALUE entry, range erase,
-# vertical pointer-key commit, and the repeating-label prefix used
-# for worksheet separator lines.
-#
-# Unsupported tutorial subflows intentionally not covered here:
-# typed range addresses at POINT prompts, single-cell copy to a
-# larger TO range, and named ranges as /Copy source arguments.
+# vertical pointer-key commit, the repeating-label prefix, typed range
+# input, single-cell-to-range copy, and named ranges as /Copy input.
 
 # Enter quarterly Net Sales values in B5..E5 using RIGHT as commit.
 HOME
@@ -86,28 +82,15 @@ ENTER
 ASSERT_CELL       A:C8   2000
 ASSERT_CELL       A:D12  4300
 
-# Erase C8..D12 by highlighting the range in POINT mode.
-HOME
-DOWN
-DOWN
-DOWN
-DOWN
-DOWN
-DOWN
-DOWN
-RIGHT
-RIGHT
+# Erase C8..D12 by typing the range address at the POINT prompt, as
+# the tutorial describes.
 KEY /
 KEY R
 KEY E
 ASSERT_MODE       POINT
 ASSERT_PANEL_L3   Enter range to erase
-RIGHT
-DOWN
-DOWN
-DOWN
-DOWN
-ASSERT_PANEL_L3   A:C8..A:D12
+KEYS C8..D12
+ASSERT_PANEL_L3   C8..D12
 ENTER
 ASSERT_MODE       READY
 ASSERT_CELL       A:C8
@@ -125,3 +108,62 @@ KEY -
 ENTER
 ASSERT_PANEL_L1   A:A4: \-
 ASSERT_CELL       A:A4  ---------
+
+# Copy A4's repeating dash cell to the wider B4..F4 destination range.
+KEY /
+KEY C
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   FROM
+ENTER
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   TO
+KEYS B4..F4
+ASSERT_PANEL_L3   B4..F4
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:B4  ---------
+ASSERT_CELL       A:C4  ---------
+ASSERT_CELL       A:D4  ---------
+ASSERT_CELL       A:E4  ---------
+ASSERT_CELL       A:F4  ---------
+
+# Name the full separator line and use the name as the /Copy FROM
+# range, matching the later Lesson 4 workflow.
+KEY /
+KEY R
+KEY N
+KEY C
+ASSERT_PANEL_L3   Enter name
+KEYS line
+ENTER
+ASSERT_MODE       POINT
+KEYS A4..F4
+ASSERT_PANEL_L3   A4..F4
+ENTER
+ASSERT_MODE       READY
+
+KEY /
+KEY C
+KEYS line
+ASSERT_PANEL_L3   line
+ENTER
+ASSERT_MODE       POINT
+KEYS A13
+ASSERT_PANEL_L3   A13
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:A13  ---------
+ASSERT_CELL       A:F13  ---------
+
+KEY /
+KEY C
+KEYS LINE
+ASSERT_PANEL_L3   LINE
+ENTER
+ASSERT_MODE       POINT
+KEYS A15
+ASSERT_PANEL_L3   A15
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:A15  ---------
+ASSERT_CELL       A:F15  ---------

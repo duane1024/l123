@@ -48,6 +48,7 @@ and its argument (separated by tabs or spaces). `#` starts a comment.
 |---|---|
 | `SIZE <w> <h>` | Set render buffer size (default 80×25) |
 | `RM_FILE <path>` | Delete a file on disk (ignored if missing). Use at the top of a transcript to start from a known state. |
+| `COPY_FILE <src>  <dst>` | Copy a fixture file into the sandbox. Two args separated by `\t` or 2+ spaces so paths containing single spaces parse. Useful for binary fixtures (`.WK3`, `.xlsx`) the transcript can't author from keystrokes. |
 | `ASSERT_FILE_CONTAINS <path>  <substr>` | Assert the named file's text contents contain `<substr>`. Supports `\n`, `\t`, `\f`, `\\` escapes in the substring. |
 | `ASSERT_FILE_NOT_CONTAINS <path>  <substr>` | Negation of the above. |
 | `HOVER_ICON <panel> <slot>` | Pin the icon-bar hover state as if the mouse were over `(panel, slot)`, where panel is `1..=7` and slot is `0..=16`. Drives control-panel line 3's hover-description tooltip. Transcripts use this instead of synthetic mouse-move events because the headless render buffer doesn't materialize a real icon panel to hit-test against. |

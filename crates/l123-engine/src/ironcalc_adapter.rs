@@ -21,6 +21,8 @@ use ironcalc_xlsx::base::{
 use ironcalc_xlsx::export::save_to_xlsx;
 use ironcalc_xlsx::import::load_from_xlsx;
 
+use ironcalc_lotus::load_from_wk3_bytes;
+
 use l123_core::{
     address::col_to_letters, Address, Alignment, Border, BorderEdge, BorderStyle, Comment, Fill,
     FillPattern, FontStyle, Format, HAlign, Merge, Range, RgbColor, SheetId, SheetState, Table,
@@ -245,6 +247,24 @@ impl Engine for IronCalcEngine {
             tracing::error!(path = %path.display(), err = %e, "ironcalc load_from_xlsx failed");
             EngineError::Backend(e.to_string())
         })?;
+        model.evaluate();
+        self.model = model;
+        Ok(())
+    }
+
+    fn load_wk3(&mut self, path: &Path) -> Result<()> {
+        // ironcalc_lotus's `load_from_wk3<'a>` ties `'a` across the path,
+        // locale, tz, and language args, which collapses `Model<'a>` to
+        // the borrowed-path lifetime — incompatible with the adapter's
+        // `Model<'static>`. Read the bytes ourselves and feed
+        // `load_from_wk3_bytes` a `'static` name so the result is
+        // `Model<'static>`.
+        let bytes = std::fs::read(path)?;
+        let mut model =
+            load_from_wk3_bytes(&bytes, "workbook", "en", "UTC", "en").map_err(|e| {
+                tracing::error!(path = %path.display(), err = %e, "ironcalc load_from_wk3 failed");
+                EngineError::Backend(e.to_string())
+            })?;
         model.evaluate();
         self.model = model;
         Ok(())
@@ -1658,6 +1678,43 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn load_wk3_reads_committed_fixture() {
+        // Loads `tests/acceptance/fixtures/wk3/FILE0001.WK3` (a sparse
+        // single-sheet WK3 with "Hello" at A1 and A6) and asserts the
+        // engine surfaces both the cell value and the WK3 sheet name.
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture = manifest
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root above crates/l123-engine")
+            .join("tests/acceptance/fixtures/wk3/FILE0001.WK3");
+        if !fixture.exists() {
+            eprintln!(
+                "skipping load_wk3_reads_committed_fixture: {} missing",
+                fixture.display()
+            );
+            return;
+        }
+        let mut e = IronCalcEngine::new().unwrap();
+        e.load_wk3(&fixture).unwrap();
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 0, 0)).unwrap().value,
+            Value::Text("Hello".into()),
+            "A1 should be Hello"
+        );
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 0, 5)).unwrap().value,
+            Value::Text("Hello".into()),
+            "A6 should be Hello"
+        );
+        assert_eq!(
+            e.sheet_name(SheetId::A).as_deref(),
+            Some("A"),
+            "WK3 sheet name preserved"
+        );
     }
 
     #[test]
