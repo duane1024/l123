@@ -609,7 +609,9 @@ transcripts! {
     m10_wysiwyg_panel_marker => "M10_wysiwyg_panel_marker.tsv",
     m10_wysiwyg_xlsx_round_trip => "M10_wysiwyg_xlsx_round_trip.tsv",
     m10_xlsx_format_round_trip  => "M10_xlsx_format_round_trip.tsv",
+    m10_status_line_sheet       => "M10_status_line_sheet.tsv",
     m10_icon_hover              => "M10_icon_hover.tsv",
     m10_mouse_click_cell        => "M10_mouse_click_cell.tsv",
     m10_mouse_click_point_extend => "M10_mouse_click_point_extend.tsv",
+    m10_mouse_click_splice       => "M10_mouse_click_splice.tsv",
 }

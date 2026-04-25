@@ -102,18 +102,53 @@ fn try_sheet_ref(s: &str, start: usize, sheets: &[&str]) -> Option<(usize, Strin
             let mut parts = Vec::with_capacity((hi - lo + 1) as usize);
             for idx in lo..=hi {
                 let name = sheets.get(idx as usize)?;
-                parts.push(format!("{name}!{lhs_addr}:{rhs_addr}"));
+                parts.push(format!(
+                    "{name}!{lhs_addr}:{rhs_addr}",
+                    name = quote_sheet_name(name)
+                ));
             }
             return Some((after_rhs, parts.join(",")));
         }
         if let Some((after_rhs, rhs_addr)) = parse_bare_ref(s, rhs_start) {
             let name = sheets.get(lhs_sheet as usize)?;
-            return Some((after_rhs, format!("{name}!{lhs_addr}:{rhs_addr}")));
+            return Some((
+                after_rhs,
+                format!(
+                    "{name}!{lhs_addr}:{rhs_addr}",
+                    name = quote_sheet_name(name)
+                ),
+            ));
         }
     }
     // Plain single sheet-qualified cell.
     let name = sheets.get(lhs_sheet as usize)?;
-    Some((after_lhs, format!("{name}!{lhs_addr}")))
+    Some((
+        after_lhs,
+        format!("{name}!{lhs_addr}", name = quote_sheet_name(name)),
+    ))
+}
+
+/// Wrap a sheet name in single quotes per Excel's formula grammar if
+/// it contains any character outside the ASCII-identifier set
+/// (letters, digits, underscore). Embedded `'` is doubled.
+fn quote_sheet_name(name: &str) -> String {
+    let needs_quote = name
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+    if !needs_quote {
+        return name.to_string();
+    }
+    let mut out = String::with_capacity(name.len() + 2);
+    out.push('\'');
+    for c in name.chars() {
+        if c == '\'' {
+            out.push_str("''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// Parse `<letters>:<letters><digits>` starting at `start`. Returns
@@ -276,6 +311,40 @@ mod tests {
         let s = sheets();
         assert_eq!(to_engine_source("@SUM(A1..A5)", &s), "=SUM(A1:A5)");
         assert_eq!(to_engine_source("+A1+B2", &s), "=A1+B2");
+    }
+
+    #[test]
+    fn sheet_name_with_space_is_single_quoted() {
+        // Excel requires names containing spaces / punctuation to be
+        // wrapped in single quotes: `'Q1 Sales'!B3`. Exercises the path
+        // that matters after loading an xlsx authored in Excel.
+        let s: Vec<&str> = vec!["Q1 Sales", "Q2 Budget"];
+        assert_eq!(to_engine_source("+A:B3", &s), "='Q1 Sales'!B3");
+        assert_eq!(
+            to_engine_source("@SUM(A:B3..D5)", &s),
+            "=SUM('Q1 Sales'!B3:D5)"
+        );
+        assert_eq!(
+            to_engine_source("@SUM(A:B3..B:B3)", &s),
+            "=SUM('Q1 Sales'!B3:B3,'Q2 Budget'!B3:B3)"
+        );
+    }
+
+    #[test]
+    fn sheet_name_with_apostrophe_is_escaped() {
+        // Single quotes inside a quoted name are doubled per Excel's
+        // formula grammar: `'It''s Here'!A1`.
+        let s: Vec<&str> = vec!["It's Here"];
+        assert_eq!(to_engine_source("+A:A1", &s), "='It''s Here'!A1");
+    }
+
+    #[test]
+    fn sheet_name_without_special_chars_is_not_quoted() {
+        // Plain identifiers (letters/digits/underscore) don't need
+        // quoting — keep output tight.
+        let s: Vec<&str> = vec!["Sheet1", "Q2"];
+        assert_eq!(to_engine_source("+A:B3", &s), "=Sheet1!B3");
+        assert_eq!(to_engine_source("+B:B3", &s), "=Q2!B3");
     }
 
     #[test]

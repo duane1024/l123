@@ -46,6 +46,12 @@ use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
 const ROW_GUTTER: u16 = 5;
 const PANEL_HEIGHT: u16 = 4; // 3 content lines + 1 bottom border
 
+/// Cap for the per-sheet name shown in the status line after the
+/// filename. Longer xlsx tab names get truncated to keep the right-
+/// side indicator zone (`FILE GROUP UNDO CALC CIRC MEM NUM …`) from
+/// getting shoved off-screen on an 80-column terminal.
+const STATUS_SHEET_NAME_MAX: usize = 20;
+
 /// Emit a single BEL character to stdout and flush. The terminal's
 /// own preferences decide whether that rings, flashes, or is ignored —
 /// matching the soft, user-configurable behavior the user asked for.
@@ -4690,8 +4696,18 @@ impl App {
             return;
         }
         if let Ok(protocol) = picker.new_protocol(img.clone(), area, Resize::Fit(None)) {
+            // The PNG has a 1:17 aspect; `Resize::Fit` preserves it,
+            // so the rendered icons usually occupy fewer rows than
+            // the allocated strip. Stash the actual rendered rect so
+            // hover/click hit-tests target where the icons really are.
+            let rendered = protocol.area();
             Image::new(&protocol).render(area, buf);
-            self.icon_panel_area.set(Some(area));
+            self.icon_panel_area.set(Some(Rect::new(
+                area.x,
+                area.y,
+                rendered.width.min(area.width),
+                rendered.height.min(area.height),
+            )));
         }
     }
 
@@ -4722,13 +4738,21 @@ impl App {
                 // it sits on top visually.
                 if let (true, Some(a)) = (inside_icon, icon_area) {
                     self.dispatch_icon_click(a, m.column, m.row);
-                } else if matches!(self.mode, Mode::Ready | Mode::Point) {
-                    // In POINT, the anchor is untouched by
-                    // move_pointer_to, so an anchored range extends
-                    // (or shrinks) to the clicked cell naturally;
-                    // unanchored POINT just moves the pointer.
-                    if let Some(addr) = self.cell_at_screen(m.column, m.row) {
-                        self.move_pointer_to(addr);
+                } else if let Some(addr) = self.cell_at_screen(m.column, m.row) {
+                    match self.mode {
+                        // In POINT, the anchor is untouched by
+                        // move_pointer_to, so an anchored range
+                        // extends (or shrinks) to the clicked cell
+                        // naturally; unanchored POINT just moves the
+                        // pointer.
+                        Mode::Ready | Mode::Point => self.move_pointer_to(addr),
+                        // Mid-formula: splice the clicked cell's
+                        // address into the entry buffer if the buffer
+                        // is in a cell-ref-accepting position. The
+                        // pointer itself stays put — the entry still
+                        // belongs to the originally-selected cell.
+                        Mode::Value | Mode::Edit => self.splice_cell_ref_into_entry(addr),
+                        _ => {}
                     }
                 }
             }
@@ -4742,6 +4766,34 @@ impl App {
     fn move_pointer_to(&mut self, addr: Address) {
         self.wb_mut().pointer = addr;
         self.scroll_into_view();
+    }
+
+    /// Append `addr` (short form, e.g. `C3`) to the current entry
+    /// buffer — but only when the buffer is in a position where a
+    /// cell reference is grammatically valid (empty, or ending in an
+    /// operator/paren/comma/dot/comparison/logical token). Called
+    /// from mouse click-in-grid during VALUE/EDIT, so the user can
+    /// build formulas by clicking instead of typing references.
+    fn splice_cell_ref_into_entry(&mut self, addr: Address) {
+        let Some(entry) = self.entry.as_mut() else {
+            return;
+        };
+        if !matches!(entry.kind, EntryKind::Value | EntryKind::Edit) {
+            return;
+        }
+        let accepts_ref = match entry.buffer.chars().last() {
+            None => true,
+            // `.` covers both the range separator `..` and an
+            // in-progress `.`; `#` covers `#AND#`/`#OR#`/`#NOT#`.
+            Some(c) => matches!(
+                c,
+                '+' | '-' | '*' | '/' | '^' | '(' | ',' | '.' | '=' | '<' | '>' | '#' | ' '
+            ),
+        };
+        if !accepts_ref {
+            return;
+        }
+        entry.buffer.push_str(&addr.display_short());
     }
 
     /// Map a screen coordinate to the cell address it sits on, or
@@ -4778,18 +4830,20 @@ impl App {
     }
 
     /// Map a row within the icon panel to a slot index `0..=16`.
-    /// Slot 16 is the panel navigator. Returns `None` only when the
-    /// area geometry is malformed (zero-height, row above origin,
-    /// per-slot height of zero).
+    /// Slot 16 is the panel navigator. Returns `None` when the area
+    /// is zero-height or the row is above its origin.
+    ///
+    /// `Resize::Fit(None)` rarely produces a pixel-height that's an
+    /// exact multiple of 17 rows, so computing `height / 17` first
+    /// truncates and drifts the slot boundaries — worst near the
+    /// bottom, where the drift rolls past slot 16. Multiply before
+    /// dividing to keep the mapping proportional across the band.
     fn hit_test_slot(area: Rect, row: u16) -> Option<usize> {
         if area.height == 0 || row < area.y {
             return None;
         }
-        let per_slot = (area.height as usize).max(1) / 17;
-        if per_slot == 0 {
-            return None;
-        }
-        Some((((row - area.y) as usize) / per_slot).min(16))
+        let offset = (row - area.y) as usize;
+        Some((offset * 17 / area.height as usize).min(16))
     }
 
     /// Map a mouse click on the icon panel to a slot and fire that
@@ -5499,7 +5553,24 @@ impl App {
                 .unwrap_or_else(|| p.display().to_string()),
             None => crate::clock::format_ddmmmyyyy_hhmm(crate::clock::local_now()),
         };
-        let left = format!(" {left_text}");
+        // Multi-sheet workbook → append "[<Letter>: <name>]" so users
+        // can see which Excel tab their letter-addressed pointer is on.
+        // Single-sheet workbooks skip this since there's nothing to
+        // disambiguate and authentic 1-2-3 never showed a sheet name.
+        let sheet_suffix = if self.wb().engine.sheet_count() > 1 {
+            let sid = self.wb().pointer.sheet;
+            let letter = sid.letter();
+            let name = self
+                .wb()
+                .engine
+                .sheet_name(sid)
+                .unwrap_or_else(|| "?".to_string());
+            let trimmed: String = name.chars().take(STATUS_SHEET_NAME_MAX).collect();
+            format!("  [{letter}: {trimmed}]")
+        } else {
+            String::new()
+        };
+        let left = format!(" {left_text}{sheet_suffix}");
         // Active status indicators, in the order 1-2-3 displays them.
         // For M2 we emit CALC only; the others arrive with their features.
         let mut indicators = Vec::new();
@@ -7020,6 +7091,27 @@ mod tests {
         assert_eq!(app.current_panel, l123_graph::Panel::One);
     }
 
+    #[test]
+    fn hit_test_slot_is_proportional_for_non_aligned_heights() {
+        // Real rendering uses `Resize::Fit(None)`, which scales the
+        // icon PNG (1:17 aspect) to preserve shape — so the actual
+        // pixel height rarely lands on a multiple of 17 rows. A 26-row
+        // panel is a realistic example: slots occupy fractional bands.
+        //
+        // Dividing `height / 17` first truncates to 1 row per slot and
+        // then caps at slot 16, so every row past 16 collapses onto
+        // the pager — this is the Bold→Help mis-hit users see.
+        // The mapping must stay proportional over the full range.
+        let area = Rect::new(80, 4, 3, 26);
+        // Slot 11 (Bold) spans rows ~16.8–18.4 in this panel.
+        assert_eq!(App::hit_test_slot(area, 4 + 17), Some(11));
+        assert_eq!(App::hit_test_slot(area, 4 + 18), Some(11));
+        // Slot 15 (Help) spans rows ~22.9–24.5.
+        assert_eq!(App::hit_test_slot(area, 4 + 23), Some(15));
+        // Slot 16 (Pager) spans rows ~24.5–26.
+        assert_eq!(App::hit_test_slot(area, 4 + 25), Some(16));
+    }
+
     /// Simulate a mouse-move at `(col, row)` by stashing a fake panel
     /// area (same fixture as click tests) and routing through
     /// [`App::handle_mouse`].
@@ -7282,6 +7374,141 @@ mod tests {
         enter_point_via_range_erase(&mut app);
         click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
         assert_eq!(app.mode, Mode::Point, "click must not drop out of POINT");
+    }
+
+    // ---- Phase 3: mid-entry cell-reference splicing on click ----
+
+    /// Type a sequence into a fresh app and return it in VALUE mode
+    /// with `buffer` typed after the value-starter. The leading `+`
+    /// forces VALUE (SPEC §20 #6 — `=` is not a value starter in L123).
+    fn enter_value_with(app: &mut App, buffer: &str) {
+        for c in buffer.chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    fn entry_buffer(app: &App) -> String {
+        app.entry
+            .as_ref()
+            .map(|e| e.buffer.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn mouse_click_in_value_after_plus_splices_short_address() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "+");
+        assert_eq!(app.mode, Mode::Value);
+        click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Value, "splice must keep VALUE mode");
+        assert_eq!(entry_buffer(&app), "+C3");
+    }
+
+    #[test]
+    fn mouse_click_in_value_after_open_paren_splices() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "@SUM(");
+        click_at(&mut app, COL_A_X, BODY_TOP_Y);
+        assert_eq!(entry_buffer(&app), "@SUM(A1");
+    }
+
+    #[test]
+    fn mouse_click_in_value_after_comma_splices() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "@MIN(A1,");
+        click_at(&mut app, COL_B_X, BODY_TOP_Y + 1);
+        assert_eq!(entry_buffer(&app), "@MIN(A1,B2");
+    }
+
+    #[test]
+    fn mouse_click_in_value_after_range_dots_splices() {
+        // `..` is 1-2-3's range separator; a trailing `.` must count
+        // as a cell-ref-accepting context so you can click the end
+        // corner of a range.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "+A1..");
+        click_at(&mut app, COL_B_X, BODY_TOP_Y + 4);
+        assert_eq!(entry_buffer(&app), "+A1..B5");
+    }
+
+    #[test]
+    fn mouse_click_in_value_after_digit_is_noop() {
+        // Splicing after `5` would produce `5C3` — nonsense. The
+        // click must not corrupt the buffer.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "5");
+        click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Value);
+        assert_eq!(entry_buffer(&app), "5");
+    }
+
+    #[test]
+    fn mouse_click_in_value_after_close_paren_is_noop() {
+        // Close paren closes a sub-expression; the parser wants an
+        // operator next, not another cell ref.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "@SUM(A1..A3)");
+        let before = entry_buffer(&app);
+        click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(entry_buffer(&app), before);
+    }
+
+    #[test]
+    fn mouse_click_in_label_is_noop() {
+        // Labels hold literal text; a mid-label cell ref is almost
+        // certainly not what the user meant. Leave the buffer alone.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "hello ");
+        assert_eq!(app.mode, Mode::Label);
+        click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Label);
+        assert_eq!(entry_buffer(&app), "hello ");
+    }
+
+    #[test]
+    fn mouse_click_in_edit_after_operator_splices() {
+        // Put a formula referencing A1 into B1, then F2 to EDIT the
+        // source. Appending `+` and clicking C3 must splice.
+        let mut app = App::new();
+        // Move pointer to B1 (right once from A1).
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        enter_value_with(&mut app, "+A1");
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let _ = app.render_to_buffer(80, 25);
+        app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Edit);
+        app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
+        click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.mode, Mode::Edit);
+        assert_eq!(entry_buffer(&app), "+A1+C3");
+    }
+
+    #[test]
+    fn mouse_click_on_gutter_in_value_is_noop() {
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "+");
+        click_at(&mut app, 2, BODY_TOP_Y + 2);
+        assert_eq!(entry_buffer(&app), "+");
+    }
+
+    #[test]
+    fn mouse_click_in_value_does_not_move_pointer() {
+        // Splicing is a buffer operation; the *cell pointer* must
+        // stay put so the entry still belongs to the originally-
+        // selected cell.
+        let mut app = App::new();
+        let _ = app.render_to_buffer(80, 25);
+        enter_value_with(&mut app, "+");
+        click_at(&mut app, COL_C_X, BODY_TOP_Y + 2);
+        assert_eq!(app.pointer().display_full(), "A:A1");
     }
 
     /// Drive the `/Worksheet Column Set-Width` menu path, typing `width`

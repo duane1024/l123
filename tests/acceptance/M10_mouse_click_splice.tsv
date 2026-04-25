@@ -1,0 +1,70 @@
+# Phase 3 mouse support: mid-entry cell-reference splicing on click.
+# Typing a partial formula and clicking a cell splices that cell's
+# address into the buffer — but only when the buffer is in a
+# cell-ref-accepting position (empty, or ending in an operator,
+# paren, comma, dot, comparison, or logical token). Clicking
+# while the buffer ends in a digit, close-paren, or other non-
+# operator char is a safe no-op.
+#
+# Layout: col A x [5,14), B [14,23), C [23,32), D [32,41), rows y>=5.
+
+# Seed A1 = 10, C3 = 5 so the committed formula has values to sum.
+KEYS 10
+ENTER
+HOME
+
+RIGHT
+RIGHT
+DOWN
+DOWN
+KEYS 5
+ENTER
+
+# Back to A2 so the entry has somewhere to go that references A1+C3.
+HOME
+DOWN
+ASSERT_POINTER A:A2
+
+# Type `+` → enters VALUE; buffer = "+".
+KEY +
+ASSERT_MODE VALUE
+ASSERT_PANEL_L2 +
+
+# Click A1 at (x=7, y=5) — splices A1 into the buffer.
+MOUSE_CLICK 7 5
+ASSERT_MODE VALUE
+ASSERT_PANEL_L2 +A1
+
+# Type `+` then click C3 — splices.
+KEY +
+MOUSE_CLICK 25 7
+ASSERT_PANEL_L2 +A1+C3
+
+# Clicking again after a close-paren would be nonsense. Append `)`
+# then verify a click at A1 is a no-op (buffer unchanged).
+# First wrap the whole expression: move cursor back? The current
+# implementation is append-only, so put a `)` at the end as a probe.
+KEY )
+ASSERT_PANEL_L2 +A1+C3)
+MOUSE_CLICK 7 5
+ASSERT_PANEL_L2 +A1+C3)
+
+# Backspace the trailing `)` back off (simulate editing) and
+# commit the formula. The committed cell holds the expected sum.
+BACKSPACE
+ASSERT_PANEL_L2 +A1+C3
+ENTER
+ASSERT_MODE READY
+ASSERT_CELL A:A2  15
+
+# F2 to EDIT, append `+`, click D4 (empty), Enter. Result unchanged
+# numerically (D4 defaults to 0) but buffer splicing still works.
+F 2
+ASSERT_MODE EDIT
+ASSERT_PANEL_L2 +A1+C3
+KEY +
+MOUSE_CLICK 35 8
+ASSERT_PANEL_L2 +A1+C3+D4
+ENTER
+ASSERT_MODE READY
+ASSERT_CELL A:A2  15

@@ -781,6 +781,46 @@ mod tests {
     }
 
     #[test]
+    fn custom_sheet_names_round_trip_through_xlsx() {
+        // Simulates opening an xlsx authored in Excel with meaningful
+        // tab names. L123 still addresses sheets by letter (A/B/…), but
+        // the underlying names must survive /FS → /FR so Excel reopens
+        // them intact.
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "l123_engine_sheet_name_rt_{}_{}",
+            process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sheet_names_rt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        e.model.rename_sheet_by_index(0, "Q1 Sales").unwrap();
+        e.insert_sheet_at(1).unwrap();
+        e.model.rename_sheet_by_index(1, "Q2 Budget").unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "100")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId(1), 0, 0), "200")
+            .unwrap();
+        e.recalc();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        assert_eq!(e2.sheet_name(SheetId::A).as_deref(), Some("Q1 Sales"));
+        assert_eq!(e2.sheet_name(SheetId(1)).as_deref(), Some("Q2 Budget"));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
     fn cell_format_round_trips_through_xlsx() {
         use l123_core::Format;
         use std::process;

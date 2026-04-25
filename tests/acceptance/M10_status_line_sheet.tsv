@@ -1,0 +1,39 @@
+# Status line surfaces the current sheet's underlying name after the
+# filename when the workbook has more than one sheet. 1-2-3 addresses
+# sheets by letter (A/B/…); Excel imports carry human-readable tab
+# names the user would otherwise never see. Single-sheet workbooks
+# omit the suffix to keep the line uncluttered.
+
+SIZE 200 25
+RM_FILE $TMPDIR/m10_status_line_sheet.xlsx
+
+# Save so active_path is set — status line now shows the filename.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m10_status_line_sheet.xlsx
+ENTER
+ASSERT_MODE     READY
+ASSERT_STATUS   m10_status_line_sheet.xlsx
+
+# Single sheet → no "[A: ...]" suffix yet.
+ASSERT_SCREEN_NOT_CONTAINS  [A:
+
+# /WIS After → a second sheet appears, now the suffix kicks in.
+KEY /
+KEY W
+KEY I
+KEY S
+KEY A
+ASSERT_MODE     READY
+ASSERT_STATUS   [A: Sheet1]
+
+# Ctrl-PgDn jumps to sheet B; suffix tracks the active sheet.
+CTRL_PGDN
+ASSERT_POINTER  B:A1
+ASSERT_STATUS   [B: Sheet2]
+
+# Ctrl-PgUp back to A; suffix flips back.
+CTRL_PGUP
+ASSERT_POINTER  A:A1
+ASSERT_STATUS   [A: Sheet1]
