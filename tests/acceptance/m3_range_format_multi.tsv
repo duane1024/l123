@@ -1,0 +1,36 @@
+# /Range Format Currency 2 across two disjoint ranges typed with a comma.
+
+# Seed two values, far apart.
+KEYS 50
+ENTER
+F 5
+KEYS C5
+ENTER
+KEYS 75
+ENTER
+HOME
+
+ASSERT_PANEL_L1   A:A1: (G) 50
+
+# /RFC, default 2 decimals, then POINT with multi-range typed buffer.
+KEY /
+KEY R
+KEY F
+KEY C
+ENTER
+ASSERT_MODE       POINT
+
+KEYS A1..A1,C5..C5
+ENTER
+ASSERT_MODE       READY
+
+# Both cells now have C2 format applied.
+HOME
+ASSERT_PANEL_L1   A:A1: (C2) 50
+ASSERT_CELL       A:A1  $50.00
+
+F 5
+KEYS C5
+ENTER
+ASSERT_PANEL_L1   A:C5: (C2) 75
+ASSERT_CELL       A:C5  $75.00

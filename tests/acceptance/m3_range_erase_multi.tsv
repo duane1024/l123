@@ -1,0 +1,43 @@
+# /Range Erase across two disjoint ranges typed with a comma.
+# `,` in the POINT typed buffer flushes the in-progress range into a
+# multi-range list; commit erases each.
+
+# Seed A1=1, B2=2, D4=4, E5=5.
+KEYS 1
+ENTER
+DOWN
+RIGHT
+KEYS 2
+ENTER
+F 5
+KEYS D4
+ENTER
+KEYS 4
+ENTER
+DOWN
+RIGHT
+KEYS 5
+ENTER
+HOME
+
+ASSERT_CELL       A:A1  1
+ASSERT_CELL       A:B2  2
+ASSERT_CELL       A:D4  4
+ASSERT_CELL       A:E5  5
+
+# /RE → POINT for the range. Type a comma-separated list.
+KEY /
+KEY R
+KEY E
+ASSERT_MODE       POINT
+
+KEYS A1..B2,D4..E5
+ASSERT_PANEL_L3   A1..B2,D4..E5
+ENTER
+ASSERT_MODE       READY
+
+# All four cells in the two ranges are now blank.
+ASSERT_CELL       A:A1
+ASSERT_CELL       A:B2
+ASSERT_CELL       A:D4
+ASSERT_CELL       A:E5

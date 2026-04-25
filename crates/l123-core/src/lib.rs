@@ -21,7 +21,7 @@ pub mod table;
 pub mod text_style;
 pub mod value;
 
-pub use address::{Address, Range, SheetId};
+pub use address::{Address, Range, RangeInput, SheetId};
 pub use alignment::{Alignment, HAlign, VAlign};
 pub use border::{Border, BorderEdge, BorderStyle};
 pub use cell_render::{

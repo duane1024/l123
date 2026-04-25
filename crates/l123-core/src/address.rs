@@ -201,6 +201,71 @@ impl Range {
     }
 }
 
+/// One or more ranges, as accepted by Lotus prompts that allow a
+/// comma-separated list (`/Print Range`, `/Range Format`, …). A
+/// single-range input is preserved as `One` so existing single-range
+/// callers don't pay an allocation; multi-range inputs land in `Many`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RangeInput {
+    One(Range),
+    Many(Vec<Range>),
+}
+
+impl RangeInput {
+    pub fn as_slice(&self) -> &[Range] {
+        match self {
+            RangeInput::One(r) => std::slice::from_ref(r),
+            RangeInput::Many(v) => v.as_slice(),
+        }
+    }
+
+    /// Convert into a `Vec<Range>`. Allocates for `One`.
+    pub fn into_vec(self) -> Vec<Range> {
+        match self {
+            RangeInput::One(r) => vec![r],
+            RangeInput::Many(v) => v,
+        }
+    }
+
+    pub fn from_vec(mut v: Vec<Range>) -> Option<Self> {
+        match v.len() {
+            0 => None,
+            1 => Some(RangeInput::One(v.pop().unwrap())),
+            _ => Some(RangeInput::Many(v)),
+        }
+    }
+
+    /// Parse a comma-separated list of ranges. Each part is fed to
+    /// [`Range::parse_with_default_sheet`], so any single-cell address,
+    /// `A1..D5` literal, or sheet-qualified form is accepted on each
+    /// side of the commas. Whitespace around commas is tolerated.
+    /// Empty parts (leading/trailing/double commas) are rejected.
+    pub fn parse_with_default_sheet(
+        s: &str,
+        default_sheet: SheetId,
+    ) -> Result<RangeInput, AddressError> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(AddressError::Malformed("empty range list".into()));
+        }
+        let mut parts: Vec<Range> = Vec::new();
+        for raw in s.split(',') {
+            let part = raw.trim();
+            if part.is_empty() {
+                return Err(AddressError::Malformed(format!(
+                    "empty entry in range list: {s:?}"
+                )));
+            }
+            parts.push(Range::parse_with_default_sheet(part, default_sheet)?);
+        }
+        Ok(if parts.len() == 1 {
+            RangeInput::One(parts.into_iter().next().unwrap())
+        } else {
+            RangeInput::Many(parts)
+        })
+    }
+}
+
 fn ord<T: Ord>(a: T, b: T) -> (T, T) {
     if a <= b {
         (a, b)
@@ -446,5 +511,52 @@ mod tests {
         };
         assert!(!r.is_single_sheet());
         assert!(r.contains(Address::new(SheetId(1), 2, 3)));
+    }
+
+    #[test]
+    fn range_input_parse_single() {
+        let ri = RangeInput::parse_with_default_sheet("A1..B2", SheetId::A).unwrap();
+        assert_eq!(ri.as_slice().len(), 1);
+        assert_eq!(ri.as_slice()[0].start, Address::new(SheetId::A, 0, 0));
+        assert_eq!(ri.as_slice()[0].end, Address::new(SheetId::A, 1, 1));
+        assert!(matches!(ri, RangeInput::One(_)));
+    }
+
+    #[test]
+    fn range_input_parse_two_ranges() {
+        let ri = RangeInput::parse_with_default_sheet("A1..B2,C3..D4", SheetId::A).unwrap();
+        let s = ri.as_slice();
+        assert_eq!(s.len(), 2);
+        assert_eq!(s[0].start, Address::new(SheetId::A, 0, 0));
+        assert_eq!(s[0].end, Address::new(SheetId::A, 1, 1));
+        assert_eq!(s[1].start, Address::new(SheetId::A, 2, 2));
+        assert_eq!(s[1].end, Address::new(SheetId::A, 3, 3));
+        assert!(matches!(ri, RangeInput::Many(_)));
+    }
+
+    #[test]
+    fn range_input_parse_three_ranges_with_whitespace() {
+        let ri = RangeInput::parse_with_default_sheet("A1, B2..B3 , C5..D7", SheetId::A).unwrap();
+        let s = ri.as_slice();
+        assert_eq!(s.len(), 3);
+        assert_eq!(s[0], Range::single(Address::new(SheetId::A, 0, 0)));
+    }
+
+    #[test]
+    fn range_input_parse_default_sheet_applies_to_each_part() {
+        let ri = RangeInput::parse_with_default_sheet("A1..B2,C3..D4", SheetId(2)).unwrap();
+        for r in ri.as_slice() {
+            assert_eq!(r.start.sheet, SheetId(2));
+            assert_eq!(r.end.sheet, SheetId(2));
+        }
+    }
+
+    #[test]
+    fn range_input_parse_rejects_garbage() {
+        assert!(RangeInput::parse_with_default_sheet("", SheetId::A).is_err());
+        assert!(RangeInput::parse_with_default_sheet("A1,", SheetId::A).is_err());
+        assert!(RangeInput::parse_with_default_sheet(",A1", SheetId::A).is_err());
+        assert!(RangeInput::parse_with_default_sheet("A1,,B2", SheetId::A).is_err());
+        assert!(RangeInput::parse_with_default_sheet("garbage", SheetId::A).is_err());
     }
 }

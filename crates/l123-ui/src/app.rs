@@ -24,8 +24,8 @@ use l123_core::cell_render::{apply_halign_to_rendered, halign_to_label_prefix};
 use l123_core::{
     address::col_to_letters, label::is_value_starter, plan_row_spill, render_label,
     render_value_in_cell, Address, Alignment, Border, CellContents, Comment, ErrKind, Fill,
-    FontStyle, Format, FormatKind, HAlign, LabelPrefix, Merge, Mode, Range, RgbColor, SheetId,
-    SheetState, SpillSlot, Table, TextStyle, Value,
+    FontStyle, Format, FormatKind, HAlign, LabelPrefix, Merge, Mode, Range, RangeInput, RgbColor,
+    SheetId, SheetState, SpillSlot, Table, TextStyle, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
@@ -514,7 +514,12 @@ enum PrintDestination {
 #[derive(Debug, Clone)]
 struct PrintSession {
     destination: PrintDestination,
-    range: Option<Range>,
+    /// One or more print ranges. Empty until `/PF Range` runs. Multiple
+    /// ranges (typed `A1..B2,C3..D4` in POINT) are emitted in order;
+    /// each range is a separate "page" of the output (Lotus separates
+    /// ranges with a form-feed when printed; here we emit a blank line
+    /// between them in the unformatted/file path).
+    ranges: Vec<Range>,
     /// Three-part header string (`L|C|R`). Empty means no header.
     header: String,
     /// Three-part footer string (`L|C|R`). Empty means no footer.
@@ -568,7 +573,7 @@ impl PrintSession {
     fn with_destination(destination: PrintDestination) -> Self {
         Self {
             destination,
-            range: None,
+            ranges: Vec::new(),
             header: String::new(),
             footer: String::new(),
             setup_string: String::new(),
@@ -3113,7 +3118,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 };
-                self.apply_pending_with_range(ps.pending, range);
+                self.apply_pending_with_ranges(ps.pending, &[range]);
             }
             NameListOrigin::Goto => {
                 self.prompt = None;
@@ -3378,14 +3383,18 @@ impl App {
             self.close_menu();
             return;
         };
-        let Some(range) = session.range else {
+        if session.ranges.is_empty() {
             // No range selected — bounce back to the menu without
             // writing anything. Matches 1-2-3's "Go with no range =
             // no-op".
             self.enter_print_file_menu();
             return;
-        };
-        let settings = PrintSettings {
+        }
+        // Render each range with running page numbers so multi-range
+        // jobs (`A1..B2,C3..D4` typed in POINT) stay paginated as one
+        // logical document. Each part contributes its own pages to the
+        // merged grid; `next_page` advances by the total page count.
+        let base_settings = PrintSettings {
             header: session.header.clone(),
             footer: session.footer.clone(),
             content_mode: session.content_mode,
@@ -3397,7 +3406,23 @@ impl App {
             pg_length: session.pg_length,
             start_page: session.next_page,
         };
-        let grid = l123_print::render(self.wb(), range, &settings);
+        let mut grid_pages: Vec<l123_print::grid::Page> = Vec::new();
+        let mut page_width: u16 = 0;
+        let mut start_page = session.next_page;
+        for r in &session.ranges {
+            let settings = PrintSettings {
+                start_page,
+                ..base_settings.clone()
+            };
+            let g = l123_print::render(self.wb(), *r, &settings);
+            page_width = page_width.max(g.page_width);
+            start_page += g.pages.len() as u32;
+            grid_pages.extend(g.pages);
+        }
+        let grid = l123_print::grid::PageGrid {
+            pages: grid_pages,
+            page_width: page_width.max(1),
+        };
         let pages = grid.pages.len() as u32;
         match &session.destination {
             PrintDestination::File(path) => {
@@ -4358,10 +4383,11 @@ impl App {
             // Any other address-like char extends (or starts) the typed
             // range buffer. `:` only makes sense after a sheet letter,
             // so we ignore a leading `:`. `_` is accepted to support
-            // typed range names (Lotus permits `_` inside names).
-            KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == ':' || c == '_' => {
+            // typed range names (Lotus permits `_` inside names). `,`
+            // is the multi-range separator (`A1..B2,C3..D4`).
+            KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == ':' || c == '_' || c == ',' => {
                 if let Some(ps) = self.point.as_mut() {
-                    if !(c == ':' && ps.typed.is_empty()) {
+                    if !((c == ':' || c == ',') && ps.typed.is_empty()) {
                         ps.typed.push(c);
                     }
                 }
@@ -4430,23 +4456,31 @@ impl App {
 
     fn commit_point(&mut self) {
         // Typed range buffer takes precedence over the highlight
-        // anchor+pointer pair. Resolution order: literal address /
-        // range first, then a defined range name (case-insensitive).
-        // Both miss → silent no-op clear-buffer-stay-in-POINT, same
-        // shape as F5 GOTO.
-        let typed_range = match self.point.as_ref() {
+        // anchor+pointer pair. Resolution order: comma-separated range
+        // list first (also handles plain `A1..D5`), then a defined
+        // range name (case-insensitive, single name only). Both miss →
+        // silent no-op clear-buffer-stay-in-POINT, same shape as F5
+        // GOTO.
+        let typed_input: Option<RangeInput> = match self.point.as_ref() {
             Some(ps) if !ps.typed.is_empty() => {
                 let default_sheet = self.wb().pointer.sheet;
-                let resolved = Range::parse_with_default_sheet(&ps.typed, default_sheet)
+                let resolved = RangeInput::parse_with_default_sheet(&ps.typed, default_sheet)
                     .ok()
                     .or_else(|| {
-                        self.wb()
-                            .named_ranges
-                            .get(&ps.typed.to_ascii_lowercase())
-                            .copied()
+                        // Single typed token that didn't parse as an
+                        // address — try the named-ranges table.
+                        if ps.typed.contains(',') {
+                            None
+                        } else {
+                            self.wb()
+                                .named_ranges
+                                .get(&ps.typed.to_ascii_lowercase())
+                                .copied()
+                                .map(RangeInput::One)
+                        }
                     });
                 match resolved {
-                    Some(r) => Some(r),
+                    Some(ri) => Some(ri),
                     None => {
                         if let Some(ps) = self.point.as_mut() {
                             ps.typed.clear();
@@ -4461,66 +4495,80 @@ impl App {
             self.mode = Mode::Ready;
             return;
         };
-        let range = match typed_range {
-            Some(r) => r,
+        let ranges: Vec<Range> = match typed_input {
+            Some(ri) => ri.into_vec(),
             None => match ps.anchor {
-                Some(a) => Range {
+                Some(a) => vec![Range {
                     start: a,
                     end: self.wb_mut().pointer,
                 }
-                .normalized(),
-                None => Range::single(self.wb_mut().pointer),
+                .normalized()],
+                None => vec![Range::single(self.wb_mut().pointer)],
             },
         };
-        self.apply_pending_with_range(ps.pending, range);
+        self.apply_pending_with_ranges(ps.pending, &ranges);
     }
 
-    /// Dispatch a [`PendingCommand`] with a fully-resolved range.
-    /// Reused by [`Self::commit_point`] (highlight/typed-buffer path)
-    /// and by F3 NAMES selection in POINT (named-range path) so the
-    /// per-command effects don't drift out of sync.
-    fn apply_pending_with_range(&mut self, pending: PendingCommand, range: Range) {
+    /// Dispatch a [`PendingCommand`] with a fully-resolved list of
+    /// ranges. Reused by [`Self::commit_point`] (highlight/typed-buffer
+    /// path) and by F3 NAMES selection in POINT (named-range path) so
+    /// per-command effects don't drift out of sync. Multi-range commands
+    /// iterate; single-range commands take the first range only.
+    fn apply_pending_with_ranges(&mut self, pending: PendingCommand, ranges: &[Range]) {
+        if ranges.is_empty() {
+            self.mode = Mode::Ready;
+            return;
+        }
+        let first = ranges[0];
         match pending {
             PendingCommand::RangeErase => {
-                self.execute_range_erase(range);
+                for r in ranges {
+                    self.execute_range_erase(*r);
+                }
                 self.mode = Mode::Ready;
             }
             PendingCommand::CopyFrom => {
-                self.transition_point(PendingCommand::CopyTo { source: range })
+                self.transition_point(PendingCommand::CopyTo { source: first })
             }
             PendingCommand::MoveFrom => {
-                self.transition_point(PendingCommand::MoveTo { source: range })
+                self.transition_point(PendingCommand::MoveTo { source: first })
             }
             PendingCommand::CopyTo { source } => {
-                if self.execute_copy(source, range) {
+                if self.execute_copy(source, first) {
                     self.mode = Mode::Ready;
                 }
                 // On dim-mismatch error, set_error already put the app
                 // in Mode::Error — leave it.
             }
             PendingCommand::MoveTo { source } => {
-                if self.execute_move(source, range) {
+                if self.execute_move(source, first) {
                     self.mode = Mode::Ready;
                 }
             }
             PendingCommand::RangeLabel { new_prefix } => {
-                self.execute_range_label(range, new_prefix);
+                for r in ranges {
+                    self.execute_range_label(*r, new_prefix);
+                }
                 self.mode = Mode::Ready;
             }
             PendingCommand::RangeFormat { format } => {
-                self.execute_range_format(range, format);
+                for r in ranges {
+                    self.execute_range_format(*r, format);
+                }
                 self.mode = Mode::Ready;
             }
             PendingCommand::RangeTextStyle { bits, set } => {
-                self.execute_range_text_style(range, bits, set);
+                for r in ranges {
+                    self.execute_range_text_style(*r, bits, set);
+                }
                 self.mode = Mode::Ready;
             }
             PendingCommand::RangeNameCreate => {
                 if let Some(name) = self.pending_name.take() {
-                    let _ = self.wb_mut().engine.define_name(&name, range);
+                    let _ = self.wb_mut().engine.define_name(&name, first);
                     self.wb_mut()
                         .named_ranges
-                        .insert(name.to_ascii_lowercase(), range);
+                        .insert(name.to_ascii_lowercase(), first);
                     self.wb_mut().engine.recalc();
                     self.refresh_formula_caches();
                 }
@@ -4528,38 +4576,46 @@ impl App {
             }
             PendingCommand::FileXtractRange { kind } => {
                 if let Some(path) = self.pending_xtract_path.take() {
-                    self.execute_file_xtract(range, kind, path);
+                    self.execute_file_xtract(first, kind, path);
                 }
                 self.mode = Mode::Ready;
             }
             PendingCommand::PrintFileRange => {
                 if let Some(session) = self.print.as_mut() {
-                    session.range = Some(range);
+                    session.ranges = ranges.to_vec();
                 }
                 // Back to the /PF submenu for Options/Go/…
                 self.enter_print_file_menu();
             }
             PendingCommand::RangeSearchRange { scope } => {
-                self.start_range_search_string_prompt(scope, range);
+                self.start_range_search_string_prompt(scope, first);
             }
             PendingCommand::GraphSeries { series } => {
-                self.wb_mut().current_graph.set(series, range);
+                self.wb_mut().current_graph.set(series, first);
                 self.mode = Mode::Ready;
             }
             PendingCommand::ColumnRangeSetWidth { width } => {
-                self.execute_col_range_width(range, Some(width));
+                for r in ranges {
+                    self.execute_col_range_width(*r, Some(width));
+                }
                 self.mode = Mode::Ready;
             }
             PendingCommand::ColumnRangeResetWidth => {
-                self.execute_col_range_width(range, None);
+                for r in ranges {
+                    self.execute_col_range_width(*r, None);
+                }
                 self.mode = Mode::Ready;
             }
             PendingCommand::ColumnHide => {
-                self.execute_col_hide_display(range, true);
+                for r in ranges {
+                    self.execute_col_hide_display(*r, true);
+                }
                 self.mode = Mode::Ready;
             }
             PendingCommand::ColumnDisplay => {
-                self.execute_col_hide_display(range, false);
+                for r in ranges {
+                    self.execute_col_hide_display(*r, false);
+                }
                 self.mode = Mode::Ready;
             }
             // Mouse-drag selection has no command to execute. Enter
@@ -4568,7 +4624,6 @@ impl App {
             // they entered POINT first via /…  or click an icon while
             // POINT is still active.
             PendingCommand::MouseSelect => {
-                let _ = range;
                 self.mode = Mode::Ready;
             }
         }

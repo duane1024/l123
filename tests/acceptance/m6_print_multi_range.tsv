@@ -1,0 +1,41 @@
+# /Print File over a multi-range list (A1..B1 plus C5..C5).
+# Both ranges should appear in the output file.
+
+RM_FILE $TMPDIR/m6_print_multi.prn
+
+# Seed: A1='Hello, B1=42, C5=999.
+KEYS 'Hello
+ENTER
+RIGHT
+KEYS 42
+ENTER
+F 5
+KEYS C5
+ENTER
+KEYS 999
+ENTER
+
+# /PF + filename.
+HOME
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_print_multi.prn
+ENTER
+ASSERT_PANEL_L2   Range
+
+# /R → POINT; type comma-separated multi-range.
+KEY R
+ASSERT_MODE       POINT
+KEYS A1..B1,C5..C5
+ENTER
+ASSERT_PANEL_L2   Go
+
+KEY G
+KEY Q
+ASSERT_MODE       READY
+
+# All three values land in the output.
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_multi.prn  Hello
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_multi.prn  42
+ASSERT_FILE_CONTAINS  $TMPDIR/m6_print_multi.prn  999
