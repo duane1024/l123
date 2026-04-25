@@ -197,6 +197,18 @@ impl WorkbookView for Workbook {
     }
 }
 
+/// Geometry the icon panel last occupied: cell rect plus the actual
+/// rendered image pixel height and the terminal cell pixel height. The
+/// PNG's 1:17 aspect rarely lands on integer-cell boundaries, so each
+/// icon spans a fractional cell — hit-testing must work in pixels and
+/// then convert back to a slot index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IconPanelGeom {
+    rect: Rect,
+    rendered_px_h: u32,
+    font_px_h: u16,
+}
+
 pub struct App {
     mode: Mode,
     running: bool,
@@ -284,10 +296,13 @@ pub struct App {
     /// Which of the seven icon panels is currently displayed. The
     /// pager at slot 16 cycles through these.
     current_panel: l123_graph::Panel,
-    /// Rect the icon panel last occupied on screen, stashed so mouse
-    /// clicks can hit-test against it without recomputing the layout.
-    /// Cleared at the top of each frame; re-set by `render_icon_panel`.
-    icon_panel_area: Cell<Option<Rect>>,
+    /// Geometry of the last-rendered icon panel, stashed so mouse
+    /// hover/click can hit-test against it without recomputing the
+    /// layout. Cleared at the top of each frame; re-set by
+    /// `render_icon_panel`. Stores both the cell rect and the actual
+    /// rendered image pixel height so hit-tests can map mouse cells
+    /// to icons even when each icon spans a fractional cell.
+    icon_panel_area: Cell<Option<IconPanelGeom>>,
     /// Icon slot the mouse is currently over, if any. Drives the
     /// hover description in control-panel line 3 during READY. Slot 16
     /// (the pager) is intentionally excluded — its function is obvious
@@ -4696,18 +4711,48 @@ impl App {
             return;
         }
         if let Ok(protocol) = picker.new_protocol(img.clone(), area, Resize::Fit(None)) {
-            // The PNG has a 1:17 aspect; `Resize::Fit` preserves it,
-            // so the rendered icons usually occupy fewer rows than
-            // the allocated strip. Stash the actual rendered rect so
-            // hover/click hit-tests target where the icons really are.
+            // `Resize::Fit` ceilings the rendered cell rect, but the
+            // image itself only fills the pre-ceiling pixel size. Hit-
+            // testing must use the true rendered pixel height so each
+            // mouse cell maps to the icon containing the majority of
+            // its pixels — otherwise the half-cell of bottom slack
+            // accumulates as a downward slot drift, sliding the
+            // tooltips ahead of the icons the user sees.
+            let font = picker.font_size();
+            let rendered_px_h = Self::fit_rendered_px_h(area, font);
             let rendered = protocol.area();
             Image::new(&protocol).render(area, buf);
-            self.icon_panel_area.set(Some(Rect::new(
-                area.x,
-                area.y,
-                rendered.width.min(area.width),
-                rendered.height.min(area.height),
-            )));
+            self.icon_panel_area.set(Some(IconPanelGeom {
+                rect: Rect::new(
+                    area.x,
+                    area.y,
+                    rendered.width.min(area.width),
+                    rendered.height.min(area.height),
+                ),
+                rendered_px_h,
+                font_px_h: font.1,
+            }));
+        }
+    }
+
+    /// Reproduce ratatui-image's `Resize::Fit` math to recover the
+    /// exact pixel height of the rendered icon-panel image. The image
+    /// has a 1:17 aspect; whichever of width or height is the binding
+    /// constraint determines the scale, and the height pixels is the
+    /// PNG height times that scale.
+    fn fit_rendered_px_h(area: Rect, font: (u16, u16)) -> u32 {
+        let img_w = l123_graph::icons::ICON_PANEL_WIDTH_PX as u64;
+        let img_h = l123_graph::icons::ICON_PANEL_HEIGHT_PX as u64;
+        let avail_w = area.width as u64 * font.0 as u64;
+        let avail_h = area.height as u64 * font.1 as u64;
+        let nw = avail_w.min(img_w);
+        let nh = avail_h.min(img_h);
+        // ratio_w = nw/img_w, ratio_h = nh/img_h; the smaller one wins.
+        // Compare cross-products to avoid float arithmetic.
+        if nw * img_h <= nh * img_w {
+            (nw * img_h / img_w) as u32
+        } else {
+            nh as u32
         }
     }
 
@@ -4716,17 +4761,18 @@ impl App {
     /// Move events update `hovered_icon` so control-panel line 3 can
     /// show the authentic R3.4a icon description.
     pub fn handle_mouse(&mut self, m: MouseEvent) {
-        let icon_area = self.icon_panel_area.get();
-        let inside_icon = icon_area.is_some_and(|a| {
-            m.column >= a.x && m.column < a.x + a.width && m.row >= a.y && m.row < a.y + a.height
+        let icon_geom = self.icon_panel_area.get();
+        let inside_icon = icon_geom.is_some_and(|g| {
+            let r = g.rect;
+            m.column >= r.x && m.column < r.x + r.width && m.row >= r.y && m.row < r.y + r.height
         });
 
         match m.kind {
             MouseEventKind::Moved => {
                 // Slot 16 (pager) is excluded from hover tooltip —
                 // its function is rendered on the slot itself.
-                self.hovered_icon = match (inside_icon, icon_area) {
-                    (true, Some(a)) => match Self::hit_test_slot(a, m.row) {
+                self.hovered_icon = match (inside_icon, icon_geom) {
+                    (true, Some(g)) => match Self::hit_test_slot(&g, m.row) {
                         Some(slot) if slot < 16 => Some((self.current_panel, slot)),
                         _ => None,
                     },
@@ -4736,8 +4782,8 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 // Icon panel wins over the grid when both would hit —
                 // it sits on top visually.
-                if let (true, Some(a)) = (inside_icon, icon_area) {
-                    self.dispatch_icon_click(a, m.column, m.row);
+                if let (true, Some(g)) = (inside_icon, icon_geom) {
+                    self.dispatch_icon_click(&g, m.column, m.row);
                 } else if let Some(addr) = self.cell_at_screen(m.column, m.row) {
                     match self.mode {
                         // In POINT, the anchor is untouched by
@@ -4830,33 +4876,48 @@ impl App {
     }
 
     /// Map a row within the icon panel to a slot index `0..=16`.
-    /// Slot 16 is the panel navigator. Returns `None` when the area
-    /// is zero-height or the row is above its origin.
+    /// Slot 16 is the panel navigator. Returns `None` for rows above
+    /// or below the rendered cells, or when geometry is degenerate.
     ///
-    /// `Resize::Fit(None)` rarely produces a pixel-height that's an
-    /// exact multiple of 17 rows, so computing `height / 17` first
-    /// truncates and drifts the slot boundaries — worst near the
-    /// bottom, where the drift rolls past slot 16. Multiply before
-    /// dividing to keep the mapping proportional across the band.
-    fn hit_test_slot(area: Rect, row: u16) -> Option<usize> {
-        if area.height == 0 || row < area.y {
+    /// Each icon spans a fractional cell (image is 1:17 aspect, fit
+    /// into a typically taller area). Sampling at the cell midpoint
+    /// pixel and mapping into the *true* rendered pixel height —
+    /// not the ceiled cell height — pins each cell to the icon that
+    /// covers most of it. The earlier cells-only formula compressed
+    /// 17 icons across the post-ceiling cell count, which slowly
+    /// drifted the bottom slots up by half an icon.
+    fn hit_test_slot(geom: &IconPanelGeom, row: u16) -> Option<usize> {
+        if geom.rect.height == 0 || row < geom.rect.y {
             return None;
         }
-        let offset = (row - area.y) as usize;
-        Some((offset * 17 / area.height as usize).min(16))
+        let offset = (row - geom.rect.y) as u32;
+        if offset >= geom.rect.height as u32 {
+            return None;
+        }
+        if geom.rendered_px_h == 0 || geom.font_px_h == 0 {
+            return None;
+        }
+        let mid_px = offset * geom.font_px_h as u32 + geom.font_px_h as u32 / 2;
+        // Bottom slack between the rendered image and the ceiled cell
+        // rect — clicks here visually land on empty grey, but treat
+        // them as the pager so the bottom row isn't an inert dead zone.
+        if mid_px >= geom.rendered_px_h {
+            return Some(16);
+        }
+        Some(((mid_px * 17) / geom.rendered_px_h).min(16) as usize)
     }
 
     /// Map a mouse click on the icon panel to a slot and fire that
     /// slot's action. Slot 16 is the panel navigator; clicks on its
     /// left half go to the previous panel, right half to the next.
-    fn dispatch_icon_click(&mut self, area: Rect, column: u16, row: u16) {
-        let Some(slot) = Self::hit_test_slot(area, row) else {
+    fn dispatch_icon_click(&mut self, geom: &IconPanelGeom, column: u16, row: u16) {
+        let Some(slot) = Self::hit_test_slot(geom, row) else {
             return;
         };
 
         if slot == 16 {
             // Pager: left half → previous panel, right half → next.
-            let half = area.x + area.width / 2;
+            let half = geom.rect.x + geom.rect.width / 2;
             self.current_panel = if column < half {
                 self.current_panel.prev()
             } else {
@@ -6909,9 +6970,9 @@ mod tests {
     }
 
     /// Simulate a left-click at `(col, row)` by stashing a fake panel
-    /// area and routing through [`App::handle_mouse`].
+    /// geometry and routing through [`App::handle_mouse`].
     fn click(app: &mut App, area: Rect, col: u16, row: u16) {
-        app.icon_panel_area.set(Some(area));
+        app.icon_panel_area.set(Some(test_geom(area)));
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: col,
@@ -6921,13 +6982,25 @@ mod tests {
     }
 
     /// Standard fixture panel: 17 icons × 3 rows each = 51 rows, so
-    /// slot N starts at local row N * 3.
+    /// slot N's middle row is `N * 3 + 1`.
     const TEST_PANEL: Rect = Rect {
         x: 80,
         y: 4,
         width: 3,
         height: 51,
     };
+
+    /// Build a hit-test fixture where the rendered image is assumed
+    /// to fill the cell rect exactly (no aspect-ratio slack). Using
+    /// `font_px_h = 2` lets the cell-midpoint pixel formula resolve
+    /// to integer slot boundaries on multiples of `2 * 17 = 34`.
+    fn test_geom(rect: Rect) -> IconPanelGeom {
+        IconPanelGeom {
+            rect,
+            rendered_px_h: rect.height as u32 * 2,
+            font_px_h: 2,
+        }
+    }
 
     fn click_slot(app: &mut App, slot: u16) {
         // Click the middle row of the given slot.
@@ -7052,7 +7125,7 @@ mod tests {
     #[test]
     fn mouse_non_left_button_is_ignored() {
         let mut app = App::new();
-        app.icon_panel_area.set(Some(TEST_PANEL));
+        app.icon_panel_area.set(Some(test_geom(TEST_PANEL)));
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Right),
             column: 81,
@@ -7092,31 +7165,45 @@ mod tests {
     }
 
     #[test]
-    fn hit_test_slot_is_proportional_for_non_aligned_heights() {
-        // Real rendering uses `Resize::Fit(None)`, which scales the
-        // icon PNG (1:17 aspect) to preserve shape — so the actual
-        // pixel height rarely lands on a multiple of 17 rows. A 26-row
-        // panel is a realistic example: slots occupy fractional bands.
-        //
-        // Dividing `height / 17` first truncates to 1 row per slot and
-        // then caps at slot 16, so every row past 16 collapses onto
-        // the pager — this is the Bold→Help mis-hit users see.
-        // The mapping must stay proportional over the full range.
-        let area = Rect::new(80, 4, 3, 26);
-        // Slot 11 (Bold) spans rows ~16.8–18.4 in this panel.
-        assert_eq!(App::hit_test_slot(area, 4 + 17), Some(11));
-        assert_eq!(App::hit_test_slot(area, 4 + 18), Some(11));
-        // Slot 15 (Help) spans rows ~22.9–24.5.
-        assert_eq!(App::hit_test_slot(area, 4 + 23), Some(15));
-        // Slot 16 (Pager) spans rows ~24.5–26.
-        assert_eq!(App::hit_test_slot(area, 4 + 25), Some(16));
+    fn hit_test_maps_cell_to_visually_dominant_icon() {
+        // Realistic geometry from a 3-col panel at font (9, 18): the
+        // PNG's 1:17 aspect renders width-constrained at 27×459 px,
+        // and the ceiled cell rect is 3×26 — so the bottom 9 px of
+        // row 25 is empty slack and each icon is visually 1.5 cells
+        // tall. Sampling at cell midpoint pixels then dividing by the
+        // true rendered pixel height pins each cell to the icon that
+        // covers most of its pixels. Naive (cells-only) mapping drifts
+        // by half an icon at the bottom — mis-reporting Help as Bold,
+        // Save as spilling into Retrieve, etc.
+        let geom = IconPanelGeom {
+            rect: Rect::new(80, 4, 3, 26),
+            rendered_px_h: 459,
+            font_px_h: 18,
+        };
+        // Row 4 (cell 0) sits entirely inside Save's pixel band [0,27).
+        assert_eq!(App::hit_test_slot(&geom, 4), Some(0));
+        // Row 5 (cell 1, midpt = 27 px) — right on the Save/Retrieve
+        // boundary. The formula treats it as Retrieve, so Save's hit-
+        // test does not spill into Retrieve's visual region.
+        assert_eq!(App::hit_test_slot(&geom, 5), Some(1));
+        // Row 21 (cell 17, midpt = 315 px) is entirely inside Bold.
+        assert_eq!(App::hit_test_slot(&geom, 21), Some(11));
+        // Row 22 (cell 18, midpt = 333 px) is entirely Italic.
+        assert_eq!(App::hit_test_slot(&geom, 22), Some(12));
+        // Row 27 (cell 23, midpt = 423 px) is entirely Help.
+        assert_eq!(App::hit_test_slot(&geom, 27), Some(15));
+        // Row 28 (cell 24, midpt = 441 px) is entirely Pager.
+        assert_eq!(App::hit_test_slot(&geom, 28), Some(16));
+        // Row 29 (cell 25, midpt = 459 px) is in the empty slack at
+        // the bottom; map to pager so the last row isn't a dead zone.
+        assert_eq!(App::hit_test_slot(&geom, 29), Some(16));
     }
 
     /// Simulate a mouse-move at `(col, row)` by stashing a fake panel
-    /// area (same fixture as click tests) and routing through
+    /// geometry (same fixture as click tests) and routing through
     /// [`App::handle_mouse`].
     fn hover(app: &mut App, area: Rect, col: u16, row: u16) {
-        app.icon_panel_area.set(Some(area));
+        app.icon_panel_area.set(Some(test_geom(area)));
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Moved,
             column: col,

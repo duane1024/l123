@@ -255,13 +255,13 @@ const QUIT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'N',
         name: "No",
-        help: "Do not end 1-2-3 session",
+        help: "Do not end l123 session",
         body: MenuBody::Action(Action::Cancel),
     },
     MenuItem {
         letter: 'Y',
         name: "Yes",
-        help: "End 1-2-3 session",
+        help: "End l123 session",
         body: MenuBody::Action(Action::Quit),
     },
 ];
@@ -1895,7 +1895,7 @@ pub const ROOT: &[MenuItem] = &[
     MenuItem {
         letter: 'Q',
         name: "Quit",
-        help: "End the 1-2-3 session",
+        help: "End the l123 session",
         body: MenuBody::Submenu(QUIT_MENU),
     },
 ];

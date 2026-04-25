@@ -3089,7 +3089,7 @@ pub const ICON_DESCRIPTIONS: [&str; ICON_COUNT] = [
     "Moves the cell pointer right one cell",           // 1
     "Moves the cell pointer up one cell",              // 2
     "Moves the cell pointer down one cell",            // 3
-    "Starts the 1-2-3 Help system",                    // 4
+    "Starts the l123 Help system",                     // 4
     "Saves the current worksheet file to a disk",      // 5
     "Replaces the current file with a file from disk", // 6
     "Prints the current print range, or prints the highlighted range", // 7
