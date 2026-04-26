@@ -911,6 +911,7 @@ transcripts! {
     m7_graph_view_f10   => "M7_graph_view_f10.tsv",
     m7_graph_save       => "M7_graph_save.tsv",
     m10_startup_splash  => "M10_startup_splash.tsv",
+    m11_f1_help_open_close => "m11_f1_help_open_close.tsv",
     m10_status_line_filename => "M10_status_line_filename.tsv",
     m10_worksheet_status     => "M10_worksheet_status.tsv",
     m10_label_spill          => "M10_label_spill.tsv",

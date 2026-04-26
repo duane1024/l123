@@ -10,6 +10,7 @@ members = [
     "crates/l123-io",
     "crates/l123-macro",
     "crates/l123-graph",
+    "crates/l123-help",
     "crates/l123-print",
     "crates/l123",
 ]
@@ -32,6 +33,7 @@ l123-ui     = { path = "crates/l123-ui" }
 l123-io     = { path = "crates/l123-io" }
 l123-macro  = { path = "crates/l123-macro" }
 l123-graph  = { path = "crates/l123-graph" }
+l123-help   = { path = "crates/l123-help" }
 l123-print  = { path = "crates/l123-print" }
 
 # external

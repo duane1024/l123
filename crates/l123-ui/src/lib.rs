@@ -3,6 +3,7 @@
 pub mod app;
 pub mod clock;
 pub mod config;
+pub mod help;
 pub mod identity;
 pub mod sysinfo;
 

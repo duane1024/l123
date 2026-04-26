@@ -1,0 +1,31 @@
+C ee DOSBox-X 2026.03.29: 123DOS - 12000 cycles/ms
+A:Al: fe HELP
+
+Function Keys -- Perform special operations when you press Fl through F18,
+when you hold down ALT and press Fl through F18, and when you hold down
+CTRL and press F9 and F168.
+
+Key Effect
+
+TSS) § Creates characters in 1-2-3 that you cannot enter directly
+fron your keyboard.
+
+ALT-F2 (RECORD) Lets you use the contents of the record buffer and turn
+STEP mode on or off.
+
+ALT-F3 (RUN) Selects a macro to run.
+
+ALT-F4 (UNDO) When the undo feature is on, cancels changes made to your
+worksheet since 1-2-3 was last in READY mode.
+
+ALT-F6 (ZOOM) Enlarges the current window to full-screen size or shrinks
+
+it to its original size.
+ALT-F? (APP1)
+ALT-F8 (APP2) - Start an available add-in.
+
+ALT-F9 (APP3)
+ALT-F18 (ADDIN) Displays a menu of available add-in applications.
+
+Continued Keyboard Index Help Index
+24-Apr-2826 87:38 coo

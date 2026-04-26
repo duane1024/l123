@@ -1444,6 +1444,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "l123-help"
+version = "0.0.1"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "l123-io"
 version = "0.0.1"
 dependencies = [

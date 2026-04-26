@@ -44,6 +44,8 @@ use ratatui::{
 };
 use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
 
+use crate::help::{HelpTopic, HELP_TOPICS};
+
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
 const PANEL_HEIGHT: u16 = 4; // 3 content lines + 1 bottom border
@@ -373,6 +375,9 @@ pub struct App {
     /// the grid is obscured by a vertical name picker. Underlying
     /// POINT / prompt state is preserved so dismissal returns to it.
     name_list: Option<NameListState>,
+    /// Overlay state for F1 HELP. Some while the help overlay is open;
+    /// underlying mode is restored on Esc.
+    help: Option<HelpState>,
     /// Active files in session order. A single-file session is a Vec
     /// of length 1; `/File Open` appends or inserts. Ctrl-End +
     /// Ctrl-PgUp/PgDn rotates `current` through the Vec.
@@ -854,6 +859,18 @@ pub(crate) struct NameListState {
 }
 
 const NAME_LIST_PAGE_SIZE: usize = 10;
+const HELP_PAGE_SIZE: u16 = 15;
+
+/// F1 HELP overlay state.
+#[derive(Debug, Clone)]
+pub(crate) struct HelpState {
+    /// Index into [`crate::help::HELP_TOPICS`].
+    topic: usize,
+    /// First body line shown at the top of the visible area.
+    scroll: u16,
+    /// Mode that was active when F1 was pressed; restored on Esc.
+    return_mode: Mode,
+}
 
 impl PromptNext {
     fn accepts_char(self, c: char) -> bool {
@@ -1382,6 +1399,7 @@ impl App {
             pending_xtract_path: None,
             file_list: None,
             name_list: None,
+            help: None,
             active_files: vec![Workbook::new()],
             current: 0,
             file_nav_pending: false,
@@ -1793,6 +1811,18 @@ impl App {
         // where any key clears the welcome screen.
         if self.splash.is_some() {
             self.splash = None;
+            return;
+        }
+        // F1 HELP overlay sits on top of every other state.
+        if self.help.is_some() {
+            self.handle_key_help(k);
+            return;
+        }
+        // F1 from any mode opens the help overlay. The current mode is
+        // saved on `HelpState` so Esc returns the user to where they
+        // left off (POINT, MENU, …) without losing their work.
+        if matches!(k.code, KeyCode::F(1)) {
+            self.open_help();
             return;
         }
         // F3 NAMES overlay takes precedence over everything else — it
@@ -3046,6 +3076,66 @@ impl App {
         }
         if let Some(fl) = self.file_list.as_mut() {
             adjust_file_list_view(fl);
+        }
+    }
+
+    fn open_help(&mut self) {
+        // Don't double-open if already in HELP (defensive — the
+        // dispatcher gate above should have routed F1 to
+        // handle_key_help instead).
+        if self.help.is_some() {
+            return;
+        }
+        let return_mode = self.mode;
+        self.help = Some(HelpState {
+            topic: 0,
+            scroll: 0,
+            return_mode,
+        });
+        self.mode = Mode::Help;
+    }
+
+    fn close_help(&mut self) {
+        let Some(state) = self.help.take() else {
+            return;
+        };
+        self.mode = state.return_mode;
+    }
+
+    fn handle_key_help(&mut self, k: KeyEvent) {
+        let Some(state) = self.help.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Esc => self.close_help(),
+            KeyCode::Tab => {
+                state.topic = (state.topic + 1) % HELP_TOPICS.len();
+                state.scroll = 0;
+            }
+            KeyCode::BackTab => {
+                state.topic = if state.topic == 0 {
+                    HELP_TOPICS.len() - 1
+                } else {
+                    state.topic - 1
+                };
+                state.scroll = 0;
+            }
+            KeyCode::Up => {
+                state.scroll = state.scroll.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                state.scroll = state.scroll.saturating_add(1);
+            }
+            KeyCode::PageUp => {
+                state.scroll = state.scroll.saturating_sub(HELP_PAGE_SIZE);
+            }
+            KeyCode::PageDown => {
+                state.scroll = state.scroll.saturating_add(HELP_PAGE_SIZE);
+            }
+            KeyCode::Home => {
+                state.scroll = 0;
+            }
+            _ => {}
         }
     }
 
@@ -5901,7 +5991,9 @@ impl App {
         // width; everything else (grid, menu, point) keeps room for the
         // panel on the right.
         let (main_area, icon_area) = self.split_for_icon_panel(chunks[1]);
-        if self.name_list.is_some() {
+        if self.help.is_some() {
+            self.render_help_overlay(chunks[1], buf);
+        } else if self.name_list.is_some() {
             self.render_name_list_overlay(chunks[1], buf);
         } else if self.file_list.is_some() {
             self.render_file_list_overlay(chunks[1], buf);
@@ -6047,6 +6139,7 @@ impl App {
             || self.mode == Mode::Graph
             || self.file_list.is_some()
             || self.name_list.is_some()
+            || self.help.is_some()
             || area.width < Self::ICON_PANEL_MIN_GRID_COLS + Self::ICON_PANEL_COLS
         {
             return (area, None);
@@ -6843,6 +6936,64 @@ impl App {
             };
             set_line(buf, area.x, area.y + 1 + i as u16, &row, area.width, style);
         }
+    }
+
+    /// Draw the F1 help overlay: header bar with the topic title, body
+    /// (scrollable), footer with key hints.
+    fn render_help_overlay(&self, area: Rect, buf: &mut Buffer) {
+        let Some(state) = self.help.as_ref() else {
+            return;
+        };
+        let topic: &HelpTopic = &HELP_TOPICS[state.topic.min(HELP_TOPICS.len() - 1)];
+
+        if area.height == 0 || area.width == 0 {
+            return;
+        }
+        let header_style = Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        let footer_style = Style::default().fg(Color::Black).bg(Color::Cyan);
+        let body_style = Style::default();
+
+        // Top header: "Help — Index   [topic 1/8]".
+        let header = format!(
+            " {}   [topic {}/{}] ",
+            topic.title,
+            state.topic + 1,
+            HELP_TOPICS.len()
+        );
+        set_line(buf, area.x, area.y, &header, area.width, header_style);
+
+        // Reserve one row for the footer; the rest is the body window.
+        let footer_y = area.y + area.height.saturating_sub(1);
+        let body_top = area.y + 1;
+        let body_height = footer_y.saturating_sub(body_top);
+
+        // Skip the first `state.scroll` body lines.
+        let lines: Vec<&str> = topic.body.lines().collect();
+        let start = (state.scroll as usize).min(lines.len());
+        let end = (start + body_height as usize).min(lines.len());
+        for (i, line) in lines[start..end].iter().enumerate() {
+            let text = format!(" {}", line);
+            set_line(
+                buf,
+                area.x,
+                body_top + i as u16,
+                &text,
+                area.width,
+                body_style,
+            );
+        }
+        // Blank out remaining body rows (in case a previous frame drew
+        // something taller).
+        for i in (end - start)..body_height as usize {
+            set_line(buf, area.x, body_top + i as u16, "", area.width, body_style);
+        }
+
+        // Footer.
+        let footer = " Tab/Shift-Tab: next/prev topic   PgUp/PgDn: scroll   Esc: close ";
+        set_line(buf, area.x, footer_y, footer, area.width, footer_style);
     }
 
     fn render_save_confirm_lines(&self) -> (Line<'_>, Line<'_>) {

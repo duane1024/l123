@@ -1,0 +1,35 @@
+# F1 opens the Help overlay; Esc closes it back to the underlying mode.
+# Tab / Shift-Tab walks topics; PgUp / PgDn scrolls within a topic.
+
+ASSERT_MODE       READY
+
+# F1 from READY → HELP overlay with the index topic visible.
+F 1
+ASSERT_MODE       HELP
+ASSERT_SCREEN     Help
+
+# The footer shows the navigation hints.
+ASSERT_SCREEN     Esc
+
+# Tab advances to the next topic.
+TAB
+ASSERT_MODE       HELP
+
+# Esc returns to READY without disturbing the cell pointer.
+ESC
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1
+
+# F1 from POINT (mid-command) also opens Help.
+KEY /
+KEY R
+KEY E
+ASSERT_MODE       POINT
+F 1
+ASSERT_MODE       HELP
+ESC
+ASSERT_MODE       POINT
+# POINT cancels in two Esc steps (unanchor → cancel).
+ESC
+ESC
+ASSERT_MODE       READY
