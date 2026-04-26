@@ -1,0 +1,11 @@
+Linking Files with Formulas (continued)
+
+Use /File Dir to specify the current directory.
+
+NOTE  Formulas linked to other files do not automatically update when
+you read the files that contain the formulas into memory. Use /File
+Admin Link-Refresh to update linked formulas after you use /File Open
+and /File Retrieve. /File Admin Link-Refresh recalculates formulas in
+active files that refer to data in other active files or files on disk.
+
+Previous                    Entering Formulas                   Help Index

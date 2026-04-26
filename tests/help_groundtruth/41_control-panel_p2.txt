@@ -1,0 +1,18 @@
+The Control Panel (continued)
+
+The second line of the control panel displays
+
+  * The characters you are typing or editing if you are entering or
+    editing data.
+  * The 1-2-3 menu if 1-2-3 is in READY mode and you press / (slash).
+  * The prompt if you select a command in which 1-2-3 prompts you for
+    information.
+
+The third line of the control displays
+
+  * A submenu or a description of the highlighted command when 1-2-3
+    displays a menu in the second line.
+  * A list of names if you select a command that prompts you for the
+    name of a file, range, graph, or settings sheet.
+
+Previous                    1-2-3 Commands                      Help Index

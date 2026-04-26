@@ -1,0 +1,20 @@
+/Copy (continued)
+When you copy a formula within the same file, 1-2-3 adjusts relative
+references to reflect the new location of the formula. 1-2-3 does not
+adjust absolute references, and 1-2-3 adjusts only the relative part of
+mixed references.
+
+When you copy a formula to another file, 1-2-3 adjusts the references
+(relative, absolute, and mixed) to reflect the location in the file into
+which the formula was copied. However, if you copy a formula that contains
+absolute range names, 1-2-3 links the two files. For more information,
+see Types of Cell and Range References.
+
+CAUTION  Copying formulas with three-dimensional ranges to files that
+contain fewer worksheets than are in the three-dimensional ranges may
+produce unexpected results. To ensure the accuracy of your data, use
+/Range Value to convert these formulas to values before you copy them,
+or copy the formulas to files that contain at least as many worksheets
+as the original file.
+
+Previous                                                        Help Index

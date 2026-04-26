@@ -1,0 +1,18 @@
+The Worksheet Commands -- Control the display and organization of worksheets
+ and control the 1-2-3 global settings.
+
+Global  Establishes global settings for worksheets and files, and changes
+        the 1-2-3 configuration settings.
+Insert  Inserts blank columns, rows, and worksheets.
+Delete  Deletes columns, rows, worksheets, and files from memory.
+Column  Sets and resets column widths, and hides and redisplays columns.
+Erase   Erases all active worksheets and files from memory.
+Titles  Freezes rows and columns at the top and/or left edges of a
+        worksheet.
+Window  Provides different ways to view worksheets.
+Status  Displays information about memory, hardware, and recalculation
+        settings, and lists global settings for the current worksheet.
+Page    Creates page breaks in printed worksheets.
+Hide    Hides and redisplays worksheets.
+
+                                                                Help Index

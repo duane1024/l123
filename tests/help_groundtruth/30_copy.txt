@@ -1,0 +1,20 @@
+/Copy -- Copies a range of data, including cell formats and the protection
+ status, to a range in the same file or to a range in a different file.
+
+1. (Optional) If you want to highlight the range to copy, move the
+   cell pointer to the first cell in the range.
+2. Select /Copy.
+3. Specify the range you want to copy FROM.
+4. Specify the range you want to copy TO.
+   To make one copy of the FROM range, specify only one cell as the TO
+   range. To make more than one copy, specify a range of cells as the
+   TO range.
+   CAUTION  Make sure the TO range does not contain data you need, because
+   1-2-3 replaces the existing data with the data you copy.
+
+When you copy numbers and labels, 1-2-3 makes exact duplicates of them.
+When you copy formulas, 1-2-3 may adjust cell references in the formulas,
+depending on the kind of cell references (absolute, relative, or mixed)
+in the formulas.
+
+Continued                   Specifying Ranges                   Help Index

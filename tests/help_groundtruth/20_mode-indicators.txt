@@ -1,0 +1,19 @@
+Mode Indicator -- 1-2-3 displays the mode indicator in the upper right
+ corner of the screen to tell you what mode 1-2-3 is in. The following
+ table lists the 1-2-3 modes:
+
+Mode    Explanation
+
+EDIT    You pressed F2 (EDIT) to edit an entry, selected /Data Parse
+        Format-Line Edit, or made an incorrect entry.
+ERROR   1-2-3 is displaying an error message. Press F1 (HELP) to get Help,
+        and press ESC or ENTER to clear the error message.
+FILES   1-2-3 is displaying a list of file names.
+FIND    You selected /Data Query Find or pressed F7 (QUERY).
+HELP    You pressed F1 (HELP) and 1-2-3 is displaying a Help screen.
+LABEL   You are entering a label.
+MENU    You pressed / (slash) and 1-2-3 is displaying a menu of commands.
+NAMES   1-2-3 is displaying a list of range, graph, print settings,
+        @function, macro command, or external table names.
+
+Continued                   Error Message Index                 Help Index

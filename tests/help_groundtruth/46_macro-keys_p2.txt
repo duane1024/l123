@@ -1,0 +1,19 @@
+Macro Key Names (continued)
+
+    1-2-3 key                    Macro key name
+    ---------                    --------------
+    CTRL-END CTRL-PG DN          {PREVFILE}, {PF}, or {FILE}{PS}
+    CTRL-END CTRL-PG UP          {NEXTFILE}, {NF}, or {FILE}{NS}
+    CTRL-END END                 {LASTCELL} or {LC}
+    CTRL-END HOME                {FIRSTFILE}, {FF}, or {FILE}{HOME}
+    CTRL-HOME                    {FIRSTCELL} or {FC}
+    CTRL-PG DN                   {PREVSHEET} or {PS}
+    CTRL-PG UP                   {NEXTSHEET} or {NS}
+    DEL                          {DELETE} or {DEL}
+    END                          {END}
+    END CTRL-HOME                {LASTCELL} or {LC}
+    ESC                          {ESCAPE} or {ESC}
+    F1 (HELP)                    {HELP}
+    F2 (EDIT)                    {EDIT}
+
+Continued        Previous        Macro Index                   Help Index

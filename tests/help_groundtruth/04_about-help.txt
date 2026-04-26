@@ -1,0 +1,20 @@
+About 1-2-3 Help -- You can view Help screens any time during a 1-2-3 session by
+ pressing F1 (HELP). The 1-2-3 Help system is context-sensitive, which
+ means that when you press F1 (HELP), 1-2-3 displays a screen that contains
+ information related to what you are doing in the program.
+
+Help screens contain text and topics in bold. The topics are
+cross-references to other screens. To select a topic, highlight the
+topic and press ENTER.
+
+Use the following keys to navigate through Help:
+
+up, down, right, left  Highlight the next topic in that direction.
+BACKSPACE              Displays the previous Help screen.
+END                    Highlights the last Help topic on the screen.
+ENTER                  Displays the screen for the highlighted topic.
+ESC                    Leaves Help and returns you to the worksheet.
+F1 (HELP)              Displays the first screen you saw when you pressed F1 (HELP).
+HOME                   Highlights the first Help topic on the screen.
+
+Continued                                                       Help Index

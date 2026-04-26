@@ -1,0 +1,19 @@
+The Data Commands -- Analyze and manipulate data in worksheets, 1-2-3
+ database tables, and external databases.
+
+Fill         Fills a range with a sequence of values.
+Table        Creates a table that shows how the results of formulas vary
+             when you change the numbers used in the formulas.
+Sort         Arranges records in a database table in the order you specify.
+Query        Locates and edits selected records in a database table.
+Distribution Creates a frequency distribution.
+Matrix       Inverts or multiplies matrixes formed by rows and columns
+             of data.
+Regression   Performs multiple linear regression analysis (determines the
+             relationships of up to 75 independent variables to a dependent
+             variable).
+Parse        Separates and converts a single column of long labels into
+             several columns of data.
+External     Connects 1-2-3 and external database tables.
+
+                                                                Help Index

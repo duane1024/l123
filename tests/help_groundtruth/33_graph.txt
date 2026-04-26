@@ -1,0 +1,20 @@
+The Graph Commands -- Define, display, and save 1-2-3 graphs.
+
+Type     Specifies the graph type and related features such as the
+         graph's orientation and use of the y-axes.
+X        Specifies the range that contains the x-axis labels, x-axis
+         values, or pie-slice labels.
+A - F    Specifies the ranges that contain the numeric data you want
+         to graph.
+Reset    Resets some or all of the current graph settings.
+View     Draws a full-screen view of the current graph.
+Save     Saves the current graph in a graph file for use with other
+         programs.
+Options  Adds enhancements to graphs and sets scaling for the axes.
+Name     Creates, retrieves, deletes, and lists named graphs.
+Group    Assigns all graph data ranges (X and A - F) at once.
+Quit     Returns 1-2-3 to READY mode.
+
+Creating a Graph with the /Graph Menu     Adding Text to a Graph
+Creating an Automatic Graph               Printing Graphs
+Creating a Graph Window                   Help Index

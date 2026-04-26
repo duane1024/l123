@@ -1,0 +1,19 @@
+Data Entry -- When 1-2-3 is in READY mode and you start typing an entry,
+ 1-2-3 classifies the entry as either a label or a value based on the
+ first character you type. 1-2-3 also changes the mode indicator to
+ LABEL or VALUE to match your entry.
+
+Text entries are labels.
+Number and formula entries are values.
+
+To enter data
+
+1. Move the cell pointer to the cell in which you want to enter data.
+2. Type the data you want to enter, up to 512 characters.
+3. Press ENTER or one of the pointer-movement keys to complete the entry.
+
+If 1-2-3 beeps when you press ENTER, you probably made an error. Edit
+your entry or press ESC to clear your entry and start over.
+
+Long Labels and Values                                          EDIT Mode
+Erasing Data                                                    Help Index

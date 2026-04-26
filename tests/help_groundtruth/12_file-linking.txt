@@ -1,0 +1,20 @@
+Linking Files with Formulas -- You create a link between two files when you
+ enter a formula in one file that refers to a cell or range in another file.
+ When you save the file that contains the formula, the files are linked
+ and the formula uses the values from the other file.
+
+To link files with a formula, you must type a file reference in front of the
+cell or range reference in the formula. A file reference is the name and
+extension of the file, with or without a path, enclosed in <<>> (double
+angle brackets). For example, the formula @SUM(<<C:\SALES\EAST.WK3>>TOTALS)
+contains the file reference <<C:\SALES\EAST.WK3>>.
+
+To ensure that the link to a file works even if you change your current
+directory, include the file's path as well as its name and extension in
+the file reference.
+
+However, if you share files with others, do not include a path in the
+file reference. The links will work as long as the current directory is
+the directory where the linked files are located.
+
+Continued                   Entering Formulas                   Help Index

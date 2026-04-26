@@ -1,0 +1,20 @@
+The File Commands -- Perform the following tasks:
+
+Retrieve  Reads a worksheet file into memory. The retrieved file replaces
+          the file that was current when you selected /File Retrieve.
+Save      Saves worksheet files on disk.
+Combine   Incorporates data from a worksheet file on disk into the
+          current file.
+Xtract    Extracts a range of data from an active file and saves it in a
+          worksheet file on disk.
+Erase     Erases a file on disk.
+List      Displays a temporary list of information about files.
+Import    Reads data from a text file on disk into the current worksheet.
+Dir       Changes the directory where 1-2-3 reads, saves, and lists files.
+New       Creates a new blank worksheet file on disk and in memory.
+Open      Reads a worksheet file into memory, letting you use several files
+          at one time.
+Admin     Controls reservations for worksheet files, creates a table of
+          file information, seals files, and recalculates linked formulas.
+
+File Reservation            Protecting Data and Files           Help Index

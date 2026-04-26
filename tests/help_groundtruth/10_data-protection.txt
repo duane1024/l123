@@ -1,0 +1,18 @@
+Protecting Data and Files
+
+/File Admin Seal
+    Seals worksheet and reservation settings in a file. You can read a
+    sealed file into memory, but you cannot change the settings that
+    were sealed in the file.
+File Password Protection
+    Use /File Save and /File Xtract to save a file with a password. A
+    password prevents you from reading the file into memory or combining
+    data from the file unless you know the password.
+File Reservation
+    Prevents more than one user from saving shared files at the same time.
+    Only the user with the file reservation can save changes to the file.
+/Worksheet Global Prot
+    Globally protects worksheet data so you can read the file into memory
+    but you cannot change data in protected cells.
+
+File Commands                                                   Help Index

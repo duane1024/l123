@@ -1,0 +1,14 @@
+Mode Indicator (continued)
+
+Mode    Explanation
+
+POINT   1-2-3 is prompting you to specify a range or you are
+        creating a formula by highlighting a range.
+READY   1-2-3 is ready for you to enter data or select a command.
+STAT    1-2-3 is displaying a status screen.
+VALUE   You are entering a value.
+WAIT    1-2-3 is completing a command or process, like saving a file.
+WYSIWYG You pressed : (colon) and 1-2-3 is displaying a menu of Wysiwyg
+        commands.
+
+Previous                                                        Help Index

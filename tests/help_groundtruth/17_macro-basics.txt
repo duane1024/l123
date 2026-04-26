@@ -1,0 +1,20 @@
+Macro Basics
+
+A macro is a series of 1-2-3 commands and keystrokes that defines a 1-2-3
+task. You enter the macro as one or more labels in a column and assign
+it a range name. When you run the macro, 1-2-3 automatically performs
+the defined task.
+
+Macros save time by performing simple but repetitive tasks automatically.
+You can write macros to automate complex procedures and guide users who
+are unfamiliar with 1-2-3 through specific 1-2-3 applications.
+
+The following information about macros is available in Help:
+Creating a Macro    Explains how to choose a location for, enter, name,
+                    document, run, debug, and save a macro.
+The Record Feature  Explains how to use ALT-F2 (RECORD) to write a macro
+                    and play back the keystrokes for a task.
+Macro Index         Displays a list of macro commands and
+                    descriptions of each command.
+
+                                                                Help Index

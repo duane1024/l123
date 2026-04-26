@@ -1,0 +1,20 @@
+@Function Index (continued)
+@MAX     @PROPER  @SIN       @TIMEVALUE
+@MID     @PV      @SLN       @TODAY
+@MIN     @RAND    @SQRT      @TRIM
+@MINUTE  @RATE    @STD       @TRUE
+@MOD     @REPEAT  @STDS      @UPPER
+@MONTH   @REPLACE @STRING    @VALUE
+@N       @RIGHT   @SUM       @VAR
+@NA      @ROUND   @SUMPRODUCT @VARS
+@NOW     @ROWS    @SYD       @VDB
+@NPV     @S       @TAN       @VLOOKUP
+@PI      @SECOND  @TERM      @YEAR
+@PMT     @SHEETS  @TIME
+
+@Functions by Categories
+Database     Financial    Mathematical  Statistical
+Date and Time Logical     Special       String
+
+Previous                                           @Function Introduction
+Entering Formulas                                               Help Index

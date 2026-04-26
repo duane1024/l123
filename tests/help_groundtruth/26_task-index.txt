@@ -1,0 +1,19 @@
+Task Index
+
+Change column width                  -- see /Worksheet Column
+Change display of data               -- see /Range Format
+Change formulas to numbers           -- see /Range Value
+Change global default settings       -- see /Worksheet Global Default
+Create a multiple-sheet file         -- see /Worksheet Insert
+Create a text file                   -- see /Print File
+Create a what-if table               -- see /Data Table
+Display three worksheets at once     -- see /Worksheet Window
+End a 1-2-3 session                  -- see /Quit
+Enter characters not on a keyboard   -- see ALT-F1 (COMPOSE) Key
+Enter dates                          -- see Date Formats
+Enter formulas                       -- see Entering Formulas
+Enter information in a worksheet     -- see Data Entry
+Erase a file on disk                 -- see /File Erase
+Erase worksheet data                 -- see /Range Erase
+
+Continued                                                       Help Index

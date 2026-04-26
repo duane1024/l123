@@ -1,0 +1,20 @@
+Keyboard Index
+Change entries                       -- see Editing Keys
+
+Move around the worksheet            -- see Pointer-Movement Keys
+
+Move between worksheets
+in the current file                  -- see Worksheet Pointer-Movement Keys
+
+Move between active files            -- see File Pointer-Movement Keys
+
+Perform special operations
+using F1-F10, ALT, and CTRL          -- see Function Keys
+
+Use ALT in combinations with
+function keys and to run a macro     -- see Special Keys
+
+Use CTRL-BREAK and ESC to
+cancel operations                    -- see Special Keys
+
+                                                                Help Index

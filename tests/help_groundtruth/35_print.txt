@@ -1,0 +1,20 @@
+The Print Commands -- Print files on a printer or to a file and perform
+ the following tasks:
+
+Printer     Selects a printer as the destination for printing, then
+            lets you select options for printing.
+File        Selects a text file as the destination for printing, then
+            lets you select options for printing.
+Encoded     Selects an encoded file as the destination for printing, then
+            lets you select options for printing.
+Background  Selects background printing as the destination for printing, then
+            lets you select options for printing.
+Suspend     Temporarily stops background printing on a printer.
+Resume      Continues printing a suspended 1-2-3 background print job and
+            clears a background print error message.
+Cancel      Cancels all 1-2-3 background printing.
+Quit        Returns 1-2-3 to READY mode.
+
+Printing Data on a Printer            Creating an Encoded File
+Printing Graphs                       Creating a Text File
+Printer Information                   Help Index

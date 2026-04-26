@@ -1,0 +1,19 @@
+Using Undo -- When undo is on, you can use ALT-F4 (UNDO) when 1-2-3 is in
+READY mode to cancel the effects of the most recent operation that changed
+worksheet data or settings. ALT-F4 (UNDO) is not a toggle key. Using it a
+second time does not restore the changes you just undid.
+
+In most cases, you can undo the most recent operation that changed
+worksheet data and/or settings even after starting another entry or
+command by escaping out of the entry or command with ESC until 1-2-3
+returns to READY mode and then using ALT-F4 (UNDO).
+
+NOTE  Undo cancels changes to data and settings in active worksheets only.
+You cannot undo changes to files on disk or printer activity. You cannot
+undo cell-pointer movement caused by pressing a pointer-movement key,
+F5 (GOTO), F6 (WINDOW), or formula recalculation caused by pressing
+F9 (CALC) or selecting /File Admin Link-Refresh. If you use ALT-F4 (UNDO)
+after performing an operation that cannot be undone, 1-2-3 goes back to
+the most recent operation that it can undo and cancels that operation.
+
+Continued      /Worksheet Global Default Other Undo            Help Index

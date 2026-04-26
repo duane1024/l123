@@ -1,0 +1,21 @@
+/Worksheet Global Recalc (continued)
+
+    Manual     1-2-3 recalculates formulas only when you press F9 (CALC).
+               Manual recalculation occurs in the foreground, so you must
+               wait for 1-2-3 to complete it before continuing your work.
+    Iteration  Sets the number of recalculation passes (1 through 50) 1-2-3
+               makes for a complete recalculation. 1-2-3 uses this setting
+               when the order is Columnwise or Rowwise, or when the order
+               is Natural and a circular reference exists.
+
+2. If you selected Iteration, enter a number from 1 (default) through 50
+   to specify the number of recalculation passes.
+
+The recalculation settings affect all active files. When you use /File
+Open or /File Retrieve to read a file into memory, 1-2-3 uses the new
+file's recalculation settings for all active files during that session.
+
+When a worksheet contains formulas that link to data in active files or
+files on disk, use /File Admin Link-Refresh to update those formulas.
+
+Previous                    Worksheet Commands                  Help Index

@@ -1,0 +1,20 @@
+Printer Information -- The number of lines 1-2-3 prints on a page when you use
+ the /Print commands varies according to the type of printer you selected.
+ Select /Print [B,E,F,P] Options Pg-Length to set the page length. Listed
+ below are the suggested page-length settings for some printers.
+
+Printer                            Portrait Mode      Landscape Mode
+   Apple LaserWriter                  63                 47
+   Dot-Matrix Printers                66                 Wysiwyg only
+   HP DeskJet                         60                 45
+   HP LaserJet Models
+       No Font Cartridge              60                 45
+       F, J, Z Font Cartridges        72                 45
+   HP PaintJet (continuous feed)      66                 Wysiwyg only
+   HP PaintJet (single feed)          60                 Wysiwyg only
+   HP Plotters (7440, 7475, 7550)
+       8.5 X 11 inch paper            60                 45
+       11 X 17 inch paper             95                 60
+NOTE  You can use Wysiwyg (:Print) to print in landscape mode on most printers.
+
+Print Commands                                                  Help Index

@@ -1,0 +1,20 @@
+Function Keys (continued)
+Key             Effect
+CTRL-F9 (DISPLAY ICONS)  Displays the icon palette when Wysiwyg is attached.
+CTRL-F10 (SELECT ICONS)  Activates the icon palette when Wysiwyg is attached.
+F1 (HELP)       Displays a Help screen.
+F2 (EDIT)       Switches 1-2-3 to EDIT mode so you can edit an entry.
+F3 (NAME)       Lists names of files, graphs, ranges, @functions
+                macro key names, macro commands, or settings sheets.
+F4 (ABS)        Changes the cell references in formulas from relative
+                to absolute to mixed.
+F5 (GOTO)       Moves the cell pointer to a cell, worksheet, or
+                active file.
+F6 (WINDOW)     Moves the cell pointer between windows.
+F7 (QUERY)      Repeats the last Data Query command.
+F8 (TABLE)      Repeats the last Data Table command.
+F9 (CALC)       Recalculates formulas in READY mode. In EDIT or
+                VALUE mode, converts a formula to its current value.
+F10 (GRAPH)     Displays the current graph or creates a graph.
+
+Previous                    Keyboard Index                      Help Index

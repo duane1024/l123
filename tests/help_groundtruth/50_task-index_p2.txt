@@ -1,0 +1,19 @@
+Task Index (continued)
+
+Extract records from a database      -- see /Data Query Extract
+Fill a range with numbers or dates   -- see /Data Fill
+Find a circular reference            -- see /Worksheet Status
+Find records in a database           -- see /Data Query Find
+Fix a mistake in a worksheet         -- see /Range Erase and EDIT Mode
+Get Help with 1-2-3                  -- see About Help
+Graphs, add text                     -- see Adding Text to a Graph
+Graphs, choose colors                -- see /Graph Options Advanced Color
+Graphs, choose types                 -- see /Graph Type
+Graphs, display                      -- see /Graph View
+Graphs, print                        -- see /Print [B,E,P] Image
+Graphs, save graph files             -- see /Graph Save
+Graphs, save with a worksheet        -- see /Graph Name Create
+Hide data                            -- see Hiding Data
+Hide zeros in a worksheet            -- see /Worksheet Global Zero
+
+Continued                   Previous                            Help Index

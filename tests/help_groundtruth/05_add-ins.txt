@@ -1,0 +1,20 @@
+Add-In Commands -- Press ALT-F10 (ADDIN) to display the add-in commands.
+
+Load     Reads an add-in file into memory.
+Remove   Deletes a specified add-in file from memory.
+Invoke   Starts an add-in application.
+Table    Lists add-in applications, @functions, or macro commands in memory.
+Clear    Removes all add-in files from memory.
+Settings Specifies add-in files you want 1-2-3 to read into memory
+         automatically and applications you want 1-2-3 to start or assign to
+         keys automatically. It also lets you specify a default add-in
+         directory.
+Quit     Leaves the ALT-F10 (ADDIN) menu and returns 1-2-3 to READY mode.
+
+When you select a command for which you need to specify a file name, 1-2-3
+displays a list of files in the current directory or the default add-in
+directory. If the file you want to use is in a different directory, press ESC
+twice to clear the displayed directory, type the path for the directory you
+want, and press ENTER. 1-2-3 lists the files in the directory you specify.
+
+Run-Time Error Message Index                                    Help Index

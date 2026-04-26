@@ -1,0 +1,19 @@
+/Worksheet Global Recalc -- Controls when and in what order 1-2-3
+ recalculates formulas and how many recalculation passes it performs
+ each time it recalculates formulas in active worksheets and files.
+
+1. Select /Worksheet Global Recalc and select one of the following:
+
+    Natural    (Default) Before recalculating a formula, 1-2-3
+               recalculates any formulas that formula depends on.
+    Columnwise Starting in A:A1, 1-2-3 moves column by column through
+               each active worksheet, recalculating all formulas.
+    Rowwise    Starting in A:A1, 1-2-3 moves row by row through each
+               active worksheet, recalculating all formulas.
+    Automatic  (Default) Each time you change the contents of a
+               cell, 1-2-3 recalculates formulas affected by the change
+               in all active files. Automatic recalculation occurs in the
+               background, so you can continue working while 1-2-3 performs
+               the recalculation.
+
+Continued                   Worksheet Commands                  Help Index

@@ -1,0 +1,20 @@
+Status Indicators -- When you press specific keys and when 1-2-3 performs
+ certain actions, 1-2-3 displays status indicators in the status line
+ at the bottom of the screen.
+
+Status  Explanation
+CALC    If blue (or white reverse-video), you need to recalculate formulas
+        by pressing F9 (CALC). If red (or white), 1-2-3 is performing
+        background formula recalculation.
+CAP     You pressed CAPS LOCK to type uppercase letters without using SHIFT.
+CIRC    You entered a formula that contains a circular reference, which is
+        a formula that refers to itself. Select /Worksheet Status to
+        identify the cell that contains the circular reference.
+CMD     1-2-3 is running a macro.
+END     You pressed END to use it with a pointer-movement key.
+FILE    You pressed CTRL-END to move between files.
+GROUP   The current file is in GROUP mode.
+MEM     The amount of available memory has fallen below 32KB (kilobytes)
+        or memory is divided into small blocks.
+
+Continued                   Increasing Available Memory         Help Index

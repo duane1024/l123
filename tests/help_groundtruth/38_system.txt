@@ -1,0 +1,19 @@
+/System -- Temporarily suspends 1-2-3 and returns you to DOS so you can
+ use DOS commands without ending the current 1-2-3 session.
+
+1. Before you use /System, use /File Save if you want to save your work
+   on disk.
+
+2. Select /System.
+
+   1-2-3 temporarily replaces the current worksheet with the DOS
+   prompt. You can perform many DOS tasks after using /System, including
+   copying files, creating new directories, or running other programs.
+
+   CAUTION  In general, do not load memory-resident programs when you
+   use /System. If you do so, you may not be able to resume the 1-2-3
+   session.
+
+3. To return to 1-2-3, type exit and press ENTER at the DOS prompt.
+
+                                                                Help Index

@@ -1,0 +1,20 @@
+Using Wysiwyg -- Wysiwyg is a spreadsheet publishing add-in that
+ enhances the appearance of your worksheets. Wysiwyg includes SmartIcons,
+ which provide easy access to 1-2-3 and Wysiwyg commands.
+
+To display the Wysiwyg main menu, press : (colon).
+
+To display Help for the Wysiwyg main menu, press : (colon) and then
+press F1 (HELP). Then, to display the Wysiwyg Help Index, use the
+pointer-movement keys to highlight Help Index and press ENTER.
+
+NOTE  If Wysiwyg is not in memory (either because you removed it for the
+current session or because you canceled automatic start-up of Wysiwyg and then
+restarted 1-2-3), pressing : (colon) does not display the Wysiwyg main menu.
+
+You can use ALT-F10 (ADDIN) Remove or Load to remove Wysiwyg from memory
+or load Wysiwyg into memory for the current session. You can also cancel or
+set automatic start-up of Wysiwyg with the ALT-F10 (ADDIN) Settings System
+command.
+
+ALT-F10 (ADDIN) Commands     Automatic Wysiwyg                  Help Index

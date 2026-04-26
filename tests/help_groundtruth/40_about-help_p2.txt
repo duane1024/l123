@@ -1,0 +1,18 @@
+About 1-2-3 Help (continued) -- Help is context-sensitive for the following:
+
+1-2-3 Commands  If you are in the middle of a 1-2-3 command and press
+                F1 (HELP), 1-2-3 displays a Help screen for that command.
+@Functions      From READY mode, type @ and press F1 (HELP) to display
+                the @Function Index. Then highlight an @function and
+                press ENTER to get Help for that @function. If you type
+                the @function name, and then press F1 (HELP), you get
+                Help for that @function.
+Macro Commands  From READY mode, type { and press F1 (HELP) to display
+                the Macro Command Index. Highlight a command and press
+                ENTER to get Help for that macro command. If you type an
+                open brace and the macro command, and then press F1 (HELP),
+                you get Help for that macro command.
+Error Messages  Press F1 (HELP) when you get an error message. Press ESC
+                twice to clear the Help screen and error message.
+
+Previous                                                        Help Index

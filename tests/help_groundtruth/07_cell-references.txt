@@ -1,0 +1,20 @@
+Types of Cell and Range References -- To create mixed or absolute references
+ in a formula, either type a $ (dollar sign) in the cell references or press
+ F4 (ABS) when you are entering or editing a formula. The types of references
+ you use in the formula determine what happens to the formula when you
+ use /Copy.
+
+Relative reference  Identifies a cell by its position relative to the
+                    current cell. A relative reference, like A:B2, changes
+                    when you copy a formula that contains it.
+Absolute reference  Contains a $ in front of the range name, or worksheet
+                    letter, column letter, and row number, for example
+                    $RATE or $A:$B$2. An absolute reference always refers to
+                    the same cell when you copy a formula that contains it.
+Mixed reference     Contains a $ in front of the worksheet letter, column
+                    letter, or row number, for example A:$B2. When you copy
+                    a formula that contains a mixed reference, the part of
+                    the reference that contains the $ stays the same and
+                    the rest of the reference changes.
+
+Entering Formulas                                               Help Index

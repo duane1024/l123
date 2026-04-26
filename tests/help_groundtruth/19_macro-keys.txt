@@ -1,0 +1,19 @@
+Macro Key Names
+
+    1-2-3 key                    Macro key name
+    ---------                    --------------
+    down arrow                   {DOWN} or {D}
+    up arrow                     {UP} or {U}
+    left arrow                   {LEFT} or {L}
+    right arrow                  {RIGHT} or {R}
+    ALT-F6 (ZOOM)                {ZOOM}
+    ALT-F7 (APP1)                {APP1}
+    ALT-F8 (APP2)                {APP2}
+    ALT-F9 (APP3)                {APP3}
+    ALT-F10 (ADDIN)              {ADDIN} or {APP4}
+    BACKSPACE                    {BACKSPACE} or {BS}
+    CTRL-left or SHIFT-TAB       {BIGLEFT}
+    CTRL-right or TAB            {BIGRIGHT}
+    CTRL-END                     {FILE}
+
+Continued        Entering a Macro       Macro Index            Help Index

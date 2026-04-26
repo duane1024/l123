@@ -44,7 +44,7 @@ use ratatui::{
 };
 use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
 
-use crate::help::{HelpTopic, HELP_TOPICS};
+use crate::help::{all_topics, HelpTopic};
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
@@ -3109,12 +3109,14 @@ impl App {
         match k.code {
             KeyCode::Esc => self.close_help(),
             KeyCode::Tab => {
-                state.topic = (state.topic + 1) % HELP_TOPICS.len();
+                let topics = all_topics();
+                state.topic = (state.topic + 1) % topics.len();
                 state.scroll = 0;
             }
             KeyCode::BackTab => {
+                let topics = all_topics();
                 state.topic = if state.topic == 0 {
-                    HELP_TOPICS.len() - 1
+                    topics.len() - 1
                 } else {
                     state.topic - 1
                 };
@@ -6944,7 +6946,8 @@ impl App {
         let Some(state) = self.help.as_ref() else {
             return;
         };
-        let topic: &HelpTopic = &HELP_TOPICS[state.topic.min(HELP_TOPICS.len() - 1)];
+        let topics = all_topics();
+        let topic: &HelpTopic = &topics[state.topic.min(topics.len() - 1)];
 
         if area.height == 0 || area.width == 0 {
             return;
@@ -6961,7 +6964,7 @@ impl App {
             " {}   [topic {}/{}] ",
             topic.title,
             state.topic + 1,
-            HELP_TOPICS.len()
+            topics.len()
         );
         set_line(buf, area.x, area.y, &header, area.width, header_style);
 

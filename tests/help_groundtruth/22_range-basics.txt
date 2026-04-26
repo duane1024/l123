@@ -1,0 +1,18 @@
+Range Basics
+
+A range is any rectangular block of adjacent cells. A range can be a
+single cell (A1..A1), part of a row (A2..C2) or column (B1..B3), or
+a block of cells in several rows and columns (A1..C3). A range can be
+three-dimensional, spanning adjacent worksheets (A:A1..C:C3) as long
+as the worksheets are in the same file.
+
+A range address consists of the cell addresses of any two diagonally
+opposite corners of a range, separated by one or two periods. For example,
+A1..A1 and A:A1..A:C3 are the range addresses for the two ranges below.
+
+         A                  A:   A     B     C
+                            1   ___   ___   ___
+   1   _________            2   ___   ___   ___
+                            3   ___   ___   ___
+
+Specifying Ranges           Range Commands                      Help Index

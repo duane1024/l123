@@ -1,0 +1,20 @@
+@Function Index
+
+@@           @COS         @DSTDS       @INDEX
+@ABS         @COUNT       @DSUM        @INFO
+@ACOS        @CTERM       @D360        @INT
+@ASIN        @DATE        @DVAR        @IRR
+@ATAN        @DATEVALUE   @DVARS       @ISERR
+@ATAN2       @DAVG        @ERR         @ISNA
+@AVG         @DAY         @EXACT       @ISNUMBER
+@CELL        @DCOUNT      @EXP         @ISRANGE
+@CELLPOINTER @DDB         @FALSE       @ISSTRING
+@CHAR        @DGET        @FIND        @LEFT
+@CHOOSE      @DMAX        @FV          @LENGTH
+@CODE        @DMIN        @HLOOKUP     @LN
+@COLS        @DQUERY      @HOUR        @LOG
+@COORD       @DSTD        @IF          @LOWER
+
+Continued                                          @Function Introduction
+                                                                Help Index
+Entering Formulas

@@ -1,0 +1,21 @@
+Macro Command Index
+
+subroutine   DISPATCH    GRAPHON     READ
+?            FILESIZE    IF          READLN
+APPENDBELOW  FOR         INDICATE    RECALC
+APPENDRIGHT  FORBREAK    LET         RECALCCOL
+BEEP         FORM        LOOK        RESTART
+BLANK        FORMBREAK   MENUBRANCH  RETURN
+BRANCH       FRAMEOFF    MENUCALL    SETPOS
+BREAK        FRAMEON     ONERROR     SYSTEM
+BREAKOFF     GET         OPEN        WAIT
+BREAKON      GETLABEL    PANELOFF    WINDOWSOFF
+CLOSE        GETNUMBER   PANELON     WINDOWSON
+CONTENTS     GETPOS      PUT         WRITE
+DEFINE       GRAPHOFF    QUIT        WRITELN
+                                     /X commands
+
+NOTE  In Help for macro commands, optional macro arguments are enclosed
+in [ ] (brackets). All other arguments are required.
+
+Macro Command Syntax  Macro Basics  Macro Key Names           Help Index

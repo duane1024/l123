@@ -1,0 +1,17 @@
+The Control Panel -- Consists of the top three lines of the screen, where
+1-2-3 displays different types of information.
+
+The first line of the control panel displays information about the current
+cell and the 1-2-3 mode indicator.
+
+   A:B1:(C2) U [W15] 6500                                          READY
+                                                              Mode Indicator
+                       The contents of the current cell
+                  The column width if you used /Worksheet Column
+              The protection status if you used /Worksheet Global Prot
+              or /Range Unprot
+           The cell format if you used /Range Format
+   The current cell address, consisting of the worksheet letter, column
+   letter, and row number
+
+Continued                                                       Help Index

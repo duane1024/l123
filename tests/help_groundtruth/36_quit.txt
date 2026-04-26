@@ -1,0 +1,18 @@
+/Quit -- Ends the current 1-2-3 session and returns you to DOS.
+
+CAUTION  Before you use /Quit, make sure your print jobs are completed,
+and use /File Save if you want to save your work on disk. /Quit cancels
+all print jobs waiting to be printed and clears your worksheets from
+memory without saving them.
+
+1. Select /Quit.
+2. Select No to return 1-2-3 to READY mode or Yes to end 1-2-3.
+   If you selected Yes and have worksheets you have changed but not saved
+   or print jobs waiting to be printed, 1-2-3 displays another No/Yes
+   menu and asks if you want to end 1-2-3 anyway.
+   * Select No to cancel /Quit so you can save the worksheets or
+     complete the print jobs.
+   * Select Yes to end 1-2-3 without saving the worksheets or completing
+     the print jobs.
+
+/File Save                                                      Help Index

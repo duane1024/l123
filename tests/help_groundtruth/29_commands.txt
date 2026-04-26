@@ -1,0 +1,19 @@
+1-2-3 Commands
+
+    Worksheet commands       Print commands
+    Range commands           Graph commands
+    Copy command             Data commands
+    Move command             System command
+    File commands            Quit command
+
+To use 1-2-3 commands, press / (slash) to display the 1-2-3 main menu in
+the control panel at the top of the screen. To select a command from
+the menu, highlight the command and press ENTER, or press the first
+character of the command. When you highlight a command, 1-2-3 displays an
+explanation or submenu for that command in the third line of the control
+panel.
+
+To back out of a menu one level at a time, press ESC.
+To leave a menu and return 1-2-3 to READY mode, press CTRL-BREAK.
+
+                                                                Help Index

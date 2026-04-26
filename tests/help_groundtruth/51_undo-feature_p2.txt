@@ -1,0 +1,15 @@
+Using Undo (continued)
+
+You can use ALT-F4 (UNDO) from the keyboard only, not from within a macro.
+
+If you press ALT-F4 (UNDO) in the following situations, 1-2-3 displays an
+error message:
+
+  * When the undo feature is turned off.
+  * After clearing a 'Memory Full' error message. When the memory full
+    error occurred, 1-2-3 erased the undo history, so you cannot undo
+    operations you performed prior to that error.
+  * When you have not performed an undoable operation either since the last
+    time you pressed ALT-F4 (UNDO) or since 1-2-3 last erased the undo history.
+
+Previous       /Worksheet Global Default Other Undo            Help Index

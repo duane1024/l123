@@ -1,0 +1,19 @@
+The Record Feature -- ALT-F2 (RECORD) gives you access to the record buffer,
+a 512-byte area of computer memory in which 1-2-3 records your keystrokes.
+You can use ALT-F2 (RECORD) to play back keystrokes in the record buffer, enter
+macros in a worksheet, clear the record buffer, or debug a macro.
+Press ALT-F2 (RECORD) and select one of the following:
+
+Playback  Repeats a sequence of keystrokes in the record buffer. Use this
+          option to perform a repetitive task such as changing global settings
+          for several worksheets or copying data in a range to several ranges.
+Copy      Copies keystrokes in the record buffer to the worksheet. Use
+          this option to enter the macro instructions for a keystroke
+          procedure automatically rather than typing those instructions
+          in the worksheet manually.
+Erase     Clears the record buffer so you can create a specific macro.
+Step      Runs a macro one step at a time. Use this option to debug a macro.
+Trace     Runs a macro and shows you which step failed if the macro
+          fails. Use this option to debug a macro.
+
+Macro Basics                                                    Help Index

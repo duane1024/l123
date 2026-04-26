@@ -3,10 +3,10 @@
 
 ASSERT_MODE       READY
 
-# F1 from READY → HELP overlay with the index topic visible.
+# F1 from READY → HELP overlay with the authentic R3.4a help index visible.
 F 1
 ASSERT_MODE       HELP
-ASSERT_SCREEN     Help
+ASSERT_SCREEN     1-2-3 Help Index
 
 # The footer shows the navigation hints.
 ASSERT_SCREEN     Esc

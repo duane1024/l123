@@ -1,0 +1,20 @@
+Status Indicators (continued)
+NUM     You pressed NUM LOCK to use the numeric keypad to type numbers.
+OVR     You pressed INS to edit data in overstrike mode instead of insert
+        mode. In overstrike mode, 1-2-3 replaces the character above the
+        cursor with the character you type. In insert mode, 1-2-3 inserts
+        the character you type to the left of the cursor.
+PRT     1-2-3 is printing in the background; you can continue to use 1-2-3.
+RO      The current file has read-only status, which means you cannot save
+        changes to the file unless you get the file reservation.
+SCROLL  You pressed SCROLL LOCK so up, down, right, and left arrows move
+        the worksheet as well as the cell pointer.
+STEP    You pressed ALT-F2 (RECORD) and selected Step to run a macro
+        in STEP mode.
+ZOOM    After using /Worksheet Window to create windows, you pressed
+        ALT-F6 (ZOOM) for a full-screen view of the current window.
+
+The file-and-clock indicator appears in the lower left corner of the screen.
+Use /Worksheet Global Default Other Clock to set the file-and-clock display.
+
+Previous                                                        Help Index

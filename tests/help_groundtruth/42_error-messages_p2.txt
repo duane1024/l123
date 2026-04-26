@@ -1,0 +1,19 @@
+Error Message Index (continued)
+
+Cannot erase file. It is in use or has read-only access.
+Cannot execute query with a circular reference
+Cannot go to a range that is not in memory
+Cannot have more than 256 worksheets in memory
+Cannot hide all columns
+Cannot hide last visible sheet
+Cannot import - file is in use
+Cannot invert matrix
+Cannot invoke operating system
+Cannot justify text if Worksheet protection enabled
+Cannot modify a range that is not in memory
+Cannot move data between files
+Cannot Move or Copy data beyond worksheet boundaries
+Cannot print ranges or named graphs not in memory
+Cannot read Help file
+
+Continued                   Previous                            Help Index

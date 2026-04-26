@@ -1,0 +1,19 @@
+The Range Commands -- Perform the following tasks:
+
+Format   Changes the display of data in a range.
+Label    Left-aligns, right-aligns, or centers labels in a range.
+Erase    Erases data in a range.
+Name     Creates, deletes, and undefines range names; creates and deletes
+         range name notes; and creates tables of range names and notes.
+Justify  Rearranges a column of labels to fit within a specified width.
+Prot     Prevents changes to unprotected cells in a range when the
+         worksheet or worksheets are globally protected.
+Unprot   Allows changes to cells in a range when the worksheet or worksheets
+         are globally protected.
+Input    Restricts cell-pointer movement to unprotected cells in a range.
+Value    Copies a range of data, converting formulas to their current values.
+Trans    Copies a range of data, transposing the layout of the data and
+         converting any formulas to their current values.
+Search   Finds or replaces specified strings in a range.
+
+Range Basics                Specifying Ranges                   Help Index
