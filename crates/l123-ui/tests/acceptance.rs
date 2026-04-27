@@ -890,6 +890,7 @@ transcripts! {
     m5_undo            => "M5_undo.tsv",
     m5_undo_toggle     => "M5_undo_toggle.tsv",
     m5_undo_coverage   => "M5_undo_coverage.tsv",
+    wgdo_clock         => "wgdo_clock.tsv",
     m5_wg_format       => "M5_wg_format.tsv",
     m5_wg_format_date  => "M5_wg_format_date.tsv",
     m5_wg_format_undo  => "M5_wg_format_undo.tsv",
