@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Range Trans</title>
+<h1>/Range Trans</h1>
+<pre>/Range Trans -- Copies data in a range, transposing the copied data
+and replacing any copied formulas with their current values.
+
+1. If the CALC indicator appears at the bottom of the screen, press
+    F9 (CALC) to update formulas. If there are linked formulas in the
+    range you want to transpose, you also need to use <a href="0017-file-admin.html">/File Admin</a>
+    Link-Refresh to make sure the values are updated.
+2. Select /Range Trans.
+3. Specify the FROM range (the range whose data you want to transpose).
+4. Specify the TO range (the location for the transposed data). You need
+    to specify only the first cell of the TO range. If you are transposing
+    a three-dimensional range, be sure there are enough worksheets in the
+    TO range to fit the transposed data.
+
+    CAUTION  Make sure you specify a TO range that does not contain data
+    you need, because l123 writes over existing data with the data you copy.
+    Specifying overlapping FROM and TO ranges may result in data loss.
+
+<a href="0391-range-trans-continued.html">Continued</a>                      <a href="0014-the-range-commands.html">Range Commands</a>                       <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

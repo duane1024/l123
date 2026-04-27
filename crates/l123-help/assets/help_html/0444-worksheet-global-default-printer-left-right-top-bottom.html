@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Worksheet Global Default Printer [Left, Right, Top, Bottom]</title>
+<h1>/Worksheet Global Default Printer [Left, Right, Top, Bottom]</h1>
+<pre><a href="0441-worksheet-global-default-printer.html">/Worksheet Global Default Printer</a> [Left, Right, Top, Bottom] -- Sets margins
+on the printed page measured in standard lines and standard characters.
+
+1. Select <a href="0441-worksheet-global-default-printer.html">/Worksheet Global Default Printer</a>.
+2. Select a margin and enter a margin size.
+    Left      Sets the left margin in standard characters from 0 through 1000.
+              (Default is 4 characters.)
+    Right     Sets the right margin in standard characters from the left edge
+              of the page, from 0 through 1000. (Default is 76 characters.)
+    Top       Sets the top margin in standard lines from 0 through 240.
+              (Default is 2 lines.)
+    Bottom    Sets the bottom margin in standard lines from 0 through 240.
+              (Default is 2 lines.)
+3. To update the l123 configuration file (123R34.CNF) so l123 uses the new
+    margin settings in future sessions, select <a href="0425-worksheet-global-default.html">/Worksheet Global Default</a>
+    Update.
+
+The corresponding /Print command is /Print [B,E,F,P] Options Margins [L,R,T,B].
+
+<a href="0016-the-worksheet-commands.html">Worksheet Commands</a>              <a href="0281-print-background-encoded-file-printer-options.html">/Print [B,E,F,P] Options</a>              <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

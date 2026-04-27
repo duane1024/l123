@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Range Name Delete</title>
+<h1>/Range Name Delete</h1>
+<pre><a href="0372-range-name.html">/Range Name</a> Delete -- Deletes a defined range name (and its note, if it has
+a note) but leaves the data in the range unchanged.
+
+1. Select <a href="0372-range-name.html">/Range Name</a> Delete.
+2. Specify the range name you want to delete.
+
+In formulas that use the deleted range name, l123 replaces the deleted
+range name with its range address. For example, if SALES is defined as
+B14..H14 and you delete SALES, l123 changes the formula @SUM(SALES)
+to @SUM(B14..H14).
+
+Use <a href="0384-range-name-reset.html">/Range Name Reset</a> to delete all range names in the current file
+at once.
+
+<a href="0373-defined-range-names.html">Defined Range Names</a>                <a href="0014-the-range-commands.html">Range Commands</a>                   <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

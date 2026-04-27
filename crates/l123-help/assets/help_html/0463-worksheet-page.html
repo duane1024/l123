@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Worksheet Page</title>
+<h1>/Worksheet Page</h1>
+<pre>/Worksheet Page -- Inserts in the current worksheet a row containing
+:: (page-break symbol). This symbol tells l123 to begin a new page
+at this row when printing. If a file is in GROUP mode, /Worksheet
+Page affects all worksheets in the file.
+
+1. Position the cell pointer in the leftmost column of the range you
+    want to print and the row where you want the new page to begin.
+2. Select /Worksheet Page.
+
+l123 inserts a row that contains :: in the current cell and moves
+the remaining rows down one row. A page break overrides the
+/Print [B,E,F,P] Options Pg-Length or <a href="0425-worksheet-global-default.html">/Worksheet Global Default</a> Pg-Length
+settings.
+
+CAUTION  Do not enter data to be printed in the row with :: because
+l123 ignores data in this row when printing.
+
+<a href="0016-the-worksheet-commands.html">Worksheet Commands</a>       <a href="0297-print-background-encoded-file-printer-options-pg-length.html">/Print [B,E,F,P] Options Pg-Length</a>         <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

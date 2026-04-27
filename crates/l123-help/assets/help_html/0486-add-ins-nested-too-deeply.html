@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Add-ins nested too deeply</title>
+<h1>Add-ins nested too deeply</h1>
+<pre>Add-ins nested too deeply --  You used a macro in your add-in that invokes
+another add-in, that itself invokes another add-in, and so on. The total
+number of such nested invocations cannot exceed nine. If you are a developer,
+rewrite your add-in so that it does not nest add-ins more than nine layers
+deep. Otherwise, you must call your add-in developer.
+
+Cannot find &quot;file_name&quot; --  l123 cannot find the add-in file (a file with a
+.PLC or .DLD extension). Make sure you typed the file name correctly and
+that l123 can find the file. l123 looks for add-in files in the path you
+specify. Otherwise, l123 looks first in the default add-in directory (if
+you set one up), then in the current directory, then in the l123 directory.
+
+Cannot find library file &quot;library_file_name&quot; -- You did not copy a library
+file included in your application into the l123 directory. If you are a
+developer and &quot;library_file_name&quot; is a library you wrote, the library file
+may have an invalid header format and cannot be identified; you must correct
+the header format. If you are a user and you copied the file, or the file was
+not included with the add-in, you should contact your add-in developer.
+
+<a href="0470-add-in-commands.html">Add-In Commands</a>                                                    <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

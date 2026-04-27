@@ -1,21 +1,45 @@
-# F1 opens the Help overlay; Esc closes it back to the underlying mode.
-# Tab / Shift-Tab walks topics; PgUp / PgDn scrolls within a topic.
+# F1 opens the help overlay, loaded with the l123 Help Index page.
+# ↑/↓/←/→ move focus 2D-style between hyperlinks (matching classic
+# 1-2-3); ENTER follows; BACKSPACE pops the history stack; ESC closes
+# back to the underlying mode.
 
 ASSERT_MODE       READY
 
-# F1 from READY → HELP overlay with the index topic visible.
+# F1 from READY → HELP overlay showing the index page title and footer.
 F 1
 ASSERT_MODE       HELP
-ASSERT_SCREEN     Help
+ASSERT_SCREEN     l123 Help Index
+ASSERT_SCREEN     HELP
 
 # The footer shows the navigation hints.
-ASSERT_SCREEN     Esc
+ASSERT_SCREEN     ESC
 
-# Tab advances to the next topic.
-TAB
+# Step into the 3-column grid (DOWN from the row-0 self-reference lands
+# on "About 1-2-3 Help" in column 0). A second DOWN should stay in
+# column 0 — i.e. land on "Add-In Commands", NOT on the column-1
+# neighbor "Macro Command Index". ENTER follows the column-locked
+# choice to verify the correct page loaded.
+DOWN
+DOWN
+ENTER
 ASSERT_MODE       HELP
+ASSERT_SCREEN     Add-In Commands -- Press ALT-F10
 
-# Esc returns to READY without disturbing the cell pointer.
+# BACKSPACE returns to the index, focus reset to the top-of-page link.
+BACKSPACE
+ASSERT_SCREEN     l123 Help Index
+
+# Now exercise RIGHT: from "About 1-2-3 Help" (col 0), one DOWN drops
+# us into the grid, RIGHT moves to "Macro Basics" in column 1, ENTER
+# follows.
+DOWN
+RIGHT
+ENTER
+ASSERT_MODE       HELP
+ASSERT_SCREEN     Macro Basics
+
+# ESC closes the overlay and returns to READY without disturbing the
+# cell pointer.
 ESC
 ASSERT_MODE       READY
 ASSERT_POINTER    A:A1

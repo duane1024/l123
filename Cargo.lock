@@ -1446,9 +1446,6 @@ dependencies = [
 [[package]]
 name = "l123-help"
 version = "0.0.1"
-dependencies = [
- "thiserror 2.0.18",
-]
 
 [[package]]
 name = "l123-io"
@@ -1500,6 +1497,7 @@ dependencies = [
  "l123-core",
  "l123-engine",
  "l123-graph",
+ "l123-help",
  "l123-io",
  "l123-menu",
  "l123-parse",

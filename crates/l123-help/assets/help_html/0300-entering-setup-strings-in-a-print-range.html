@@ -1,0 +1,20 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Entering Setup Strings in a Print Range</title>
+<h1>Entering Setup Strings in a Print Range</h1>
+<pre>Entering Setup Strings in a Print Range -- You can enter a setup string
+in a print range to switch from one print style to another within the
+print range. To enter a setup string in a print range:
+
+1. Insert a blank row above the range whose print style you want to change.
+2. In the first column of the blank row, enter || (double vertical bars)
+    and the setup string.
+3. At the point where you want to turn off the print style, insert
+    another blank row and enter the appropriate setup string.
+
+    For example, to print a line in double-strike mode on an Epson printer,
+    enter ||\027G. To return to standard print, enter ||027H at the point
+    where you want to turn off double-strike mode. l123 does not print
+    the blank rows that contain the setup strings.
+
+<a href="0012-the-print-commands.html">Print Commands</a>                                                      <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

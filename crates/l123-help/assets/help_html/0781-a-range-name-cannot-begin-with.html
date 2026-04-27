@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>A range name cannot begin with &lt;&lt; &gt;&gt;</title>
+<h1>A range name cannot begin with &lt;&lt; &gt;&gt;</h1>
+<pre>A range name cannot begin with &lt;&lt; &gt;&gt;
+
+The following conditions could have caused this error:
+
+* For <a href="0375-range-name-create.html">/Range Name Create</a>, you specified a range name that started with
+   &lt;&lt; &gt;&gt; (double angle brackets).
+
+* For <a href="0378-range-name-labels.html">/Range Name Labels</a>, the labels range you specified contained a label
+   that started with &lt;&lt; &gt;&gt;.
+
+* For <a href="0194-data-external-create.html">/Data External Create</a> or Use, you specified an external table range
+   name that started with &lt;&lt; &gt;&gt;.
+
+Range names cannot begin with double angle brackets because l123 uses
+those characters to denote file references.
+
+To name a range in another active file, move the cell pointer to that
+file before selecting <a href="0375-range-name-create.html">/Range Name Create</a>.
+
+<a href="0000-1-2-3-help-index.html">Help Index</a></pre>

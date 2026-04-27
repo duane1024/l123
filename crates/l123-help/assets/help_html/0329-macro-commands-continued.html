@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Macro Commands (continued)</title>
+<h1>Macro Commands (continued)</h1>
+<pre><a href="0319-macro-commands-continued.html">Macro Commands (continued)</a>
+
+    {GRAPHON [named-graph],[nodisplay]}
+        Has three possible results, depending on the arguments you use.
+        In all cases, the macro continues to run while {GRAPHON} is
+        in effect.
+
+           {GRAPHON} with no arguments displays the current graph.
+           {GRAPHON named-graph} makes the named-graph settings
+          current and displays the graph.
+           {GRAPHON named-graph,nodisplay} makes the named-graph
+          settings current but does not display the graph.
+
+        l123 clears a graph displayed by {GRAPHON} from the screen
+        when it reaches a {GRAPHOFF} command, another {GRAPHON} command,
+        or the end of the macro. l123 also clears a graph displayed by
+        {GRAPHON} when it reaches a {?} or {INDICATE} command or a command
+        that displays a prompt or menu in the control panel.
+
+<a href="0330-macro-commands-continued.html">Continued</a>           <a href="0328-macro-commands-continued.html">Previous</a>              <a href="0317-macro-command-index.html">Macro Index</a>               <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

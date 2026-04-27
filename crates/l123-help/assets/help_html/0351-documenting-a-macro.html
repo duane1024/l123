@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Documenting a Macro</title>
+<h1>Documenting a Macro</h1>
+<pre>Documenting a Macro -- Document the macro&#x27;s range name by entering the name
+to the left of the macro&#x27;s first cell. If the range name starts with a
+backslash (such as \N), remember to use a label prefix ( &#x27;  &quot;  or ^ )
+when you enter it. Document the macro instructions by entering comments
+about them in a column to the right of the instructions.
+
+In the following example, the macro named NEW_SHEET is in column B, the
+macro&#x27;s name is documented in A1, and the macro instructions are
+documented in column C.
+
+       A             B              C
+
+1 NEW_SHEET      /wisa~       Insert new worksheet after current one
+2                {RIGHT}      Move to column B in new worksheet
+3                /wcs30~      Widen column B to 30 characters
+4
+
+<a href="0352-running-a-macro.html">Running a Macro</a>                   <a href="0343-creating-a-macro.html">Creating a Macro</a>                  <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

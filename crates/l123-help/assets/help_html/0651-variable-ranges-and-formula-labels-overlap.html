@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Variable ranges and formula labels overlap</title>
+<h1>Variable ranges and formula labels overlap</h1>
+<pre>Variable ranges and formula labels overlap
+
+You tried to create a labeled table when the formula label range or
+all or part of a variable range was in a row or column that also contained
+part of another variable range. l123 cannot enter the results of a
+table calculation in a cell at the intersection of a row containing an
+input value or formula label and a column containing an input value or
+formula label if that cell also contains an input value or formula label.
+
+Move the ranges so that each is in a column or row that contains no part
+of another range, or expand one of the ranges by one row or column and
+rearrange the input values or formula labels in the range so that the cell
+that is in the same row or column as the formula label range or part of
+another variable range is blank. For example, if the formula label range is
+in A:B4..A:C4 and the row variable range is in A:D2..A:D9, you can expand
+the row variable range to A:D2..A:D10 and move the values in A:D4..A:D9 to
+A:D5..A:D10, leaving A:D4 blank. Then recalculate the table using
+<a href="0188-data-table-labeled-go.html">/Data Table Labeled Go</a> or F8 (TABLE).
+
+<a href="0000-1-2-3-help-index.html">Help Index</a></pre>

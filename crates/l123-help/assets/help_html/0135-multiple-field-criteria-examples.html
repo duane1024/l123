@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Multiple-Field Criteria Examples</title>
+<h1>Multiple-Field Criteria Examples</h1>
+<pre><a href="0134-multiple-field-criteria.html">Multiple-Field Criteria</a> Examples -- The input range is A:A1..A:D6. If you
+specify A9..D10 as the criteria range, l123 matches only the record in
+row 5 where Name is Robinson and Month is May. If you specify F1..G3 as
+the criteria range, the records in rows 3, 4, and 6 match the criteria
+where the Month is June or where Sales is greater than 2000.
+
+  A:  A          B          C              D       E       F        G
+
+  1  Name       Month    Account        Sales           Month     Sales
+  2  Kaplan     May      Theater Inc    1950.00         June
+  3  Mintz      June     Dance Corp     1800.00                   +D2&gt;2000
+  4  Morse      July     Art Etc        2100.00
+  5  Robinson   May      Travel Log     1700.00
+  6  Smith      June     Photo Show     1850.00
+  7
+  8
+  9  Name       Month    Account        Sales
+10  Robinson   +B2=&quot;May&quot;
+
+<a href="0134-multiple-field-criteria.html">Previous</a>        <a href="0127-the-criteria-range.html">The Criteria Range</a>        <a href="0126-data-query-criteria.html">/Data Query Criteria</a>      <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

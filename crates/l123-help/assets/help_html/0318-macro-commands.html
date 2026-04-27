@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Macro Commands</title>
+<h1>Macro Commands</h1>
+<pre>Macro Commands
+
+    {subroutine [arg1],[arg2],...[argn]}
+        Calls a subroutine, which is a discrete unit of macro
+        instruction. When l123 encounters a {subroutine} command, it
+
+        1. Shifts macro control from the current column of macro
+           instructions to the subroutine whose range name or address
+           is in the braces.
+        2. Passes any arguments included in the {subroutine} command to
+           the subroutine&#x27;s <a href="0323-macro-commands-continued.html">{DEFINE}</a> command for evaluation and storage.
+        3. Executes the instructions in the subroutine.
+        4. When l123 reaches either a {RETURN} command in the subroutine
+           or a blank or numeric cell, it returns to the original macro
+           location and continues the macro at the instruction
+           immediately following the {subroutine} command.
+
+<a href="0319-macro-commands-continued.html">Continued</a>                       <a href="0317-macro-command-index.html">Macro Index</a>                         <a href="0000-1-2-3-help-index.html">Help Index</a></pre>
