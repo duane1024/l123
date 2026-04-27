@@ -111,6 +111,211 @@ impl RecalcOrder {
     }
 }
 
+/// `/Worksheet Global Default Graph Save` — default file format
+/// /Graph Save writes when the user-typed name has no extension.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GraphSaveFormat {
+    #[default]
+    Cgm,
+    Pic,
+}
+
+impl GraphSaveFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            GraphSaveFormat::Cgm => "Cgm",
+            GraphSaveFormat::Pic => "Pic",
+        }
+    }
+}
+
+/// `/Worksheet Global Default Graph Group` — auto-graph orientation
+/// applied by `/Graph Group`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GraphGroupOrientation {
+    #[default]
+    Columnwise,
+    Rowwise,
+}
+
+impl GraphGroupOrientation {
+    pub fn label(self) -> &'static str {
+        match self {
+            GraphGroupOrientation::Columnwise => "Columnwise",
+            GraphGroupOrientation::Rowwise => "Rowwise",
+        }
+    }
+}
+
+/// Workbook-wide defaults persisted to `L123.CNF` by `/Worksheet Global
+/// Default Update`. Mirrors the 1-2-3 R3.4a `123R31.CNF` knobs that
+/// every new session inherits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalDefaults {
+    pub printer_interface: u8,
+    pub printer_autolf: bool,
+    pub printer_left: u16,
+    pub printer_right: u16,
+    pub printer_top: u16,
+    pub printer_bottom: u16,
+    pub printer_pg_length: u16,
+    pub printer_wait: bool,
+    pub printer_setup: String,
+    pub printer_name: String,
+    pub default_dir: String,
+    pub temp_dir: String,
+    pub ext_save: String,
+    pub ext_list: String,
+    pub autoexec: bool,
+    pub graph_group: GraphGroupOrientation,
+    pub graph_save: GraphSaveFormat,
+}
+
+impl Default for GlobalDefaults {
+    fn default() -> Self {
+        Self {
+            printer_interface: 1,
+            printer_autolf: false,
+            printer_left: 4,
+            printer_right: 76,
+            printer_top: 2,
+            printer_bottom: 2,
+            printer_pg_length: 66,
+            printer_wait: false,
+            printer_setup: String::new(),
+            printer_name: String::new(),
+            default_dir: String::new(),
+            temp_dir: String::new(),
+            ext_save: "xlsx".into(),
+            ext_list: String::new(),
+            autoexec: true,
+            graph_group: GraphGroupOrientation::Columnwise,
+            graph_save: GraphSaveFormat::Cgm,
+        }
+    }
+}
+
+impl GlobalDefaults {
+    /// Render this struct as the additive `# WGD defaults` block
+    /// appended below an existing L123.CNF body. The block uses the
+    /// same `key = value` syntax the CNF reader already accepts.
+    pub fn render_cnf_block(&self) -> String {
+        let mut out = String::new();
+        out.push_str("# Persisted by /Worksheet Global Default Update\n");
+        out.push_str(&format!(
+            "wgd_printer_interface = {}\n",
+            self.printer_interface
+        ));
+        out.push_str(&format!("wgd_printer_autolf = {}\n", self.printer_autolf));
+        out.push_str(&format!("wgd_printer_left = {}\n", self.printer_left));
+        out.push_str(&format!("wgd_printer_right = {}\n", self.printer_right));
+        out.push_str(&format!("wgd_printer_top = {}\n", self.printer_top));
+        out.push_str(&format!("wgd_printer_bottom = {}\n", self.printer_bottom));
+        out.push_str(&format!(
+            "wgd_printer_pg_length = {}\n",
+            self.printer_pg_length
+        ));
+        out.push_str(&format!("wgd_printer_wait = {}\n", self.printer_wait));
+        out.push_str(&format!(
+            "wgd_printer_setup = \"{}\"\n",
+            escape_cnf(&self.printer_setup)
+        ));
+        out.push_str(&format!(
+            "wgd_printer_name = \"{}\"\n",
+            escape_cnf(&self.printer_name)
+        ));
+        out.push_str(&format!(
+            "wgd_dir = \"{}\"\n",
+            escape_cnf(&self.default_dir)
+        ));
+        out.push_str(&format!("wgd_temp = \"{}\"\n", escape_cnf(&self.temp_dir)));
+        out.push_str(&format!(
+            "wgd_ext_save = \"{}\"\n",
+            escape_cnf(&self.ext_save)
+        ));
+        out.push_str(&format!(
+            "wgd_ext_list = \"{}\"\n",
+            escape_cnf(&self.ext_list)
+        ));
+        out.push_str(&format!("wgd_autoexec = {}\n", self.autoexec));
+        out.push_str(&format!(
+            "wgd_graph_group = {}\n",
+            match self.graph_group {
+                GraphGroupOrientation::Columnwise => "columnwise",
+                GraphGroupOrientation::Rowwise => "rowwise",
+            }
+        ));
+        out.push_str(&format!(
+            "wgd_graph_save = {}\n",
+            match self.graph_save {
+                GraphSaveFormat::Cgm => "cgm",
+                GraphSaveFormat::Pic => "pic",
+            }
+        ));
+        out
+    }
+
+    /// Write defaults to `path`, replacing any prior `# Persisted by
+    /// /Worksheet Global Default Update` block while preserving every
+    /// other line in the file (so user-managed `user`, `log_file`,
+    /// etc. survive an Update).
+    pub fn write_to_path(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        let prior = std::fs::read_to_string(path).unwrap_or_default();
+        let preserved = strip_wgd_block(&prior);
+        let mut body = preserved;
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(&self.render_cnf_block());
+        std::fs::write(path, body)
+    }
+}
+
+fn escape_cnf(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Drop every line of the persisted-WGD block from `body`, leaving
+/// every other line intact. The block runs from the marker comment to
+/// the next blank line or EOF.
+fn strip_wgd_block(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut skipping = false;
+    for line in body.lines() {
+        if line
+            .trim_start()
+            .starts_with("# Persisted by /Worksheet Global Default Update")
+        {
+            skipping = true;
+            continue;
+        }
+        if skipping {
+            if line.trim_start().starts_with("wgd_") {
+                continue;
+            }
+            skipping = false;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Selects which screen `Mode::Stat` renders. `Worksheet` is the
+/// `/Worksheet Status` panel, `Defaults` is `/Worksheet Global Default
+/// Status`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum StatView {
+    #[default]
+    Worksheet,
+    Defaults,
+}
+
 /// `/Worksheet Global Zero` — whether numeric zero cells render blank.
 /// R3.4a also has a `Label` mode where a custom string replaces the
 /// zero; we keep the binary shape for now.
@@ -460,6 +665,13 @@ pub struct App {
     /// the terminal bell is emitted at most once per frame no matter
     /// how many times it was requested.
     beep_pending: bool,
+    /// Persisted defaults set by `/Worksheet Global Default …` and
+    /// written back to `L123.CNF` by `/Worksheet Global Default Update`.
+    defaults: GlobalDefaults,
+    /// Which payload `Mode::Stat` is currently rendering — the standard
+    /// `/Worksheet Status` panel or the `/Worksheet Global Default
+    /// Status` defaults panel.
+    stat_view: StatView,
 }
 
 /// User-visible identity shown on the startup splash. The renderer
@@ -814,6 +1026,18 @@ enum PromptNext {
     /// there. Silent no-op on parse failure (matches 1-2-3's "Esc back
     /// to READY" feel for an unrecognized address).
     Goto,
+    WgdDir,
+    WgdTemp,
+    WgdExtSave,
+    WgdExtList,
+    WgdPrinterInterface,
+    WgdPrinterMarginLeft,
+    WgdPrinterMarginRight,
+    WgdPrinterMarginTop,
+    WgdPrinterMarginBottom,
+    WgdPrinterPgLength,
+    WgdPrinterSetup,
+    WgdPrinterName,
 }
 
 /// /File Xtract sub-command: does the extracted file keep formulas,
@@ -930,8 +1154,24 @@ impl PromptNext {
             | PromptNext::PrintFileMarginTop
             | PromptNext::PrintFileMarginBottom
             | PromptNext::PrintFilePgLength => c.is_ascii_digit(),
+            PromptNext::WgdDir | PromptNext::WgdTemp => is_path_char(c),
+            PromptNext::WgdExtSave | PromptNext::WgdExtList => {
+                c.is_ascii_alphanumeric() || c == '.'
+            }
+            PromptNext::WgdPrinterInterface
+            | PromptNext::WgdPrinterMarginLeft
+            | PromptNext::WgdPrinterMarginRight
+            | PromptNext::WgdPrinterMarginTop
+            | PromptNext::WgdPrinterMarginBottom
+            | PromptNext::WgdPrinterPgLength => c.is_ascii_digit(),
+            PromptNext::WgdPrinterSetup => c != '\n' && c != '\t',
+            PromptNext::WgdPrinterName => c.is_ascii_alphanumeric() || c == '_' || c == '-',
         }
     }
+}
+
+fn parse_margin(buffer: &str, prev: u16) -> u16 {
+    buffer.parse::<u16>().unwrap_or(prev).min(1000)
 }
 
 /// Characters accepted inside a filename/path prompt. Deliberately
@@ -1432,6 +1672,8 @@ impl App {
             beep_enabled: true,
             beep_count: 0,
             beep_pending: false,
+            defaults: GlobalDefaults::default(),
+            stat_view: StatView::Worksheet,
         }
     }
 
@@ -2505,7 +2747,47 @@ impl App {
 
     fn enter_worksheet_status(&mut self) {
         self.menu = None;
+        self.stat_view = StatView::Worksheet;
         self.mode = Mode::Stat;
+    }
+
+    fn enter_defaults_status(&mut self) {
+        self.menu = None;
+        self.stat_view = StatView::Defaults;
+        self.mode = Mode::Stat;
+    }
+
+    fn start_wgd_path_prompt(&mut self, next: PromptNext, label: &str, current: String) {
+        self.menu = None;
+        let fresh = !current.is_empty();
+        self.prompt = Some(PromptState {
+            label: label.into(),
+            buffer: current,
+            next,
+            fresh,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_wgd_numeric_prompt(&mut self, next: PromptNext, label: &str, current: u32) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: label.into(),
+            buffer: current.to_string(),
+            next,
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Worksheet Global Default Update` — write the current defaults
+    /// back to the L123.CNF config file. Failure is silent so it doesn't
+    /// hijack the menu flow; the user can re-run after fixing perms.
+    fn execute_wgd_update(&mut self) {
+        if let Some(path) = crate::config::default_config_path() {
+            let _ = self.defaults.write_to_path(&path);
+        }
+        self.close_menu();
     }
 
     fn picker_is_graphical(&self) -> bool {
@@ -2788,6 +3070,109 @@ impl App {
                 // the user just told us to be quiet.
                 self.beep_pending = false;
                 self.beep_enabled = false;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultStatus => self.enter_defaults_status(),
+            Action::WorksheetGlobalDefaultUpdate => self.execute_wgd_update(),
+            Action::WorksheetGlobalDefaultDir => self.start_wgd_path_prompt(
+                PromptNext::WgdDir,
+                "Enter default directory:",
+                self.defaults.default_dir.clone(),
+            ),
+            Action::WorksheetGlobalDefaultTemp => self.start_wgd_path_prompt(
+                PromptNext::WgdTemp,
+                "Enter temporary file directory:",
+                self.defaults.temp_dir.clone(),
+            ),
+            Action::WorksheetGlobalDefaultAutoexecYes => {
+                self.defaults.autoexec = true;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultAutoexecNo => {
+                self.defaults.autoexec = false;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultExtSave => self.start_wgd_path_prompt(
+                PromptNext::WgdExtSave,
+                "Enter default save extension:",
+                self.defaults.ext_save.clone(),
+            ),
+            Action::WorksheetGlobalDefaultExtList => self.start_wgd_path_prompt(
+                PromptNext::WgdExtList,
+                "Enter default file-list extension:",
+                self.defaults.ext_list.clone(),
+            ),
+            Action::WorksheetGlobalDefaultPrinterInterface => self.start_wgd_numeric_prompt(
+                PromptNext::WgdPrinterInterface,
+                "Enter printer interface (1..9):",
+                u32::from(self.defaults.printer_interface),
+            ),
+            Action::WorksheetGlobalDefaultPrinterAutoLfYes => {
+                self.defaults.printer_autolf = true;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultPrinterAutoLfNo => {
+                self.defaults.printer_autolf = false;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultPrinterMarginLeft => self.start_wgd_numeric_prompt(
+                PromptNext::WgdPrinterMarginLeft,
+                "Enter default left margin (0..1000):",
+                u32::from(self.defaults.printer_left),
+            ),
+            Action::WorksheetGlobalDefaultPrinterMarginRight => self.start_wgd_numeric_prompt(
+                PromptNext::WgdPrinterMarginRight,
+                "Enter default right margin (0..1000):",
+                u32::from(self.defaults.printer_right),
+            ),
+            Action::WorksheetGlobalDefaultPrinterMarginTop => self.start_wgd_numeric_prompt(
+                PromptNext::WgdPrinterMarginTop,
+                "Enter default top margin (0..1000):",
+                u32::from(self.defaults.printer_top),
+            ),
+            Action::WorksheetGlobalDefaultPrinterMarginBottom => self.start_wgd_numeric_prompt(
+                PromptNext::WgdPrinterMarginBottom,
+                "Enter default bottom margin (0..1000):",
+                u32::from(self.defaults.printer_bottom),
+            ),
+            Action::WorksheetGlobalDefaultPrinterPgLength => self.start_wgd_numeric_prompt(
+                PromptNext::WgdPrinterPgLength,
+                "Enter default page length (1..1000):",
+                u32::from(self.defaults.printer_pg_length),
+            ),
+            Action::WorksheetGlobalDefaultPrinterWaitYes => {
+                self.defaults.printer_wait = true;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultPrinterWaitNo => {
+                self.defaults.printer_wait = false;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultPrinterSetup => self.start_wgd_path_prompt(
+                PromptNext::WgdPrinterSetup,
+                "Enter default printer setup string:",
+                self.defaults.printer_setup.clone(),
+            ),
+            Action::WorksheetGlobalDefaultPrinterName => self.start_wgd_path_prompt(
+                PromptNext::WgdPrinterName,
+                "Enter default printer name:",
+                self.defaults.printer_name.clone(),
+            ),
+            Action::WorksheetGlobalDefaultPrinterQuit => self.close_menu(),
+            Action::WorksheetGlobalDefaultGraphGroupColumnwise => {
+                self.defaults.graph_group = GraphGroupOrientation::Columnwise;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultGraphGroupRowwise => {
+                self.defaults.graph_group = GraphGroupOrientation::Rowwise;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultGraphSaveCgm => {
+                self.defaults.graph_save = GraphSaveFormat::Cgm;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultGraphSavePic => {
+                self.defaults.graph_save = GraphSaveFormat::Pic;
                 self.close_menu();
             }
             Action::WorksheetEraseConfirm => self.execute_worksheet_erase(),
@@ -5417,6 +5802,59 @@ impl App {
                 }
                 self.enter_print_advanced_menu();
             }
+            PromptNext::WgdDir => {
+                self.defaults.default_dir = p.buffer.trim().to_string();
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdTemp => {
+                self.defaults.temp_dir = p.buffer.trim().to_string();
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdExtSave => {
+                self.defaults.ext_save = p.buffer.trim().trim_start_matches('.').to_string();
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdExtList => {
+                self.defaults.ext_list = p.buffer.trim().trim_start_matches('.').to_string();
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdPrinterInterface => {
+                let prev = self.defaults.printer_interface;
+                let n: u8 = p.buffer.parse().unwrap_or(prev).clamp(1, 9);
+                self.defaults.printer_interface = n;
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdPrinterMarginLeft => {
+                self.defaults.printer_left = parse_margin(&p.buffer, self.defaults.printer_left);
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdPrinterMarginRight => {
+                self.defaults.printer_right = parse_margin(&p.buffer, self.defaults.printer_right);
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdPrinterMarginTop => {
+                self.defaults.printer_top = parse_margin(&p.buffer, self.defaults.printer_top);
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdPrinterMarginBottom => {
+                self.defaults.printer_bottom =
+                    parse_margin(&p.buffer, self.defaults.printer_bottom);
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdPrinterPgLength => {
+                let prev = self.defaults.printer_pg_length;
+                let n: u16 = p.buffer.parse::<u16>().unwrap_or(prev).clamp(1, 1000);
+                self.defaults.printer_pg_length = n;
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdPrinterSetup => {
+                self.defaults.printer_setup = p.buffer;
+                self.mode = Mode::Ready;
+            }
+            PromptNext::WgdPrinterName => {
+                self.defaults.printer_name = p.buffer;
+                self.mode = Mode::Ready;
+            }
         }
     }
 
@@ -6630,6 +7068,10 @@ impl App {
     }
 
     fn render_stat_overlay(&self, area: Rect, buf: &mut Buffer) {
+        if self.stat_view == StatView::Defaults {
+            self.render_defaults_overlay(area, buf);
+            return;
+        }
         // Monochrome CRT look: green-on-black, like the R3.4a status
         // page. Explicit RGB so terminals that remap their ANSI green
         // slot don't lose the effect.
@@ -6753,6 +7195,177 @@ impl App {
                     None => "(None)".to_string(),
                 }
             )),
+        ])
+        .style(text_style)
+        .render(band[2], buf);
+    }
+
+    fn render_defaults_overlay(&self, area: Rect, buf: &mut Buffer) {
+        const GREEN: Color = Color::Rgb(0, 170, 85);
+        const BLACK: Color = Color::Rgb(0, 0, 0);
+        let text_style = Style::default().bg(BLACK).fg(GREEN);
+
+        for y in 0..area.height {
+            for x in 0..area.width {
+                buf[(area.x + x, area.y + y)].set_style(Style::default().bg(BLACK));
+            }
+        }
+
+        let outer = Block::default()
+            .borders(Borders::ALL)
+            .border_style(text_style)
+            .title("Global Default Settings")
+            .title_alignment(ratatui::layout::Alignment::Center)
+            .style(text_style);
+        let outer_inner = outer.inner(area);
+        outer.render(area, buf);
+
+        let band = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(13),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ])
+            .split(outer_inner);
+
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(band[0]);
+
+        let printer = Block::default()
+            .borders(Borders::ALL)
+            .border_style(text_style)
+            .title("Printer")
+            .style(text_style);
+        let printer_inner = printer.inner(split[0]);
+        printer.render(split[0], buf);
+        let d = &self.defaults;
+        let on_off = |b: bool| if b { "Yes" } else { "No" };
+        let pad = 11;
+        Paragraph::new(vec![
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Interface:",
+                value = d.printer_interface
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "AutoLf:",
+                value = on_off(d.printer_autolf)
+            )),
+            Line::from(format!(
+                "{label:<pad$}L{} R{} T{} B{}",
+                d.printer_left,
+                d.printer_right,
+                d.printer_top,
+                d.printer_bottom,
+                label = "Margins:",
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Pg-Length:",
+                value = d.printer_pg_length
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Wait:",
+                value = on_off(d.printer_wait)
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Setup:",
+                value = if d.printer_setup.is_empty() {
+                    "(none)"
+                } else {
+                    &d.printer_setup
+                }
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Name:",
+                value = if d.printer_name.is_empty() {
+                    "(default)"
+                } else {
+                    &d.printer_name
+                }
+            )),
+        ])
+        .style(text_style)
+        .render(printer_inner, buf);
+
+        let other = Block::default()
+            .borders(Borders::ALL)
+            .border_style(text_style)
+            .title("Files & Graph")
+            .style(text_style);
+        let other_inner = other.inner(split[1]);
+        other.render(split[1], buf);
+        Paragraph::new(vec![
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Dir:",
+                value = if d.default_dir.is_empty() {
+                    "(unset)"
+                } else {
+                    &d.default_dir
+                }
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Temp:",
+                value = if d.temp_dir.is_empty() {
+                    "(unset)"
+                } else {
+                    &d.temp_dir
+                }
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Ext Save:",
+                value = if d.ext_save.is_empty() {
+                    "(unset)"
+                } else {
+                    &d.ext_save
+                }
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Ext List:",
+                value = if d.ext_list.is_empty() {
+                    "(any)"
+                } else {
+                    &d.ext_list
+                }
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Autoexec:",
+                value = on_off(d.autoexec)
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Graph Grp:",
+                value = d.graph_group.label()
+            )),
+            Line::from(format!(
+                "{label:<pad$}{value}",
+                label = "Graph Save:",
+                value = d.graph_save.label()
+            )),
+        ])
+        .style(text_style)
+        .render(other_inner, buf);
+
+        let cnf_path = crate::config::default_config_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<$HOME not set>".into());
+        Paragraph::new(vec![
+            Line::from(""),
+            Line::from(format!("Update writes: {cnf_path}")),
+            Line::from(""),
+            Line::from("Press any key to return to READY."),
         ])
         .style(text_style)
         .render(band[2], buf);
@@ -7948,6 +8561,42 @@ fn is_iterm2_compatible_env(term_program: Option<&str>, lc_terminal: Option<&str
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn wgd_update_writes_cnf_block_and_preserves_other_lines() {
+        let dir = std::env::temp_dir().join("l123_wgd_update_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("L123.CNF");
+        std::fs::write(&path, "user = \"Pre-existing\"\nlog_file = /tmp/x.log\n").unwrap();
+
+        let d = GlobalDefaults {
+            printer_interface: 5,
+            printer_pg_length: 88,
+            default_dir: "/tmp/sheets".into(),
+            autoexec: false,
+            graph_group: GraphGroupOrientation::Rowwise,
+            graph_save: GraphSaveFormat::Pic,
+            ..GlobalDefaults::default()
+        };
+        d.write_to_path(&path).unwrap();
+
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("user = \"Pre-existing\""), "{body}");
+        assert!(body.contains("log_file = /tmp/x.log"), "{body}");
+        assert!(body.contains("wgd_printer_interface = 5"), "{body}");
+        assert!(body.contains("wgd_printer_pg_length = 88"), "{body}");
+        assert!(body.contains("wgd_dir = \"/tmp/sheets\""), "{body}");
+        assert!(body.contains("wgd_autoexec = false"), "{body}");
+        assert!(body.contains("wgd_graph_group = rowwise"), "{body}");
+        assert!(body.contains("wgd_graph_save = pic"), "{body}");
+
+        // Re-running update should not duplicate the block.
+        d.write_to_path(&path).unwrap();
+        let body2 = std::fs::read_to_string(&path).unwrap();
+        let count = body2.matches("wgd_printer_interface").count();
+        assert_eq!(count, 1, "block duplicated on re-run:\n{body2}");
+    }
 
     #[test]
     fn starts_at_a1() {
