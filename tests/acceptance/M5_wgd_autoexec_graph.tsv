@@ -1,0 +1,55 @@
+# /WGD Autoexec Yes|No and /WGD Graph Group|Save toggles. Each
+# instantly returns to READY (no further prompt).
+
+SIZE 80 30
+
+# Autoexec defaults to Yes — flip it off.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY A
+ASSERT_PANEL_L2   Yes
+ASSERT_PANEL_L2   No
+KEY N
+ASSERT_MODE       READY
+
+# /WGD Graph — two-level submenu: Group → Columnwise|Rowwise,
+# Save → Cgm|Pic.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY G
+ASSERT_PANEL_L2   Group
+ASSERT_PANEL_L2   Save
+KEY G
+ASSERT_PANEL_L2   Columnwise
+ASSERT_PANEL_L2   Rowwise
+KEY R
+ASSERT_MODE       READY
+
+# Save submenu — Pic instead of the default Cgm.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY G
+KEY S
+ASSERT_PANEL_L2   Cgm
+ASSERT_PANEL_L2   Pic
+KEY P
+ASSERT_MODE       READY
+
+# /WGD Status surfaces every choice we just made.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY S
+ASSERT_SCREEN     Autoexec:
+ASSERT_SCREEN     No
+ASSERT_SCREEN     Rowwise
+ASSERT_SCREEN     Pic
+ESC
+ASSERT_MODE       READY

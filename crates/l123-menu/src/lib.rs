@@ -51,6 +51,14 @@ pub enum Action {
     WorksheetInsertSheetAfter,
     WorksheetDeleteRow,
     WorksheetDeleteColumn,
+    /// `/Worksheet Delete Sheet` — drop the worksheet at the pointer.
+    /// Sheets after it shift back one slot; refused on the last sheet.
+    WorksheetDeleteSheet,
+    /// `/Worksheet Delete File` — remove the foreground active file
+    /// from memory. When the last active file is deleted, the
+    /// workspace resets to a single blank workbook (mirrors
+    /// `/Worksheet Erase Yes`).
+    WorksheetDeleteFile,
     WorksheetColumnSetWidth,
     WorksheetColumnResetWidth,
     WorksheetColumnRangeSetWidth,
@@ -114,6 +122,68 @@ pub enum Action {
     WorksheetGlobalDefaultOtherBeepEnable,
     /// `/Worksheet Global Default Other Beep Disable`.
     WorksheetGlobalDefaultOtherBeepDisable,
+    /// `/Worksheet Global Default Other Clock Standard` — show the
+    /// date and time in the status line using the 12-hour Standard
+    /// clock format (`DD-MMM-YY HH:MM AM/PM`).
+    WorksheetGlobalDefaultOtherClockStandard,
+    /// `/Worksheet Global Default Other Clock International` — show
+    /// the date and time in the status line using the 24-hour
+    /// International format (`DD-MMM-YYYY HH:MM`).
+    WorksheetGlobalDefaultOtherClockInternational,
+    /// `/Worksheet Global Default Other Clock None` — suppress the
+    /// status-line clock entirely.
+    WorksheetGlobalDefaultOtherClockNone,
+    /// `/Worksheet Global Default Other Clock Filename` — show the
+    /// active workbook's filename in the status-line slot instead of
+    /// the clock.
+    WorksheetGlobalDefaultOtherClockFilename,
+    /// `/Worksheet Global Default Status` — full-screen overlay
+    /// showing every persisted default (printer, dirs, autoexec, ext,
+    /// graph). Read-only; any key dismisses.
+    WorksheetGlobalDefaultStatus,
+    /// `/Worksheet Global Default Update` — write the current defaults
+    /// back to the L123.CNF config file so the next session starts with
+    /// the same settings.
+    WorksheetGlobalDefaultUpdate,
+    /// `/Worksheet Global Default Dir` — prompt for the default
+    /// session directory (used at next launch).
+    WorksheetGlobalDefaultDir,
+    /// `/Worksheet Global Default Temp` — prompt for the temporary-
+    /// file directory.
+    WorksheetGlobalDefaultTemp,
+    /// `/Worksheet Global Default Autoexec Yes|No` — toggle the
+    /// auto-run-`\0`-on-retrieve behavior.
+    WorksheetGlobalDefaultAutoexecYes,
+    WorksheetGlobalDefaultAutoexecNo,
+    /// `/Worksheet Global Default Ext Save` — prompt for the default
+    /// file extension used when saving.
+    WorksheetGlobalDefaultExtSave,
+    /// `/Worksheet Global Default Ext List` — prompt for the default
+    /// file-extension filter used by /File List.
+    WorksheetGlobalDefaultExtList,
+    /// `/Worksheet Global Default Printer Interface` — numeric (1..=9)
+    /// printer-interface index.
+    WorksheetGlobalDefaultPrinterInterface,
+    WorksheetGlobalDefaultPrinterAutoLfYes,
+    WorksheetGlobalDefaultPrinterAutoLfNo,
+    WorksheetGlobalDefaultPrinterMarginLeft,
+    WorksheetGlobalDefaultPrinterMarginRight,
+    WorksheetGlobalDefaultPrinterMarginTop,
+    WorksheetGlobalDefaultPrinterMarginBottom,
+    WorksheetGlobalDefaultPrinterPgLength,
+    WorksheetGlobalDefaultPrinterWaitYes,
+    WorksheetGlobalDefaultPrinterWaitNo,
+    WorksheetGlobalDefaultPrinterSetup,
+    WorksheetGlobalDefaultPrinterName,
+    WorksheetGlobalDefaultPrinterQuit,
+    /// `/Worksheet Global Default Graph Group Columnwise|Rowwise` —
+    /// default orientation used by /Graph Group auto-graph.
+    WorksheetGlobalDefaultGraphGroupColumnwise,
+    WorksheetGlobalDefaultGraphGroupRowwise,
+    /// `/Worksheet Global Default Graph Save Cgm|Pic` — default file
+    /// type written by /Graph Save when no extension is supplied.
+    WorksheetGlobalDefaultGraphSaveCgm,
+    WorksheetGlobalDefaultGraphSavePic,
     RangeErase,
     RangeLabelLeft,
     RangeLabelRight,
@@ -376,13 +446,13 @@ const WS_DELETE_MENU: &[MenuItem] = &[
         letter: 'S',
         name: "Sheet",
         help: "Delete one or more worksheets",
-        body: MenuBody::NotImplemented("ws-delete-sheet"),
+        body: MenuBody::Action(Action::WorksheetDeleteSheet),
     },
     MenuItem {
         letter: 'F',
         name: "File",
         help: "Remove the current file from memory",
-        body: MenuBody::NotImplemented("ws-delete-file"),
+        body: MenuBody::Action(Action::WorksheetDeleteFile),
     },
 ];
 
@@ -548,6 +618,33 @@ const WG_DEFAULT_OTHER_BEEP_MENU: &[MenuItem] = &[
     },
 ];
 
+const WG_DEFAULT_OTHER_CLOCK_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'S',
+        name: "Standard",
+        help: "12-hour clock (DD-MMM-YY HH:MM AM/PM)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockStandard),
+    },
+    MenuItem {
+        letter: 'I',
+        name: "International",
+        help: "24-hour clock (DD-MMM-YYYY HH:MM)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockInternational),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "None",
+        help: "Suppress the status-line clock",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockNone),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Filename",
+        help: "Show the active workbook's filename instead of a clock",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockFilename),
+    },
+];
+
 const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'I',
@@ -565,7 +662,7 @@ const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
         letter: 'C',
         name: "Clock",
         help: "Clock display: Standard / International / None / Filename",
-        body: MenuBody::NotImplemented("wgdo-clock"),
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_CLOCK_MENU),
     },
     MenuItem {
         letter: 'U',
@@ -593,30 +690,204 @@ const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
     },
 ];
 
+const WG_DEFAULT_PRINTER_AUTOLF_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'Y',
+        name: "Yes",
+        help: "Send a line-feed after every carriage return",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterAutoLfYes),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "No",
+        help: "Do not auto-feed after a carriage return",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterAutoLfNo),
+    },
+];
+
+const WG_DEFAULT_PRINTER_WAIT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'Y',
+        name: "Yes",
+        help: "Pause between pages so single-sheet feeders can be loaded",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterWaitYes),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "No",
+        help: "Print without pausing between pages",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterWaitNo),
+    },
+];
+
+const WG_DEFAULT_PRINTER_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'I',
+        name: "Interface",
+        help: "Printer interface number (1..9)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterInterface),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "AutoLf",
+        help: "Auto line-feed after carriage return",
+        body: MenuBody::Submenu(WG_DEFAULT_PRINTER_AUTOLF_MENU),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Left",
+        help: "Default left margin",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterMarginLeft),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Right",
+        help: "Default right margin",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterMarginRight),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Top",
+        help: "Default top margin",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterMarginTop),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "Bottom",
+        help: "Default bottom margin",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterMarginBottom),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Pg-Length",
+        help: "Default page length",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterPgLength),
+    },
+    MenuItem {
+        letter: 'W',
+        name: "Wait",
+        help: "Pause between pages",
+        body: MenuBody::Submenu(WG_DEFAULT_PRINTER_WAIT_MENU),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Setup",
+        help: "Default printer setup string",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterSetup),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Name",
+        help: "Default printer queue name",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterName),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to the Default menu",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultPrinterQuit),
+    },
+];
+
+const WG_DEFAULT_AUTOEXEC_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'Y',
+        name: "Yes",
+        help: "Run \\0 macro automatically when retrieving a file",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultAutoexecYes),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "No",
+        help: "Do not run \\0 macro on retrieve",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultAutoexecNo),
+    },
+];
+
+const WG_DEFAULT_EXT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'S',
+        name: "Save",
+        help: "Default extension applied when saving",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultExtSave),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "List",
+        help: "Default extension filter for /File List & /File Retrieve",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultExtList),
+    },
+];
+
+const WG_DEFAULT_GRAPH_GROUP_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Columnwise",
+        help: "Auto-graph reads ranges columnwise",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultGraphGroupColumnwise),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Rowwise",
+        help: "Auto-graph reads ranges rowwise",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultGraphGroupRowwise),
+    },
+];
+
+const WG_DEFAULT_GRAPH_SAVE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Cgm",
+        help: "Default /Graph Save format: CGM",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultGraphSaveCgm),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Pic",
+        help: "Default /Graph Save format: PIC",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultGraphSavePic),
+    },
+];
+
+const WG_DEFAULT_GRAPH_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'G',
+        name: "Group",
+        help: "Default auto-graph orientation (Columnwise/Rowwise)",
+        body: MenuBody::Submenu(WG_DEFAULT_GRAPH_GROUP_MENU),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Save",
+        help: "Default /Graph Save format (Cgm/Pic)",
+        body: MenuBody::Submenu(WG_DEFAULT_GRAPH_SAVE_MENU),
+    },
+];
+
 const WG_DEFAULT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'P',
         name: "Printer",
         help: "Default printer settings",
-        body: MenuBody::NotImplemented("wgd-printer"),
+        body: MenuBody::Submenu(WG_DEFAULT_PRINTER_MENU),
     },
     MenuItem {
         letter: 'D',
         name: "Dir",
         help: "Default directory",
-        body: MenuBody::NotImplemented("wgd-dir"),
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultDir),
     },
     MenuItem {
         letter: 'S',
         name: "Status",
         help: "Display global default settings",
-        body: MenuBody::NotImplemented("wgd-status"),
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultStatus),
     },
     MenuItem {
         letter: 'U',
         name: "Update",
         help: "Persist defaults to the config file",
-        body: MenuBody::NotImplemented("wgd-update"),
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultUpdate),
     },
     MenuItem {
         letter: 'O',
@@ -628,25 +899,25 @@ const WG_DEFAULT_MENU: &[MenuItem] = &[
         letter: 'A',
         name: "Autoexec",
         help: "Run autoexec macro (\\0) on file retrieve",
-        body: MenuBody::NotImplemented("wgd-autoexec"),
+        body: MenuBody::Submenu(WG_DEFAULT_AUTOEXEC_MENU),
     },
     MenuItem {
         letter: 'E',
         name: "Ext",
         help: "Default file extensions",
-        body: MenuBody::NotImplemented("wgd-ext"),
+        body: MenuBody::Submenu(WG_DEFAULT_EXT_MENU),
     },
     MenuItem {
         letter: 'G',
         name: "Graph",
         help: "Default graph settings",
-        body: MenuBody::NotImplemented("wgd-graph"),
+        body: MenuBody::Submenu(WG_DEFAULT_GRAPH_MENU),
     },
     MenuItem {
         letter: 'T',
         name: "Temp",
         help: "Temporary file directory",
-        body: MenuBody::NotImplemented("wgd-temp"),
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultTemp),
     },
 ];
 
@@ -2246,6 +2517,157 @@ mod tests {
             d.body,
             MenuBody::Action(Action::WorksheetGlobalDefaultOtherUndoDisable)
         ));
+    }
+
+    #[test]
+    fn resolve_wgdo_clock_leaves() {
+        let s = resolve(&['W', 'G', 'D', 'O', 'C', 'S']).unwrap();
+        assert!(matches!(
+            s.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockStandard)
+        ));
+        let i = resolve(&['W', 'G', 'D', 'O', 'C', 'I']).unwrap();
+        assert!(matches!(
+            i.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockInternational)
+        ));
+        let n = resolve(&['W', 'G', 'D', 'O', 'C', 'N']).unwrap();
+        assert!(matches!(
+            n.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockNone)
+        ));
+        let f = resolve(&['W', 'G', 'D', 'O', 'C', 'F']).unwrap();
+        assert!(matches!(
+            f.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockFilename)
+        ));
+    }
+
+    #[test]
+    fn resolve_wgd_status_update_dir_temp() {
+        for (path, expected) in [
+            (
+                &['W', 'G', 'D', 'S'][..],
+                Action::WorksheetGlobalDefaultStatus,
+            ),
+            (&['W', 'G', 'D', 'U'], Action::WorksheetGlobalDefaultUpdate),
+            (&['W', 'G', 'D', 'D'], Action::WorksheetGlobalDefaultDir),
+            (&['W', 'G', 'D', 'T'], Action::WorksheetGlobalDefaultTemp),
+        ] {
+            let n = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match n.body {
+                MenuBody::Action(a) => assert_eq!(a, expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_wgd_autoexec_ext_graph_branches() {
+        for (path, expected) in [
+            (
+                &['W', 'G', 'D', 'A', 'Y'][..],
+                Action::WorksheetGlobalDefaultAutoexecYes,
+            ),
+            (
+                &['W', 'G', 'D', 'A', 'N'],
+                Action::WorksheetGlobalDefaultAutoexecNo,
+            ),
+            (
+                &['W', 'G', 'D', 'E', 'S'],
+                Action::WorksheetGlobalDefaultExtSave,
+            ),
+            (
+                &['W', 'G', 'D', 'E', 'L'],
+                Action::WorksheetGlobalDefaultExtList,
+            ),
+            (
+                &['W', 'G', 'D', 'G', 'G', 'C'],
+                Action::WorksheetGlobalDefaultGraphGroupColumnwise,
+            ),
+            (
+                &['W', 'G', 'D', 'G', 'G', 'R'],
+                Action::WorksheetGlobalDefaultGraphGroupRowwise,
+            ),
+            (
+                &['W', 'G', 'D', 'G', 'S', 'C'],
+                Action::WorksheetGlobalDefaultGraphSaveCgm,
+            ),
+            (
+                &['W', 'G', 'D', 'G', 'S', 'P'],
+                Action::WorksheetGlobalDefaultGraphSavePic,
+            ),
+        ] {
+            let n = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match n.body {
+                MenuBody::Action(a) => assert_eq!(a, expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_wgd_printer_branches() {
+        for (path, expected) in [
+            (
+                &['W', 'G', 'D', 'P', 'I'][..],
+                Action::WorksheetGlobalDefaultPrinterInterface,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'A', 'Y'],
+                Action::WorksheetGlobalDefaultPrinterAutoLfYes,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'A', 'N'],
+                Action::WorksheetGlobalDefaultPrinterAutoLfNo,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'L'],
+                Action::WorksheetGlobalDefaultPrinterMarginLeft,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'R'],
+                Action::WorksheetGlobalDefaultPrinterMarginRight,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'T'],
+                Action::WorksheetGlobalDefaultPrinterMarginTop,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'B'],
+                Action::WorksheetGlobalDefaultPrinterMarginBottom,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'P'],
+                Action::WorksheetGlobalDefaultPrinterPgLength,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'W', 'Y'],
+                Action::WorksheetGlobalDefaultPrinterWaitYes,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'W', 'N'],
+                Action::WorksheetGlobalDefaultPrinterWaitNo,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'S'],
+                Action::WorksheetGlobalDefaultPrinterSetup,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'N'],
+                Action::WorksheetGlobalDefaultPrinterName,
+            ),
+            (
+                &['W', 'G', 'D', 'P', 'Q'],
+                Action::WorksheetGlobalDefaultPrinterQuit,
+            ),
+        ] {
+            let n = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match n.body {
+                MenuBody::Action(a) => assert_eq!(a, expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
     }
 
     #[test]
