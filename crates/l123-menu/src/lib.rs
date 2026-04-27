@@ -1482,13 +1482,213 @@ const FILE_IMPORT_MENU: &[MenuItem] = &[
         letter: 'T',
         name: "Text",
         help: "Import each line as a label in one column",
-        body: MenuBody::NotImplemented("f-import-text"),
+        body: MenuBody::Action(Action::FileImportText),
     },
     MenuItem {
         letter: 'N',
         name: "Numbers",
         help: "Parse CSV: numeric tokens as values, quoted strings as labels",
         body: MenuBody::Action(Action::FileImportNumbers),
+    },
+];
+
+const FILE_COMBINE_RANGE_KIND_HELP_COPY: &str = "Combine source by overwriting target cells";
+const FILE_COMBINE_RANGE_KIND_HELP_ADD: &str = "Combine source by adding to target cells";
+const FILE_COMBINE_RANGE_KIND_HELP_SUBTRACT: &str =
+    "Combine source by subtracting from target cells";
+
+const FILE_COMBINE_COPY_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Entire-File",
+        help: FILE_COMBINE_RANGE_KIND_HELP_COPY,
+        body: MenuBody::Action(Action::FileCombineCopyEntire),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Named/Specified-Range",
+        help: "Combine a source range like A1..C5 by overwriting target cells",
+        body: MenuBody::Action(Action::FileCombineCopyNamed),
+    },
+];
+
+const FILE_COMBINE_ADD_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Entire-File",
+        help: FILE_COMBINE_RANGE_KIND_HELP_ADD,
+        body: MenuBody::Action(Action::FileCombineAddEntire),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Named/Specified-Range",
+        help: "Combine a source range like A1..C5 by adding to target cells",
+        body: MenuBody::Action(Action::FileCombineAddNamed),
+    },
+];
+
+const FILE_COMBINE_SUBTRACT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Entire-File",
+        help: FILE_COMBINE_RANGE_KIND_HELP_SUBTRACT,
+        body: MenuBody::Action(Action::FileCombineSubtractEntire),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Named/Specified-Range",
+        help: "Combine a source range like A1..C5 by subtracting from target cells",
+        body: MenuBody::Action(Action::FileCombineSubtractNamed),
+    },
+];
+
+const FILE_COMBINE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Copy",
+        help: "Overwrite the target cells with the source",
+        body: MenuBody::Submenu(FILE_COMBINE_COPY_MENU),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Add",
+        help: "Add the source values to the target cells",
+        body: MenuBody::Submenu(FILE_COMBINE_ADD_MENU),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Subtract",
+        help: "Subtract the source values from the target cells",
+        body: MenuBody::Submenu(FILE_COMBINE_SUBTRACT_MENU),
+    },
+];
+
+const FILE_ERASE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'W',
+        name: "Worksheet",
+        help: "Delete a worksheet file (.xlsx, .wk*) from disk",
+        body: MenuBody::Action(Action::FileEraseWorksheet),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Print",
+        help: "Delete a print-settings file from disk",
+        body: MenuBody::Action(Action::FileErasePrint),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Graph",
+        help: "Delete a graph file from disk",
+        body: MenuBody::Action(Action::FileEraseGraph),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "Delete any file from disk",
+        body: MenuBody::Action(Action::FileEraseOther),
+    },
+];
+
+const FILE_ADMIN_RESERVATION_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'G',
+        name: "Get",
+        help: "Acquire the file's reservation for editing",
+        body: MenuBody::NotImplemented("f-admin-reservation-get"),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Release",
+        help: "Release the file's reservation",
+        body: MenuBody::NotImplemented("f-admin-reservation-release"),
+    },
+];
+
+const FILE_ADMIN_SEAL_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'F',
+        name: "File",
+        help: "Seal the file with a password",
+        body: MenuBody::NotImplemented("f-admin-seal-file"),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reservation-Setting",
+        help: "Seal the reservation behavior of this file",
+        body: MenuBody::NotImplemented("f-admin-seal-reservation-setting"),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Disable",
+        help: "Disable an existing seal (requires the seal password)",
+        body: MenuBody::NotImplemented("f-admin-seal-disable"),
+    },
+];
+
+const FILE_ADMIN_TABLE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'W',
+        name: "Worksheet",
+        help: "Build a table of worksheet files in the session directory",
+        body: MenuBody::NotImplemented("f-admin-table-worksheet"),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Print",
+        help: "Build a table of print-settings files",
+        body: MenuBody::NotImplemented("f-admin-table-print"),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Graph",
+        help: "Build a table of graph files",
+        body: MenuBody::NotImplemented("f-admin-table-graph"),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "Build a table of any file type",
+        body: MenuBody::NotImplemented("f-admin-table-other"),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Active",
+        help: "Build a table of currently active files",
+        body: MenuBody::NotImplemented("f-admin-table-active"),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Linked",
+        help: "Build a table of files linked via formula references",
+        body: MenuBody::NotImplemented("f-admin-table-linked"),
+    },
+];
+
+const FILE_ADMIN_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'R',
+        name: "Reservation",
+        help: "Get or release the file's edit reservation",
+        body: MenuBody::Submenu(FILE_ADMIN_RESERVATION_MENU),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Seal",
+        help: "Seal the file or its reservation setting with a password",
+        body: MenuBody::Submenu(FILE_ADMIN_SEAL_MENU),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Table",
+        help: "Build a table of files of a given type",
+        body: MenuBody::Submenu(FILE_ADMIN_TABLE_MENU),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Link-Refresh",
+        help: "Refresh formulas that reference linked files",
+        body: MenuBody::NotImplemented("f-admin-link-refresh"),
     },
 ];
 
@@ -1524,7 +1724,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'C',
         name: "Combine",
         help: "Merge a file into the current one",
-        body: MenuBody::NotImplemented("f-combine"),
+        body: MenuBody::Submenu(FILE_COMBINE_MENU),
     },
     MenuItem {
         letter: 'X',
@@ -1536,7 +1736,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'E',
         name: "Erase",
         help: "Delete a file on disk",
-        body: MenuBody::NotImplemented("f-erase"),
+        body: MenuBody::Submenu(FILE_ERASE_MENU),
     },
     MenuItem {
         letter: 'L',
