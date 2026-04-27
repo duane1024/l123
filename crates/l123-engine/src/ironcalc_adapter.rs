@@ -607,19 +607,25 @@ fn to_ic_fill(f: Fill) -> ironcalc_xlsx::base::types::Fill {
 /// Translate an IronCalc `Fill` back to L123's `Fill`.  Collapses every
 /// non-`none` pattern to `Solid` (Excel's ~18 patterns can't render
 /// in a terminal cell; v1 drops the hatch and keeps the color).
-/// Reads `bg_color` first, falls back to `fg_color` so xlsx files
-/// authored by other tools (which *do* follow the Excel spec and put
-/// the solid color in `fg_color`) still render.  Unknown hex is
-/// silently dropped so a corrupt xlsx doesn't panic the load path.
+///
+/// Reads `fg_color` first per the xlsx spec — `<fgColor>` is where the
+/// visible solid-fill color lives.  Falls back to `bg_color` for files
+/// our own writer produced (it puts the color in `bg_color` because
+/// IronCalc's serializer ignores `fg_color` for solids).  Reading bg
+/// first would be wrong for Excel-authored files: Excel commonly
+/// emits `<bgColor indexed="64"/>` which IronCalc's indexed table
+/// resolves to "#000000", collapsing every imported fill to black.
+/// Unknown hex is silently dropped so a corrupt xlsx doesn't panic
+/// the load path.
 fn from_ic_fill(f: &ironcalc_xlsx::base::types::Fill) -> Fill {
     match f.pattern_type.as_str() {
         "none" | "" => Fill::DEFAULT,
         _ => {
             let color = f
-                .bg_color
+                .fg_color
                 .as_deref()
                 .and_then(RgbColor::from_hex)
-                .or_else(|| f.fg_color.as_deref().and_then(RgbColor::from_hex));
+                .or_else(|| f.bg_color.as_deref().and_then(RgbColor::from_hex));
             Fill {
                 pattern: FillPattern::Solid,
                 bg: color,
@@ -2659,6 +2665,33 @@ mod tests {
                 pattern: FillPattern::Solid,
                 bg: Some(red)
             })
+        );
+    }
+
+    #[test]
+    fn from_ic_fill_excel_authored_solid_prefers_fg_over_bg() {
+        // Excel writes solid-fill color in <fgColor/>, while <bgColor/>
+        // is typically the system "automatic" indexed=64 — which
+        // IronCalc helpfully resolves to "#000000" because the indexed
+        // table starts at black.  If our reader prefers bg_color, every
+        // Excel-authored fill collapses to black.  Verify we read the
+        // visible color out of fg_color first.
+        use l123_core::{Fill, FillPattern, RgbColor};
+        let ic_fill = ironcalc_xlsx::base::types::Fill {
+            pattern_type: "solid".to_string(),
+            fg_color: Some("#FF0000".to_string()),
+            bg_color: Some("#000000".to_string()),
+        };
+        assert_eq!(
+            from_ic_fill(&ic_fill),
+            Fill {
+                pattern: FillPattern::Solid,
+                bg: Some(RgbColor {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                }),
+            }
         );
     }
 

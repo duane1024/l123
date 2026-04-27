@@ -1,0 +1,37 @@
+# :Worksheet Column-Width Set/Reset — the WYSIWYG colon-menu alias for
+# /Worksheet Column Set-Width and Reset-Width. R3.4a promoted WYSIWYG to
+# always-on; the same column-width state drives both the classic `[Wn]`
+# tag on control panel line 1 and the WYSIWYG path.
+
+ASSERT_POINTER    A:A1
+KEYS 42
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) 42
+
+# :WCS opens the width prompt, seeded with the current width.
+KEY :
+KEY W
+KEY C
+KEY S
+ASSERT_PANEL_L3   column width
+ASSERT_PANEL_L2   9
+
+# Type new width 15 and Enter.
+KEY 1
+KEY 5
+ENTER
+
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (G) [W15] 42
+
+# :WCR resets the current column back to default — the tag vanishes.
+KEY :
+KEY W
+KEY C
+KEY R
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (G) 42
+
+# Undo restores the previous [W15] width.
+ALT_F 4
+ASSERT_PANEL_L1   A:A1: (G) [W15] 42
