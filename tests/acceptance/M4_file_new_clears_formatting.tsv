@@ -1,0 +1,45 @@
+# /File New must clear cell formatting (background fills, etc.) carried
+# over from a previously imported xlsx, not just the cell values.
+# Regression: after importing fill.xlsx and running /FNA, A1..C1's red
+# / green / blue background fills lingered on the empty grid.
+
+SIZE 120 25
+
+# Load the fill fixture: A1=red bg FF0000, B1=green bg 00C800,
+# C1=blue bg 3366CC.
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/fill.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Sanity: move pointer off A1 so its fill is exposed, confirm the
+# fills are present before /File New.
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER   A:E1
+ASSERT_CELL_BG   A:A1  FF0000
+ASSERT_CELL_BG   A:B1  00C800
+ASSERT_CELL_BG   A:C1  3366CC
+
+# /File New After — wipe the active file.
+KEY /
+KEY F
+KEY N
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  After
+KEY A
+ASSERT_MODE      READY
+ASSERT_POINTER   A:A1
+
+# Move pointer off A1 again so we can observe its background, then
+# verify every previously-filled cell is now bare.
+RIGHT
+ASSERT_CELL_BG   A:A1  none
+ASSERT_CELL_BG   A:B1  none
+ASSERT_CELL_BG   A:C1  none

@@ -427,6 +427,37 @@ pub enum Action {
     FormatUnderlineClear,
     /// `:Format Reset` — clear bold + italic + underline on a range.
     FormatReset,
+    /// `:Format Alignment Left` — left-align text in a range.
+    FormatAlignmentLeft,
+    /// `:Format Alignment Right` — right-align text in a range.
+    FormatAlignmentRight,
+    /// `:Format Alignment Center` — center text in a range.
+    FormatAlignmentCenter,
+    /// `:Format Alignment General` — clear the alignment override so
+    /// the cell falls back to 1-2-3's default (label-prefix for
+    /// labels, right for numbers).
+    FormatAlignmentGeneral,
+    /// `:Format Color Background <color>` — paint the cell background.
+    FormatColorBgBlack,
+    FormatColorBgWhite,
+    FormatColorBgRed,
+    FormatColorBgGreen,
+    FormatColorBgBlue,
+    FormatColorBgYellow,
+    FormatColorBgCyan,
+    FormatColorBgMagenta,
+    /// `:Format Color Text <color>` — tint the cell foreground.
+    FormatColorTextBlack,
+    FormatColorTextWhite,
+    FormatColorTextRed,
+    FormatColorTextGreen,
+    FormatColorTextBlue,
+    FormatColorTextYellow,
+    FormatColorTextCyan,
+    FormatColorTextMagenta,
+    /// `:Format Color Reset` — strip both background fill and font
+    /// color from a range.
+    FormatColorReset,
     /// `:Display Mode Color` — paper-look default cell background.
     DisplayModeColor,
     /// `:Display Mode B&W` — strip default cell color (terminal default).
@@ -2715,6 +2746,156 @@ const WYSIWYG_FORMAT_UNDERLINE_MENU: &[MenuItem] = &[
     },
 ];
 
+const WYSIWYG_FORMAT_COLOR_BG_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Black",
+        help: "Paint the background black",
+        body: MenuBody::Action(Action::FormatColorBgBlack),
+    },
+    MenuItem {
+        letter: 'W',
+        name: "White",
+        help: "Paint the background white",
+        body: MenuBody::Action(Action::FormatColorBgWhite),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Red",
+        help: "Paint the background red",
+        body: MenuBody::Action(Action::FormatColorBgRed),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Green",
+        help: "Paint the background green",
+        body: MenuBody::Action(Action::FormatColorBgGreen),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Blue",
+        help: "Paint the background blue",
+        body: MenuBody::Action(Action::FormatColorBgBlue),
+    },
+    MenuItem {
+        letter: 'Y',
+        name: "Yellow",
+        help: "Paint the background yellow",
+        body: MenuBody::Action(Action::FormatColorBgYellow),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Cyan",
+        help: "Paint the background cyan",
+        body: MenuBody::Action(Action::FormatColorBgCyan),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Magenta",
+        help: "Paint the background magenta",
+        body: MenuBody::Action(Action::FormatColorBgMagenta),
+    },
+];
+
+const WYSIWYG_FORMAT_COLOR_TEXT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Black",
+        help: "Tint the text black",
+        body: MenuBody::Action(Action::FormatColorTextBlack),
+    },
+    MenuItem {
+        letter: 'W',
+        name: "White",
+        help: "Tint the text white",
+        body: MenuBody::Action(Action::FormatColorTextWhite),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Red",
+        help: "Tint the text red",
+        body: MenuBody::Action(Action::FormatColorTextRed),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Green",
+        help: "Tint the text green",
+        body: MenuBody::Action(Action::FormatColorTextGreen),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Blue",
+        help: "Tint the text blue",
+        body: MenuBody::Action(Action::FormatColorTextBlue),
+    },
+    MenuItem {
+        letter: 'Y',
+        name: "Yellow",
+        help: "Tint the text yellow",
+        body: MenuBody::Action(Action::FormatColorTextYellow),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Cyan",
+        help: "Tint the text cyan",
+        body: MenuBody::Action(Action::FormatColorTextCyan),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Magenta",
+        help: "Tint the text magenta",
+        body: MenuBody::Action(Action::FormatColorTextMagenta),
+    },
+];
+
+const WYSIWYG_FORMAT_COLOR_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Background",
+        help: "Pick a background color for a range",
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_COLOR_BG_MENU),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Text",
+        help: "Pick a text color for a range",
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_COLOR_TEXT_MENU),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Clear background and text colors on a range",
+        body: MenuBody::Action(Action::FormatColorReset),
+    },
+];
+
+const WYSIWYG_FORMAT_ALIGNMENT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'L',
+        name: "Left",
+        help: "Left-align cell contents in a range",
+        body: MenuBody::Action(Action::FormatAlignmentLeft),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Right",
+        help: "Right-align cell contents in a range",
+        body: MenuBody::Action(Action::FormatAlignmentRight),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Center",
+        help: "Center cell contents in a range",
+        body: MenuBody::Action(Action::FormatAlignmentCenter),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "General",
+        help: "Clear the alignment override (labels left, numbers right)",
+        body: MenuBody::Action(Action::FormatAlignmentGeneral),
+    },
+];
+
 const WYSIWYG_FORMAT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'B',
@@ -2750,13 +2931,13 @@ const WYSIWYG_FORMAT_MENU: &[MenuItem] = &[
         letter: 'C',
         name: "Color",
         help: "Change text or background color",
-        body: MenuBody::NotImplemented("wysiwyg-format-color"),
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_COLOR_MENU),
     },
     MenuItem {
         letter: 'A',
         name: "Alignment",
         help: "Change alignment",
-        body: MenuBody::NotImplemented("wysiwyg-format-alignment"),
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_ALIGNMENT_MENU),
     },
     MenuItem {
         letter: 'R',
