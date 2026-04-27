@@ -351,14 +351,23 @@ Bold  Italic  Underline  Font  Lines  Color  Alignment  Reset  Quit
 - **Underline** → Set | Clear   **[MVP]**
 - **Font**   **[STR]**
 - **Lines**   **[STR]**
-- **Color**   **[STR]**
-- **Alignment**   **[STR]**
+- **Color** → Background | Text | Reset   **[MVP]**
+- **Alignment** → Left | Right | Center | General   **[MVP]**
 - **Reset** — clear bold + italic + underline on the selected range   **[MVP]**
 - **Quit** — return to READY
 
 Each of Bold / Italic / Underline takes a POINT range:
 `:FBS` applies bold, `:FBC` removes it.  Multiple attributes compose
 on a single cell (so `:FBS` then `:FIS` produces `{Bold Italic}`).
+
+`:Format Alignment` overrides the per-cell horizontal alignment
+(label-prefix for labels, right-align for numbers); `General` removes
+the override.
+
+`:Format Color Background` and `:Format Color Text` each open the
+8-color palette `Black | White | Red | Green | bLue | Yellow | Cyan |
+Magenta` (B / W / R / G / L / Y / C / M).  `:Format Color Reset`
+strips both background fill and text color from the selected range.
 
 ---
 

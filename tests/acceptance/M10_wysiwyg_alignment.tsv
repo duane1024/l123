@@ -1,0 +1,79 @@
+# WYSIWYG `:Format Alignment` — Left/Right/Center/General over a range,
+# entered via the colon-menu (R3.4a WYSIWYG), POINT-committed.
+#
+# Layout: A1 "X", B1 12, C1 "Y".  Each column is 9 chars wide.
+# B1 is a number → default right-align ("       12").
+# A1/C1 are labels → default left-align (X..., Y...).
+# Pointer is parked away from B1 so we read its raw paint, not the
+# REVERSED highlight.
+
+KEYS X
+ENTER
+RIGHT
+KEYS 12
+ENTER
+RIGHT
+KEYS Y
+ENTER
+HOME
+
+# Default right-align places "12" flush at B1's right edge: zero
+# spaces between "12" and the "Y" at C1's left edge.
+ASSERT_SCREEN     12Y
+
+# `:Format Alignment Left` over B1 — number jumps to the left edge of
+# its 9-char column, leaving 7 spaces before "Y".
+KEY :
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Worksheet
+KEY F
+ASSERT_PANEL_L2   Alignment
+KEY A
+ASSERT_PANEL_L2   Left
+KEY L
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   alignment
+RIGHT
+ENTER
+ASSERT_MODE       READY
+ASSERT_SCREEN     X        12       Y
+
+# `:Format Alignment Center` over B1 — for "12" in a 9-wide column
+# `center_pad` produces 3 leading + 4 trailing spaces, so the row reads
+# "X        " + "   12    " + "Y..." → "12" sits 4 spaces away from Y.
+HOME
+KEY :
+KEY F
+KEY A
+KEY C
+ASSERT_MODE       POINT
+RIGHT
+ENTER
+ASSERT_MODE       READY
+ASSERT_SCREEN     12    Y
+
+# `:Format Alignment Right` over B1 — back to flush against Y.
+HOME
+KEY :
+KEY F
+KEY A
+KEY R
+ASSERT_MODE       POINT
+RIGHT
+ENTER
+ASSERT_MODE       READY
+ASSERT_SCREEN     12Y
+
+# `:Format Alignment General` over B1 — clears the override so the
+# cell falls back to the number-default right-align (still flush
+# against Y).
+HOME
+KEY :
+KEY F
+KEY A
+KEY G
+ASSERT_MODE       POINT
+RIGHT
+ENTER
+ASSERT_MODE       READY
+ASSERT_SCREEN     12Y

@@ -69,6 +69,34 @@ const COMMENT_MARKER: char = '\'';
 /// getting shoved off-screen on an 80-column terminal.
 const STATUS_SHEET_NAME_MAX: usize = 20;
 
+/// 8-color palette for `:Format Color`. Matches the classic 1-2-3 R3
+/// WYSIWYG palette plus xlsx_fill.tsv's green (00C800) for parity with
+/// the existing fixture.
+const PALETTE_BLACK: RgbColor = RgbColor { r: 0, g: 0, b: 0 };
+const PALETTE_WHITE: RgbColor = RgbColor {
+    r: 255,
+    g: 255,
+    b: 255,
+};
+const PALETTE_RED: RgbColor = RgbColor { r: 255, g: 0, b: 0 };
+const PALETTE_GREEN: RgbColor = RgbColor { r: 0, g: 200, b: 0 };
+const PALETTE_BLUE: RgbColor = RgbColor { r: 0, g: 0, b: 255 };
+const PALETTE_YELLOW: RgbColor = RgbColor {
+    r: 255,
+    g: 255,
+    b: 0,
+};
+const PALETTE_CYAN: RgbColor = RgbColor {
+    r: 0,
+    g: 255,
+    b: 255,
+};
+const PALETTE_MAGENTA: RgbColor = RgbColor {
+    r: 255,
+    g: 0,
+    b: 255,
+};
+
 /// Build a `ParseConfig` from the workbook's current `International`
 /// for handing to `l123_parse::to_engine_source_with_config`. Argument
 /// separator and decimal point come from the punctuation table.
@@ -990,6 +1018,18 @@ enum JournalEntry {
     RangeTextStyle {
         entries: Vec<(Address, Option<TextStyle>)>,
     },
+    /// Restore per-cell alignment overrides after `:Format Alignment
+    /// Left|Right|Center|General`.  `None` = no override before.
+    RangeAlignment {
+        entries: Vec<(Address, Option<Alignment>)>,
+    },
+    /// Restore per-cell fill and font-color overrides after `:Format
+    /// Color Background|Text <color>` or `:Format Color Reset`. Each
+    /// entry carries the prior fill *and* font style, since Reset
+    /// touches both channels.
+    RangeColor {
+        entries: Vec<(Address, Option<Fill>, Option<FontStyle>)>,
+    },
     /// Restore one column's width. `prev_width = None` means the
     /// column had no override (default width).
     ColWidth {
@@ -1864,6 +1904,15 @@ struct PointState {
     typed: String,
 }
 
+/// Which channel `:Format Color` is touching: cell background fill,
+/// font foreground color, or both (Reset).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ColorTarget {
+    Background,
+    Text,
+    Both,
+}
+
 /// Commands in progress that are waiting on one more POINT selection.
 #[derive(Debug, Clone, Copy)]
 enum PendingCommand {
@@ -1889,6 +1938,20 @@ enum PendingCommand {
     RangeTextStyle {
         bits: TextStyle,
         set: bool,
+    },
+    /// `:Format Alignment Left|Right|Center|General`. `General` is
+    /// represented as `HAlign::General` and clears any per-cell
+    /// override; other variants overwrite the horizontal alignment
+    /// while preserving vertical and wrap.
+    RangeAlignment {
+        halign: HAlign,
+    },
+    /// `:Format Color Background|Text <color>` and `:Format Color
+    /// Reset`. `target` selects which channel(s) to touch; `color`
+    /// is `None` for a Reset-style clear.
+    RangeColor {
+        target: ColorTarget,
+        color: Option<RgbColor>,
     },
     /// `pending_name` on App carries the name; on commit, define it over
     /// the selected range.
@@ -1947,6 +2010,8 @@ impl PendingCommand {
             PendingCommand::RangeLabel { .. } => "Enter range for label-prefix change:",
             PendingCommand::RangeFormat { .. } => "Enter range to format:",
             PendingCommand::RangeTextStyle { .. } => "Enter range for style:",
+            PendingCommand::RangeAlignment { .. } => "Enter range for alignment:",
+            PendingCommand::RangeColor { .. } => "Enter range for color:",
             PendingCommand::RangeNameCreate => "Enter range for the named range:",
             PendingCommand::FileXtractRange { .. } => "Enter range to extract:",
             PendingCommand::PrintFileRange => "Enter range to print:",
@@ -3063,6 +3128,38 @@ impl App {
                     }
                 }
             }
+            JournalEntry::RangeAlignment { entries } => {
+                for (addr, prev) in entries {
+                    match prev {
+                        Some(a) => {
+                            self.wb_mut().cell_alignments.insert(addr, a);
+                        }
+                        None => {
+                            self.wb_mut().cell_alignments.remove(&addr);
+                        }
+                    }
+                }
+            }
+            JournalEntry::RangeColor { entries } => {
+                for (addr, prev_fill, prev_font) in entries {
+                    match prev_fill {
+                        Some(f) => {
+                            self.wb_mut().cell_fills.insert(addr, f);
+                        }
+                        None => {
+                            self.wb_mut().cell_fills.remove(&addr);
+                        }
+                    }
+                    match prev_font {
+                        Some(fs) => {
+                            self.wb_mut().cell_font_styles.insert(addr, fs);
+                        }
+                        None => {
+                            self.wb_mut().cell_font_styles.remove(&addr);
+                        }
+                    }
+                }
+            }
             JournalEntry::ColWidth {
                 sheet,
                 col,
@@ -3763,6 +3860,40 @@ impl App {
                 },
                 set: false,
             }),
+            Action::FormatAlignmentLeft => self.begin_point(PendingCommand::RangeAlignment {
+                halign: HAlign::Left,
+            }),
+            Action::FormatAlignmentRight => self.begin_point(PendingCommand::RangeAlignment {
+                halign: HAlign::Right,
+            }),
+            Action::FormatAlignmentCenter => self.begin_point(PendingCommand::RangeAlignment {
+                halign: HAlign::Center,
+            }),
+            Action::FormatAlignmentGeneral => self.begin_point(PendingCommand::RangeAlignment {
+                halign: HAlign::General,
+            }),
+            Action::FormatColorBgBlack => self.begin_color(ColorTarget::Background, PALETTE_BLACK),
+            Action::FormatColorBgWhite => self.begin_color(ColorTarget::Background, PALETTE_WHITE),
+            Action::FormatColorBgRed => self.begin_color(ColorTarget::Background, PALETTE_RED),
+            Action::FormatColorBgGreen => self.begin_color(ColorTarget::Background, PALETTE_GREEN),
+            Action::FormatColorBgBlue => self.begin_color(ColorTarget::Background, PALETTE_BLUE),
+            Action::FormatColorBgYellow => self.begin_color(ColorTarget::Background, PALETTE_YELLOW),
+            Action::FormatColorBgCyan => self.begin_color(ColorTarget::Background, PALETTE_CYAN),
+            Action::FormatColorBgMagenta => {
+                self.begin_color(ColorTarget::Background, PALETTE_MAGENTA)
+            }
+            Action::FormatColorTextBlack => self.begin_color(ColorTarget::Text, PALETTE_BLACK),
+            Action::FormatColorTextWhite => self.begin_color(ColorTarget::Text, PALETTE_WHITE),
+            Action::FormatColorTextRed => self.begin_color(ColorTarget::Text, PALETTE_RED),
+            Action::FormatColorTextGreen => self.begin_color(ColorTarget::Text, PALETTE_GREEN),
+            Action::FormatColorTextBlue => self.begin_color(ColorTarget::Text, PALETTE_BLUE),
+            Action::FormatColorTextYellow => self.begin_color(ColorTarget::Text, PALETTE_YELLOW),
+            Action::FormatColorTextCyan => self.begin_color(ColorTarget::Text, PALETTE_CYAN),
+            Action::FormatColorTextMagenta => self.begin_color(ColorTarget::Text, PALETTE_MAGENTA),
+            Action::FormatColorReset => self.begin_point(PendingCommand::RangeColor {
+                target: ColorTarget::Both,
+                color: None,
+            }),
             Action::DisplayModeColor => {
                 self.display_mode = DisplayMode::Color;
                 self.close_menu();
@@ -4378,6 +4509,16 @@ impl App {
         self.wb_mut().cells.clear();
         self.wb_mut().cell_formats.clear();
         self.wb_mut().cell_text_styles.clear();
+        self.wb_mut().cell_alignments.clear();
+        self.wb_mut().cell_fills.clear();
+        self.wb_mut().cell_font_styles.clear();
+        self.wb_mut().cell_borders.clear();
+        self.wb_mut().comments.clear();
+        self.wb_mut().merges.clear();
+        self.wb_mut().frozen.clear();
+        self.wb_mut().sheet_states.clear();
+        self.wb_mut().tables.clear();
+        self.wb_mut().sheet_colors.clear();
         self.wb_mut().col_widths.clear();
         self.wb_mut().default_col_width = 9;
         self.wb_mut().hidden_cols.clear();
@@ -5853,6 +5994,13 @@ impl App {
 
     // ---------------- POINT mode ----------------
 
+    fn begin_color(&mut self, target: ColorTarget, color: RgbColor) {
+        self.begin_point(PendingCommand::RangeColor {
+            target,
+            color: Some(color),
+        });
+    }
+
     fn begin_point(&mut self, pending: PendingCommand) {
         self.menu = None;
         self.point = Some(PointState {
@@ -6103,6 +6251,20 @@ impl App {
             PendingCommand::RangeTextStyle { bits, set } => {
                 for r in ranges {
                     self.execute_range_text_style(*r, bits, set);
+                }
+                self.wb_mut().dirty = true;
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::RangeAlignment { halign } => {
+                for r in ranges {
+                    self.execute_range_alignment(*r, halign);
+                }
+                self.wb_mut().dirty = true;
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::RangeColor { target, color } => {
+                for r in ranges {
+                    self.execute_range_color(*r, target, color);
                 }
                 self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
@@ -7061,6 +7223,87 @@ impl App {
                 .push(JournalEntry::RangeFormat { entries: prior });
         }
         // No recalc needed — format is presentation only.
+    }
+
+    fn execute_range_color(
+        &mut self,
+        range: Range,
+        target: ColorTarget,
+        color: Option<RgbColor>,
+    ) {
+        let r = range.normalized();
+        let sheets: Vec<SheetId> = if self.group_mode {
+            (0..self.wb().engine.sheet_count()).map(SheetId).collect()
+        } else {
+            vec![r.start.sheet]
+        };
+        let mut prior: Vec<(Address, Option<Fill>, Option<FontStyle>)> = Vec::new();
+        for sheet in &sheets {
+            for row in r.start.row..=r.end.row {
+                for col in r.start.col..=r.end.col {
+                    let addr = Address::new(*sheet, col, row);
+                    let prev_fill = self.wb().cell_fills.get(&addr).copied();
+                    let prev_font = self.wb().cell_font_styles.get(&addr).copied();
+                    prior.push((addr, prev_fill, prev_font));
+                    if matches!(target, ColorTarget::Background | ColorTarget::Both) {
+                        let new_fill = match color {
+                            Some(rgb) => Fill::solid(rgb),
+                            None => Fill::DEFAULT,
+                        };
+                        if new_fill.is_default() {
+                            self.wb_mut().cell_fills.remove(&addr);
+                        } else {
+                            self.wb_mut().cell_fills.insert(addr, new_fill);
+                        }
+                    }
+                    if matches!(target, ColorTarget::Text | ColorTarget::Both) {
+                        let mut next = prev_font.unwrap_or_default();
+                        next.color = color;
+                        if next.is_default() {
+                            self.wb_mut().cell_font_styles.remove(&addr);
+                        } else {
+                            self.wb_mut().cell_font_styles.insert(addr, next);
+                        }
+                    }
+                }
+            }
+        }
+        if self.undo_enabled && !prior.is_empty() {
+            self.wb_mut()
+                .journal
+                .push(JournalEntry::RangeColor { entries: prior });
+        }
+    }
+
+    fn execute_range_alignment(&mut self, range: Range, halign: HAlign) {
+        let r = range.normalized();
+        let sheets: Vec<SheetId> = if self.group_mode {
+            (0..self.wb().engine.sheet_count()).map(SheetId).collect()
+        } else {
+            vec![r.start.sheet]
+        };
+        let mut prior: Vec<(Address, Option<Alignment>)> = Vec::new();
+        for sheet in &sheets {
+            for row in r.start.row..=r.end.row {
+                for col in r.start.col..=r.end.col {
+                    let addr = Address::new(*sheet, col, row);
+                    let prev = self.wb().cell_alignments.get(&addr).copied();
+                    prior.push((addr, prev));
+                    let mut next = prev.unwrap_or_default();
+                    next.horizontal = halign;
+                    if next.is_default() {
+                        self.wb_mut().cell_alignments.remove(&addr);
+                    } else {
+                        self.wb_mut().cell_alignments.insert(addr, next);
+                    }
+                }
+            }
+        }
+        if self.undo_enabled && !prior.is_empty() {
+            self.wb_mut()
+                .journal
+                .push(JournalEntry::RangeAlignment { entries: prior });
+        }
     }
 
     fn execute_range_text_style(&mut self, range: Range, bits: TextStyle, set: bool) {

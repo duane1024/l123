@@ -1,0 +1,61 @@
+# WYSIWYG `:Format Color` — Background and Text color, plus Reset.
+# Three menu levels: :Format Color → Background|Text|Reset → palette.
+#
+# Palette letters (each picker is the same 8 colors):
+#   B Black  W White  R Red  G Green  L bLue  Y Yellow  C Cyan  M Magenta
+#
+# Layout: A1 "hi" so we have something to color.  The pointer is
+# parked off A1 before each ASSERT_CELL_BG / ASSERT_CELL_FG so the
+# REVERSED highlight does not mask the cell's stored colors.
+
+KEYS hi
+ENTER
+HOME
+
+# `:Format Color Background Red` over A1 — paints background red.
+KEY :
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Worksheet
+KEY F
+ASSERT_PANEL_L2   Color
+KEY C
+ASSERT_PANEL_L2   Background
+KEY B
+ASSERT_PANEL_L2   Black
+KEY R
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   color
+ENTER
+ASSERT_MODE       READY
+RIGHT
+ASSERT_CELL_BG    A:A1  FF0000
+
+# `:Format Color Text Yellow` over A1 — paints text yellow.
+HOME
+KEY :
+KEY F
+KEY C
+KEY T
+ASSERT_PANEL_L2   Yellow
+KEY Y
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+RIGHT
+ASSERT_CELL_FG    A:A1  FFFF00
+# Background still red — text and bg colors are independent.
+ASSERT_CELL_BG    A:A1  FF0000
+
+# `:Format Color Reset` over A1 — strips both background and text.
+HOME
+KEY :
+KEY F
+KEY C
+KEY R
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   color
+ENTER
+ASSERT_MODE       READY
+RIGHT
+ASSERT_CELL_BG    A:A1  none
+ASSERT_CELL_FG    A:A1  none
