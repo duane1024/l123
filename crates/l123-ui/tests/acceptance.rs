@@ -668,6 +668,15 @@ fn run_transcript(path: &Path) {
                     path.display()
                 );
             }
+            "ASSERT_FILE_NOT_EXISTS" => {
+                let fpath = rest.trim();
+                let exists = std::fs::metadata(fpath).is_ok();
+                assert!(
+                    !exists,
+                    "{}:{line_no}: file {fpath:?} unexpectedly exists",
+                    path.display()
+                );
+            }
             "ASSERT_FILE_NOT_CONTAINS" => {
                 let mut parts = rest.splitn(2, char::is_whitespace);
                 let fpath = parts.next().unwrap_or("");
@@ -878,6 +887,9 @@ transcripts! {
     m4_file_retrieve_csv   => "M4_file_retrieve_csv.tsv",
     m4_file_xtract     => "M4_file_xtract.tsv",
     m4_file_import_numbers => "M4_file_import_numbers.tsv",
+    m4_file_import_text    => "M4_file_import_text.tsv",
+    m4_file_erase          => "M4_file_erase.tsv",
+    m4_file_combine        => "M4_file_combine.tsv",
     m4_file_new        => "M4_file_new.tsv",
     m4_file_dir        => "M4_file_dir.tsv",
     m4_file_list_active => "M4_file_list_active.tsv",

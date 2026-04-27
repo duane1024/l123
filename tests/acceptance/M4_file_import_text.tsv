@@ -1,0 +1,30 @@
+# /File Import Text — read each line of a plain-text file as a label
+# down a single column starting at the pointer.  Counterpart to
+# /File Import Numbers (CSV); no field splitting, no number coercion.
+#
+# The fixture at tests/acceptance/fixtures/m4_import.txt has three lines:
+#   alpha
+#   beta
+#   gamma
+
+# Move the pointer to B2 so the import lands offset from A1.
+RIGHT
+DOWN
+
+KEY /
+KEY F
+KEY I
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Text
+ASSERT_PANEL_L2  Numbers
+
+KEY T
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter import file name
+KEYS tests/acceptance/fixtures/m4_import.txt
+ENTER
+
+ASSERT_MODE      READY
+ASSERT_CELL      A:B2  alpha
+ASSERT_CELL      A:B3  beta
+ASSERT_CELL      A:B4  gamma

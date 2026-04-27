@@ -632,10 +632,18 @@ pub struct App {
     /// carries the chosen path through the Cancel/Replace/Backup
     /// submenu. Mode stays MENU while present.
     save_confirm: Option<SaveConfirmState>,
+    /// After the `/File Erase` filename prompt commits, this carries the
+    /// chosen path through the No/Yes confirm submenu.  Mode stays MENU
+    /// while present.
+    erase_confirm: Option<EraseConfirmState>,
     /// Transient slot for the two-step /File Xtract flow — the typed
     /// filename is stashed here after the prompt step and consumed by
     /// commit_point.
     pending_xtract_path: Option<PathBuf>,
+    /// Transient slot for the two-step `/File Combine …
+    /// Named/Specified-Range` flow — after the filename prompt commits,
+    /// the path is stashed here while the user types the source range.
+    pending_combine_path: Option<PathBuf>,
     /// Overlay state for /File List. When present, the mode is Files
     /// and the grid is obscured by a horizontal picker on lines 2/3.
     file_list: Option<FileListState>,
@@ -990,6 +998,21 @@ const SAVE_CONFIRM_ITEMS: &[(&str, &str)] = &[
     ("Backup", "Rename existing to .BAK then save"),
 ];
 
+#[derive(Debug, Clone)]
+struct EraseConfirmState {
+    path: PathBuf,
+    /// 0=No, 1=Yes — matches `FILE_ERASE_CONFIRM_ITEMS` below.
+    highlight: usize,
+}
+
+/// Items shown on line 2 of the No/Yes confirm submenu invoked by
+/// `/File Erase` after the user types a path. First letter is the
+/// accelerator.
+const FILE_ERASE_CONFIRM_ITEMS: &[(&str, &str)] = &[
+    ("No", "Do not erase the file"),
+    ("Yes", "Permanently delete the file from disk"),
+];
+
 /// Numeric (or short-text) prompt state for commands that need an argument
 /// before descending into POINT. E.g. /RFC → "Enter number of decimal
 /// places (0..15): 2" → then POINT for the range.
@@ -1045,6 +1068,30 @@ enum PromptNext {
     /// After the user types a filename, parse it as CSV and paint the
     /// values into cells starting at the pointer.
     FileImportNumbersFilename,
+    /// After the user types a filename, read the file as plain text and
+    /// paint each line as a label down a single column starting at the
+    /// pointer (no CSV semantics — the whole line, including embedded
+    /// commas, becomes one apostrophe-prefixed label).
+    FileImportTextFilename,
+    /// After the user types a filename for `/File Erase`, open the
+    /// No/Yes confirm submenu.  The Worksheet/Print/Graph/Other leaves
+    /// all share this prompt — the kind only differs in the unimplemented
+    /// directory filter, not in the deletion semantics.
+    FileEraseFilename,
+    /// First step of `/File Combine` — the user types a source filename.
+    /// `entire` distinguishes the Entire-File branch (commit immediately
+    /// applies the merge) from Named-Or-Specified-Range (commit stashes
+    /// the path and opens the second range-string prompt).
+    FileCombineFilename {
+        kind: CombineKind,
+        entire: bool,
+    },
+    /// Second step of `/File Combine … Named/Specified-Range`. The
+    /// filename is already stashed in `pending_combine_path`; this
+    /// prompt collects the source range string (`A1..C5`).
+    FileCombineRange {
+        kind: CombineKind,
+    },
     /// After the user types a directory path, make it the session's
     /// working directory.
     FileDirPath,
@@ -1134,6 +1181,17 @@ pub(crate) enum XtractKind {
     Values,
 }
 
+/// `/File Combine` operation: how each source cell merges into the
+/// matching target.  Copy overwrites; Add adds the source numerically;
+/// Subtract subtracts.  Add/Subtract skip non-numeric source or target
+/// cells (1-2-3 R3 semantics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CombineKind {
+    Copy,
+    Add,
+    Subtract,
+}
+
 /// /File List sub-command: which set of files is in the overlay?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileListKind {
@@ -1215,11 +1273,17 @@ impl PromptNext {
             | PromptNext::FileRetrieveFilename
             | PromptNext::FileXtractFilename { .. }
             | PromptNext::FileImportNumbersFilename
+            | PromptNext::FileImportTextFilename
+            | PromptNext::FileEraseFilename
+            | PromptNext::FileCombineFilename { .. }
             | PromptNext::FileDirPath
             | PromptNext::FileOpenFilename { .. }
             | PromptNext::PrintFileFilename
             | PromptNext::PrintEncodedFilename
             | PromptNext::GraphSaveFilename => is_path_char(c),
+            PromptNext::FileCombineRange { .. } => {
+                c.is_ascii_alphanumeric() || c == ':' || c == '.' || c == '$'
+            }
             // Header and footer are free-form text with the `|`
             // separator carving them into L|C|R.
             PromptNext::PrintFileHeader
@@ -1743,7 +1807,9 @@ impl App {
             error_message: None,
             pending_name: None,
             save_confirm: None,
+            erase_confirm: None,
             pending_xtract_path: None,
+            pending_combine_path: None,
             file_list: None,
             name_list: None,
             help: None,
@@ -2198,6 +2264,13 @@ impl App {
         // the keyboard until the user commits or cancels.
         if self.save_confirm.is_some() {
             self.handle_key_save_confirm(k);
+            return;
+        }
+        // Erase-confirm submenu has the same precedence: shown after
+        // the `/File Erase` filename prompt commits, owns the keyboard
+        // until the user picks No or Yes.
+        if self.erase_confirm.is_some() {
+            self.handle_key_erase_confirm(k);
             return;
         }
         // A command argument prompt takes precedence over the mode-based
@@ -3536,6 +3609,7 @@ impl App {
             Action::FileXtractFormulas => self.start_file_xtract_prompt(XtractKind::Formulas),
             Action::FileXtractValues => self.start_file_xtract_prompt(XtractKind::Values),
             Action::FileImportNumbers => self.start_file_import_numbers_prompt(),
+            Action::FileImportText => self.start_file_import_text_prompt(),
             Action::FileNew => self.execute_file_new(),
             Action::FileOpenBefore => self.start_file_open_prompt(true),
             Action::FileOpenAfter => self.start_file_open_prompt(false),
@@ -3630,17 +3704,39 @@ impl App {
             // Forward-declared in the menu enum but not yet implemented.
             // Hitting these from the menu currently is a no-op back to
             // READY; flesh out behavior when the feature lands.
-            Action::FileImportText
-            | Action::FileCombineCopyEntire
-            | Action::FileCombineCopyNamed
-            | Action::FileCombineAddEntire
-            | Action::FileCombineAddNamed
-            | Action::FileCombineSubtractEntire
-            | Action::FileCombineSubtractNamed
-            | Action::FileEraseWorksheet
+            Action::FileEraseWorksheet
             | Action::FileErasePrint
             | Action::FileEraseGraph
-            | Action::FileEraseOther => self.close_menu(),
+            | Action::FileEraseOther => self.start_file_erase_prompt(),
+            // `/File Admin` leaves are wired as named actions so future
+            // implementation can hang behavior on them without further
+            // menu surgery, but today they all just close the menu.
+            Action::FileAdminReservationGet
+            | Action::FileAdminReservationRelease
+            | Action::FileAdminSealFile
+            | Action::FileAdminSealReservationSetting
+            | Action::FileAdminSealDisable
+            | Action::FileAdminTableWorksheet
+            | Action::FileAdminTablePrint
+            | Action::FileAdminTableGraph
+            | Action::FileAdminTableOther
+            | Action::FileAdminTableActive
+            | Action::FileAdminTableLinked
+            | Action::FileAdminLinkRefresh => self.close_menu(),
+            Action::FileCombineCopyEntire => {
+                self.start_file_combine_prompt(CombineKind::Copy, true)
+            }
+            Action::FileCombineCopyNamed => {
+                self.start_file_combine_prompt(CombineKind::Copy, false)
+            }
+            Action::FileCombineAddEntire => self.start_file_combine_prompt(CombineKind::Add, true),
+            Action::FileCombineAddNamed => self.start_file_combine_prompt(CombineKind::Add, false),
+            Action::FileCombineSubtractEntire => {
+                self.start_file_combine_prompt(CombineKind::Subtract, true)
+            }
+            Action::FileCombineSubtractNamed => {
+                self.start_file_combine_prompt(CombineKind::Subtract, false)
+            }
         }
     }
 
@@ -4003,8 +4099,10 @@ impl App {
         self.prompt = None;
         self.point = None;
         self.save_confirm = None;
+        self.erase_confirm = None;
         self.pending_name = None;
         self.pending_xtract_path = None;
+        self.pending_combine_path = None;
         self.file_list = None;
         self.active_files = vec![Workbook::new()];
         self.current = 0;
@@ -4026,8 +4124,10 @@ impl App {
         self.prompt = None;
         self.point = None;
         self.save_confirm = None;
+        self.erase_confirm = None;
         self.pending_name = None;
         self.pending_xtract_path = None;
+        self.pending_combine_path = None;
         self.wb_mut().active_path = None;
         self.wb_mut().pointer = Address::A1;
         self.wb_mut().viewport_col_offset = 0;
@@ -4529,6 +4629,207 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    fn start_file_import_text_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter import file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileImportTextFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `/File Combine` — open the source-filename prompt.  `entire`
+    /// distinguishes the Entire-File branch (commit applies the merge)
+    /// from Named-Or-Specified-Range (commit chains into a second
+    /// prompt for the source range).
+    fn start_file_combine_prompt(&mut self, kind: CombineKind, entire: bool) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter source file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileCombineFilename { kind, entire },
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Second step of `/File Combine … Named/Specified-Range`. The
+    /// filename was stashed in `pending_combine_path` by the prior
+    /// prompt commit; this one collects the source range string.
+    fn start_file_combine_range_prompt(&mut self, kind: CombineKind) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter source range:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileCombineRange { kind },
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Read the source xlsx at `path` into a temporary engine, then
+    /// merge non-empty source cells into the active workbook starting
+    /// at the pointer.  When `source_range` is `None`, every non-empty
+    /// cell on the source's first sheet is considered; otherwise only
+    /// cells inside the range.  Failures (bad path, bad range) surface
+    /// on line 3 via the standard error path.
+    fn combine_from(&mut self, path: PathBuf, kind: CombineKind, source_range: Option<Range>) {
+        let mut src = match IronCalcEngine::new() {
+            Ok(e) => e,
+            Err(e) => {
+                self.set_error(format!("Combine: engine init failed: {e}"));
+                return;
+            }
+        };
+        if let Err(e) = src.load_xlsx(&path) {
+            self.set_error(format!("Cannot open {}: {e}", path.display()));
+            return;
+        }
+        src.recalc();
+        let origin = self.wb_mut().pointer;
+        let target_sheet = origin.sheet;
+        let source_sheet = SheetId(0);
+        // Determine the cells to scan on the source.  Without a typed
+        // range we scan a generous window — the active first sheet up
+        // to (256, 8192) — matching 1-2-3 R3's sheet bounds well enough
+        // that any realistic Combine source fits.
+        let (rmin, rmax, cmin, cmax) = match source_range {
+            Some(r) => {
+                let n = r.normalized();
+                (n.start.row, n.end.row, n.start.col, n.end.col)
+            }
+            None => (0u32, 8191u32, 0u16, 255u16),
+        };
+        for sr in rmin..=rmax {
+            for sc in cmin..=cmax {
+                let saddr = Address::new(source_sheet, sc, sr);
+                let Ok(cv) = src.get_cell(saddr) else {
+                    continue;
+                };
+                if cv.value == Value::Empty && cv.formula.is_none() {
+                    continue;
+                }
+                let taddr = Address::new(target_sheet, origin.col + sc, origin.row + sr);
+                self.combine_apply(taddr, &cv, kind);
+            }
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.mode = Mode::Ready;
+    }
+
+    /// Apply one source cell onto one target cell per `kind`.  Copy
+    /// overwrites; Add/Subtract numerically combine, leaving
+    /// non-numeric source or target cells untouched.
+    fn combine_apply(&mut self, taddr: Address, src_cv: &CellView, kind: CombineKind) {
+        match kind {
+            CombineKind::Copy => {
+                let input = match (&src_cv.formula, &src_cv.value) {
+                    (Some(f), _) => format!("={f}"),
+                    (None, Value::Number(n)) => l123_core::format_number_general(*n),
+                    (None, Value::Text(s)) => format!("'{s}"),
+                    (None, Value::Bool(b)) => {
+                        if *b {
+                            "TRUE".into()
+                        } else {
+                            "FALSE".into()
+                        }
+                    }
+                    _ => return,
+                };
+                let _ = self.wb_mut().engine.set_user_input(taddr, &input);
+                let contents = match &src_cv.value {
+                    Value::Number(n) => CellContents::Constant(Value::Number(*n)),
+                    Value::Text(s) => CellContents::Label {
+                        prefix: LabelPrefix::Apostrophe,
+                        text: s.clone(),
+                    },
+                    Value::Bool(b) => CellContents::Constant(Value::Bool(*b)),
+                    _ => return,
+                };
+                self.wb_mut().cells.insert(taddr, contents);
+            }
+            CombineKind::Add | CombineKind::Subtract => {
+                let Value::Number(src_n) = src_cv.value else {
+                    return;
+                };
+                let target_now = self
+                    .wb_mut()
+                    .engine
+                    .get_cell(taddr)
+                    .ok()
+                    .map(|cv| cv.value)
+                    .unwrap_or(Value::Empty);
+                let base = match target_now {
+                    Value::Number(n) => n,
+                    Value::Empty => 0.0,
+                    _ => return,
+                };
+                let merged = match kind {
+                    CombineKind::Add => base + src_n,
+                    CombineKind::Subtract => base - src_n,
+                    CombineKind::Copy => unreachable!(),
+                };
+                let input = l123_core::format_number_general(merged);
+                let _ = self.wb_mut().engine.set_user_input(taddr, &input);
+                self.wb_mut()
+                    .cells
+                    .insert(taddr, CellContents::Constant(Value::Number(merged)));
+            }
+        }
+    }
+
+    /// `/File Erase {Worksheet|Print|Graph|Other}` — prompt for the
+    /// path to delete.  All four leaves share the same flow today; the
+    /// kind would only change the directory listing filter, which we
+    /// don't implement here.
+    fn start_file_erase_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter file to erase:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileEraseFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Read `path` as plain text; each line becomes an apostrophe-prefixed
+    /// label down a single column starting at the pointer.  Counterpart to
+    /// [`Self::import_numbers_from`]: no field splitting, no number coercion,
+    /// embedded commas stay in the line. Empty lines are skipped (no
+    /// overwrite of the existing target cell).
+    fn import_text_from(&mut self, path: PathBuf) {
+        let body = match std::fs::read_to_string(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.set_error(format!("Cannot read {}: {e}", path.display()));
+                return;
+            }
+        };
+        let origin = self.wb_mut().pointer;
+        for (dr, line) in body.lines().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            let addr = Address::new(origin.sheet, origin.col, origin.row + dr as u32);
+            let engine_input = format!("'{line}");
+            let _ = self.wb_mut().engine.set_user_input(addr, &engine_input);
+            self.wb_mut().cells.insert(
+                addr,
+                CellContents::Label {
+                    prefix: LabelPrefix::Apostrophe,
+                    text: line.to_string(),
+                },
+            );
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.mode = Mode::Ready;
+    }
+
     /// Read `path` as CSV, paint values into cells starting at the
     /// pointer. Numeric tokens become `Constant(Number)`; everything
     /// else becomes `Label { Apostrophe, text }`. Empty fields are
@@ -4918,6 +5219,60 @@ impl App {
     }
 
     /// Handle a keystroke while the Cancel/Replace/Backup confirm is up.
+    fn handle_key_erase_confirm(&mut self, k: KeyEvent) {
+        let Some(ec) = self.erase_confirm.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Esc => {
+                self.erase_confirm = None;
+                self.mode = Mode::Ready;
+            }
+            KeyCode::Left if ec.highlight > 0 => ec.highlight -= 1,
+            KeyCode::Right if ec.highlight + 1 < FILE_ERASE_CONFIRM_ITEMS.len() => {
+                ec.highlight += 1;
+            }
+            KeyCode::Home => ec.highlight = 0,
+            KeyCode::End => ec.highlight = FILE_ERASE_CONFIRM_ITEMS.len() - 1,
+            KeyCode::Enter => {
+                let choice = ec.highlight;
+                self.commit_erase_confirm(choice);
+            }
+            KeyCode::Char(c) => {
+                let upper = c.to_ascii_uppercase();
+                if let Some(idx) = FILE_ERASE_CONFIRM_ITEMS
+                    .iter()
+                    .position(|(name, _)| name.starts_with(upper))
+                {
+                    self.commit_erase_confirm(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn commit_erase_confirm(&mut self, choice: usize) {
+        let Some(ec) = self.erase_confirm.take() else {
+            self.mode = Mode::Ready;
+            return;
+        };
+        match choice {
+            // No — leave the file alone.
+            0 => self.mode = Mode::Ready,
+            // Yes — delete it.  A failure (missing file, permission
+            // denied) surfaces on line 3 via the standard error path
+            // rather than panicking.
+            1 => {
+                if let Err(e) = std::fs::remove_file(&ec.path) {
+                    self.set_error(format!("Cannot erase {}: {e}", ec.path.display()));
+                } else {
+                    self.mode = Mode::Ready;
+                }
+            }
+            _ => self.mode = Mode::Ready,
+        }
+    }
+
     fn handle_key_save_confirm(&mut self, k: KeyEvent) {
         let Some(sc) = self.save_confirm.as_mut() else {
             return;
@@ -6152,6 +6507,50 @@ impl App {
                 }
                 let path = PathBuf::from(&p.buffer);
                 self.import_numbers_from(path);
+            }
+            PromptNext::FileImportTextFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(&p.buffer);
+                self.import_text_from(path);
+            }
+            PromptNext::FileEraseFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(&p.buffer);
+                self.erase_confirm = Some(EraseConfirmState { path, highlight: 0 });
+                self.mode = Mode::Menu;
+            }
+            PromptNext::FileCombineFilename { kind, entire } => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(&p.buffer);
+                if entire {
+                    self.combine_from(path, kind, None);
+                } else {
+                    self.pending_combine_path = Some(path);
+                    self.start_file_combine_range_prompt(kind);
+                }
+            }
+            PromptNext::FileCombineRange { kind } => {
+                let Some(path) = self.pending_combine_path.take() else {
+                    self.mode = Mode::Ready;
+                    return;
+                };
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                match Range::parse(&p.buffer) {
+                    Ok(range) => self.combine_from(path, kind, Some(range)),
+                    Err(e) => self.set_error(format!("Bad range {:?}: {e}", p.buffer)),
+                }
             }
             PromptNext::FileDirPath => {
                 if !p.buffer.is_empty() {
@@ -7938,6 +8337,8 @@ impl App {
             self.render_file_list_lines()
         } else if self.save_confirm.is_some() {
             self.render_save_confirm_lines()
+        } else if self.erase_confirm.is_some() {
+            self.render_erase_confirm_lines()
         } else if let Some(msg) = self.error_message.as_ref() {
             (
                 Line::from(format!(" {msg}")),
@@ -8200,6 +8601,34 @@ impl App {
         // Footer.
         let footer = " Tab/Shift-Tab: next/prev topic   PgUp/PgDn: scroll   Esc: close ";
         set_line(buf, area.x, footer_y, footer, area.width, footer_style);
+    }
+
+    fn render_erase_confirm_lines(&self) -> (Line<'_>, Line<'_>) {
+        let Some(ec) = self.erase_confirm.as_ref() else {
+            return (Line::from(""), Line::from(""));
+        };
+        let mut spans: Vec<Span<'_>> = Vec::with_capacity(FILE_ERASE_CONFIRM_ITEMS.len() * 2 + 1);
+        spans.push(Span::raw(" "));
+        for (i, (name, _)) in FILE_ERASE_CONFIRM_ITEMS.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  "));
+            }
+            if i == ec.highlight {
+                spans.push(Span::styled(
+                    *name,
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ));
+            } else {
+                spans.push(Span::raw(*name));
+            }
+        }
+        let line2 = Line::from(spans);
+        let help = FILE_ERASE_CONFIRM_ITEMS
+            .get(ec.highlight)
+            .map(|(_, h)| *h)
+            .unwrap_or("");
+        let line3 = Line::from(format!(" {} {}", ec.path.display(), help));
+        (line2, line3)
     }
 
     fn render_save_confirm_lines(&self) -> (Line<'_>, Line<'_>) {
