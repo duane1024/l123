@@ -1,0 +1,130 @@
+# /Worksheet Global Format — set the workbook-wide default cell format.
+# Cells without an explicit per-cell format inherit the global; cells
+# with /Range Format applied still win over the global.
+
+SIZE 80 30
+
+# Seed two number cells (A1, A2).
+KEYS 0.5
+ENTER
+DOWN
+KEYS 1234.5
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 0.5
+
+# /WGF — submenu mirrors /RF (Fixed/Sci/Currency/Comma/General/Percent/
+# Date/Text/Hidden/Reset).
+KEY /
+KEY W
+KEY G
+KEY F
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Fixed
+ASSERT_PANEL_L2   Sci
+ASSERT_PANEL_L2   Currency
+ASSERT_PANEL_L2   General
+ASSERT_PANEL_L2   Percent
+ASSERT_PANEL_L2   Date
+ASSERT_PANEL_L2   Text
+ASSERT_PANEL_L2   Hidden
+ASSERT_PANEL_L2   Reset
+
+# Pick Fixed → decimals prompt (default 2) → type 4 → ENTER. No POINT
+# step: the global is applied immediately.
+KEY F
+ASSERT_PANEL_L3   decimal places
+ASSERT_PANEL_L2   2
+KEY 4
+ENTER
+ASSERT_MODE       READY
+
+# A1 (no per-cell override) inherits the new global. Tag and grid
+# rendering both reflect F4.
+ASSERT_PANEL_L1   A:A1: (F4) 0.5
+ASSERT_CELL       A:A1  0.5000
+
+# A2 also inherits.
+DOWN
+ASSERT_PANEL_L1   A:A2: (F4) 1234.5
+ASSERT_CELL       A:A2  1234.5000
+
+# /RFC 0 ENTER ENTER on A:A2 — per-cell format wins over the global.
+KEY /
+KEY R
+KEY F
+KEY C
+KEY 0
+ENTER
+ENTER
+ASSERT_PANEL_L1   A:A2: (C0) 1234.5
+ASSERT_CELL       A:A2  $1234
+
+# A1 still inherits the global (F4).
+HOME
+ASSERT_PANEL_L1   A:A1: (F4) 0.5
+
+# /WGFP 1 ENTER — change global to Percent 1.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY P
+KEY 1
+ENTER
+ASSERT_MODE       READY
+
+# A1 (no per-cell override) follows the new global.
+ASSERT_PANEL_L1   A:A1: (P1) 0.5
+ASSERT_CELL       A:A1  50.0%
+
+# A2 still has its (C0) override.
+DOWN
+ASSERT_PANEL_L1   A:A2: (C0) 1234.5
+ASSERT_CELL       A:A2  $1234
+
+# /RFR on A2 — drop the per-cell override; A2 now inherits the
+# current global (P1), not bare General.
+KEY /
+KEY R
+KEY F
+KEY R
+ENTER
+ASSERT_PANEL_L1   A:A2: (P1) 1234.5
+ASSERT_CELL       A:A2  123450.0%
+
+# /WGFR — Reset global back to General.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY R
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A2: (G) 1234.5
+
+# Worksheet Status reflects the current global format.
+KEY /
+KEY W
+KEY S
+ASSERT_MODE       STAT
+ASSERT_SCREEN     Format:       (G)
+ESC
+ASSERT_MODE       READY
+
+# /WGFC ENTER — set global to Currency 2 (default decimals); status
+# overlay reflects the change.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY C
+ENTER
+ASSERT_MODE       READY
+HOME
+ASSERT_PANEL_L1   A:A1: (C2) 0.5
+KEY /
+KEY W
+KEY S
+ASSERT_SCREEN     Format:       (C2)
+ESC
+ASSERT_MODE       READY

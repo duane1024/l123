@@ -1,0 +1,44 @@
+# /Worksheet Global Format — Alt-F4 undo restores the previous global.
+
+KEYS 0.5
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 0.5
+
+# /WGFP 1 ENTER — set global to Percent 1.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY P
+KEY 1
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (P1) 0.5
+
+# Alt-F4 reverts the global back to General.
+ALT_F 4
+ASSERT_PANEL_L1   A:A1: (G) 0.5
+
+# /WGFC ENTER — Currency 2.  Then change to /WGFF 0 ENTER — Fixed 0.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY C
+ENTER
+ASSERT_PANEL_L1   A:A1: (C2) 0.5
+KEY /
+KEY W
+KEY G
+KEY F
+KEY F
+KEY 0
+ENTER
+ASSERT_PANEL_L1   A:A1: (F0) 0.5
+
+# Alt-F4 once: back to (C2).  Again: back to (G).
+ALT_F 4
+ASSERT_PANEL_L1   A:A1: (C2) 0.5
+ALT_F 4
+ASSERT_PANEL_L1   A:A1: (G) 0.5

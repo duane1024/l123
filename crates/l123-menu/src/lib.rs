@@ -111,6 +111,25 @@ pub enum Action {
     RangeFormatDateShortIntl,
     RangeFormatText,
     RangeFormatReset,
+    /// `/Worksheet Global Format` leaves — set the workbook-wide default
+    /// cell format that cells without a per-cell `/RF` override inherit.
+    /// Mirrors the [`RangeFormat*`](Action::RangeFormatFixed) family;
+    /// each takes the same kind of argument (decimals where applicable)
+    /// and applies immediately — no POINT step, since the global is a
+    /// single-target setting.
+    WorksheetGlobalFormatFixed,
+    WorksheetGlobalFormatScientific,
+    WorksheetGlobalFormatCurrency,
+    WorksheetGlobalFormatComma,
+    WorksheetGlobalFormatGeneral,
+    WorksheetGlobalFormatPercent,
+    WorksheetGlobalFormatDateDmy,
+    WorksheetGlobalFormatDateDm,
+    WorksheetGlobalFormatDateMy,
+    WorksheetGlobalFormatDateLongIntl,
+    WorksheetGlobalFormatDateShortIntl,
+    WorksheetGlobalFormatText,
+    WorksheetGlobalFormatReset,
     Copy,
     Move,
     FileSave,
@@ -650,7 +669,7 @@ const WS_GLOBAL_MENU: &[MenuItem] = &[
         letter: 'F',
         name: "Format",
         help: "Set global cell display format",
-        body: MenuBody::NotImplemented("wg-format"),
+        body: MenuBody::Submenu(WG_FORMAT_MENU),
     },
     MenuItem {
         letter: 'L',
@@ -870,6 +889,108 @@ const RANGE_FORMAT_DATE_MENU: &[MenuItem] = &[
         name: "Time",
         help: "Time format (D6..D9)",
         body: MenuBody::NotImplemented("rf-date-time"),
+    },
+];
+
+const WG_FORMAT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'F',
+        name: "Fixed",
+        help: "Default to fixed number of decimal places",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatFixed),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Sci",
+        help: "Default to scientific notation",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatScientific),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Currency",
+        help: "Default to currency format with symbol",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatCurrency),
+    },
+    MenuItem {
+        letter: ',',
+        name: ",",
+        help: "Default to comma-separated (no currency symbol)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatComma),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "General",
+        help: "Default to General format",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatGeneral),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Percent",
+        help: "Default to Percent (value × 100) with % sign",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatPercent),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Date",
+        help: "Default to a Date format (D1..D5, Time for D6..D9)",
+        body: MenuBody::Submenu(WG_FORMAT_DATE_MENU),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Text",
+        help: "Default to showing formulas instead of values",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatText),
+    },
+    MenuItem {
+        letter: 'H',
+        name: "Hidden",
+        help: "Default to hiding cell display",
+        body: MenuBody::NotImplemented("wg-format-hidden"),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Reset global format to General",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatReset),
+    },
+];
+
+const WG_FORMAT_DATE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: '1',
+        name: "1",
+        help: "DD-MMM-YY",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateDmy),
+    },
+    MenuItem {
+        letter: '2',
+        name: "2",
+        help: "DD-MMM",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateDm),
+    },
+    MenuItem {
+        letter: '3',
+        name: "3",
+        help: "MMM-YY",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateMy),
+    },
+    MenuItem {
+        letter: '4',
+        name: "4",
+        help: "Long international (MM/DD/YY)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateLongIntl),
+    },
+    MenuItem {
+        letter: '5',
+        name: "5",
+        help: "Short international (MM/DD)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateShortIntl),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Time",
+        help: "Time format (D6..D9)",
+        body: MenuBody::NotImplemented("wg-format-date-time"),
     },
 ];
 
@@ -2138,6 +2259,38 @@ mod tests {
             node.body,
             MenuBody::Action(Action::RangeFormatCurrency)
         ));
+    }
+
+    #[test]
+    fn resolve_worksheet_global_format_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (&['W', 'G', 'F', 'F'], Action::WorksheetGlobalFormatFixed),
+            (
+                &['W', 'G', 'F', 'S'],
+                Action::WorksheetGlobalFormatScientific,
+            ),
+            (&['W', 'G', 'F', 'C'], Action::WorksheetGlobalFormatCurrency),
+            (&['W', 'G', 'F', ','], Action::WorksheetGlobalFormatComma),
+            (&['W', 'G', 'F', 'G'], Action::WorksheetGlobalFormatGeneral),
+            (&['W', 'G', 'F', 'P'], Action::WorksheetGlobalFormatPercent),
+            (&['W', 'G', 'F', 'T'], Action::WorksheetGlobalFormatText),
+            (&['W', 'G', 'F', 'R'], Action::WorksheetGlobalFormatReset),
+            (
+                &['W', 'G', 'F', 'D', '1'],
+                Action::WorksheetGlobalFormatDateDmy,
+            ),
+            (
+                &['W', 'G', 'F', 'D', '5'],
+                Action::WorksheetGlobalFormatDateShortIntl,
+            ),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
     }
 
     #[test]

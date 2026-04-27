@@ -146,6 +146,10 @@ struct Workbook {
     engine: IronCalcEngine,
     cells: HashMap<Address, CellContents>,
     cell_formats: HashMap<Address, Format>,
+    /// Workbook-wide default cell format set by `/Worksheet Global
+    /// Format`. Cells without a `cell_formats` entry inherit this.
+    /// Initialized to General.
+    global_format: Format,
     /// Per-cell text-style overrides (bold / italic / underline) set
     /// by the WYSIWYG `:Format Bold|Italic|Underline Set|Clear`
     /// commands.  Empty style = no entry.
@@ -263,6 +267,7 @@ impl Workbook {
             engine: IronCalcEngine::new().expect("IronCalc engine init"),
             cells: HashMap::new(),
             cell_formats: HashMap::new(),
+            global_format: Format::GENERAL,
             cell_text_styles: HashMap::new(),
             cell_alignments: HashMap::new(),
             cell_fills: HashMap::new(),
@@ -302,7 +307,7 @@ impl WorkbookView for Workbook {
         self.cell_formats
             .get(&addr)
             .copied()
-            .unwrap_or(Format::GENERAL)
+            .unwrap_or(self.global_format)
     }
 }
 
@@ -678,6 +683,9 @@ enum JournalEntry {
     },
     /// Restore the workbook-wide default column width.
     GlobalColWidth { prev: u8 },
+    /// Restore the workbook-wide default cell format set by `/Worksheet
+    /// Global Format`.
+    GlobalFormat { prev: Format },
     /// Restore the workbook-wide default label prefix.
     DefaultLabelPrefix { prev: LabelPrefix },
     /// Group of entries popped and applied together — used when
@@ -719,6 +727,12 @@ struct PromptState {
 enum PromptNext {
     /// Then go to POINT and apply `Format { kind, decimals: <buffer> }`.
     RangeFormat {
+        kind: FormatKind,
+    },
+    /// Set the workbook-wide default format to `Format { kind, decimals:
+    /// <buffer> }`. Unlike `RangeFormat`, no POINT step follows — the
+    /// global is a single-target setting.
+    WorksheetGlobalFormat {
         kind: FormatKind,
     },
     /// Set the current column's width to the buffered number.
@@ -876,6 +890,7 @@ impl PromptNext {
     fn accepts_char(self, c: char) -> bool {
         match self {
             PromptNext::RangeFormat { .. }
+            | PromptNext::WorksheetGlobalFormat { .. }
             | PromptNext::WorksheetColumnSetWidth
             | PromptNext::WorksheetColumnRangeSetWidth
             | PromptNext::WorksheetGlobalColWidth
@@ -2420,6 +2435,9 @@ impl App {
             JournalEntry::GlobalColWidth { prev } => {
                 self.wb_mut().default_col_width = prev;
             }
+            JournalEntry::GlobalFormat { prev } => {
+                self.wb_mut().global_format = prev;
+            }
             JournalEntry::DefaultLabelPrefix { prev } => {
                 self.default_label_prefix = prev;
             }
@@ -2884,6 +2902,47 @@ impl App {
                     kind: FormatKind::DateShortIntl,
                     decimals: 0,
                 },
+            }),
+            Action::WorksheetGlobalFormatFixed => {
+                self.start_global_decimals_prompt(FormatKind::Fixed)
+            }
+            Action::WorksheetGlobalFormatScientific => {
+                self.start_global_decimals_prompt(FormatKind::Scientific)
+            }
+            Action::WorksheetGlobalFormatCurrency => {
+                self.start_global_decimals_prompt(FormatKind::Currency)
+            }
+            Action::WorksheetGlobalFormatComma => {
+                self.start_global_decimals_prompt(FormatKind::Comma)
+            }
+            Action::WorksheetGlobalFormatPercent => {
+                self.start_global_decimals_prompt(FormatKind::Percent)
+            }
+            Action::WorksheetGlobalFormatGeneral => self.set_global_format(Format::GENERAL),
+            Action::WorksheetGlobalFormatReset => self.set_global_format(Format::GENERAL),
+            Action::WorksheetGlobalFormatText => self.set_global_format(Format {
+                kind: FormatKind::Text,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateDmy => self.set_global_format(Format {
+                kind: FormatKind::DateDmy,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateDm => self.set_global_format(Format {
+                kind: FormatKind::DateDm,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateMy => self.set_global_format(Format {
+                kind: FormatKind::DateMy,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateLongIntl => self.set_global_format(Format {
+                kind: FormatKind::DateLongIntl,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateShortIntl => self.set_global_format(Format {
+                kind: FormatKind::DateShortIntl,
+                decimals: 0,
             }),
             Action::FileSave => self.start_file_save_prompt(),
             Action::FileRetrieve => self.start_file_retrieve_prompt(),
@@ -3675,6 +3734,7 @@ impl App {
             engine,
             cells,
             cell_formats,
+            global_format: Format::GENERAL,
             cell_text_styles,
             cell_alignments,
             cell_fills,
@@ -4870,6 +4930,20 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    /// `/Worksheet Global Format <Fixed|Sci|Currency|Comma|Percent>` —
+    /// prompt for decimal places, then set the workbook's global format
+    /// (no POINT step).
+    fn start_global_decimals_prompt(&mut self, kind: FormatKind) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter number of decimal places (0..15):".into(),
+            buffer: "2".into(),
+            next: PromptNext::WorksheetGlobalFormat { kind },
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
     fn start_col_width_prompt(&mut self) {
         self.menu = None;
         let p = self.wb().pointer;
@@ -4920,6 +4994,16 @@ impl App {
         let prev = self.default_label_prefix;
         self.default_label_prefix = new_prefix;
         self.push_journal_batch(vec![JournalEntry::DefaultLabelPrefix { prev }]);
+        self.close_menu();
+    }
+
+    /// `/Worksheet Global Format <…>` — change the workbook-wide
+    /// default cell format. Journals the previous format so Alt-F4
+    /// reverts. Does not touch per-cell `cell_formats` overrides.
+    fn set_global_format(&mut self, new_format: Format) {
+        let prev = self.wb().global_format;
+        self.wb_mut().global_format = new_format;
+        self.push_journal_batch(vec![JournalEntry::GlobalFormat { prev }]);
         self.close_menu();
     }
 
@@ -5116,6 +5200,11 @@ impl App {
                 let decimals = decimals.min(15);
                 let format = Format { kind, decimals };
                 self.begin_point(PendingCommand::RangeFormat { format });
+            }
+            PromptNext::WorksheetGlobalFormat { kind } => {
+                let decimals: u8 = p.buffer.parse().unwrap_or(2);
+                let decimals = decimals.min(15);
+                self.set_global_format(Format { kind, decimals });
             }
             PromptNext::WorksheetColumnSetWidth => {
                 let default = self.wb().default_col_width;
@@ -6609,11 +6698,9 @@ impl App {
         let prefix = self.default_label_prefix.char();
         let col_width = self.wb().default_col_width;
         let zero = self.zero_display.label();
+        let global_format = self.wb().global_format;
         Paragraph::new(vec![
-            // Global default format isn't wired to `/Worksheet Global
-            // Format` yet, so report the generic default — matches
-            // what a cell with no explicit format gets.
-            Line::from("Format:       (G)"),
+            Line::from(format!("Format:       {global_format}")),
             Line::from(format!("Label prefix: {prefix}")),
             Line::from(format!("Column width: {col_width}")),
             Line::from(format!("Zero setting: {zero}")),
@@ -7124,14 +7211,10 @@ impl App {
         }
     }
 
-    /// Resolve the format for a given cell — the per-cell override if set,
-    /// else General.
+    /// Resolve the format for a given cell — the per-cell override if
+    /// set, else the workbook's global default ([`Workbook::global_format`]).
     fn format_for_cell(&self, addr: Address) -> Format {
-        self.wb()
-            .cell_formats
-            .get(&addr)
-            .copied()
-            .unwrap_or(Format::GENERAL)
+        self.wb().format_for_cell(addr)
     }
 
     /// `[Wn]` tag when the current column's width differs from the
