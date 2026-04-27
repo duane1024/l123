@@ -1,6 +1,6 @@
 # :Display Options Grid Yes/No — toggle worksheet gridlines. Real
 # R3.4a draws magenta dotted lines in the inter-glyph pixels, which a
-# TUI cannot reproduce; our best-effort approximation paints a dim `·`
+# TUI cannot reproduce; our best-effort approximation paints a dim `┊`
 # at each cell's rightmost column whenever that position would
 # otherwise be a space. Pixel-level behavior is covered by
 # app::tests::wysiwyg_display_grid_yes_paints_dotted_right_edges and

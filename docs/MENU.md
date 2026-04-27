@@ -328,7 +328,7 @@ M     O        Z     C       R     F               D        Q
     unstyled cells.
 - **Options** → Grid | Frame | Page-Breaks | Cell-Pointer | Quit
   - **Grid** → Yes | No   **[MVP]** — best-effort vertical gridlines:
-    paints a dim `·` at each cell's rightmost column when that
+    paints a dim `┊` at each cell's rightmost column when that
     position would otherwise be a space. Real R3.4a draws gridlines in
     the inter-glyph pixels (sub-character precision we don't have);
     horizontal gridlines would cost a whole terminal row per data row,

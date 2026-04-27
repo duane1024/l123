@@ -766,7 +766,7 @@ pub struct App {
     /// `:Display Mode` — empty-cell color fallback. Cells with an
     /// xlsx-imported fill or font color paint that color regardless.
     display_mode: DisplayMode,
-    /// `:Display Options Grid` — when true, paint a dim dot at each
+    /// `:Display Options Grid` — when true, paint a dim dashed glyph at each
     /// cell's rightmost column whenever that position would otherwise
     /// be a space. Best-effort vertical gridlines only — horizontals
     /// would cost a whole terminal row per cell row, which halves the
@@ -9100,20 +9100,22 @@ impl App {
                     buf[(x + printed, y)].set_char(' ').set_style(cell_style);
                     printed += 1;
                 }
-                // `:Display Options Grid Yes` — paint a dim dot at the
+                // `:Display Options Grid Yes` — paint a dim dashed glyph at the
                 // cell's rightmost column when that position would
-                // otherwise be a space. Real R3.4a draws magenta dotted
-                // lines in the inter-glyph pixels; in a TUI we have no
-                // sub-character precision, so this is the closest
-                // honest approximation. Skip on highlighted cells so
-                // the REVERSED selection stays loud, and skip when the
-                // cell content reached the edge (don't overwrite data).
+                // otherwise be a space. Real R3.4a draws magenta lines
+                // in the inter-glyph pixels; we don't have sub-character
+                // precision and we're rendering text not graphics, so a
+                // plain DarkGray reads as a subtle separator on every
+                // terminal theme without competing with cell content.
+                // Skip on highlighted cells so the REVERSED selection
+                // stays loud, and skip when the cell content reached
+                // the edge (don't overwrite data).
                 if self.show_gridlines && !highlighted && w > 0 {
                     let gx = x + w - 1;
                     if buf[(gx, y)].symbol() == " " {
                         let mut g_style = cell_style;
-                        g_style = g_style.fg(Color::Rgb(0xC0, 0x40, 0xC0));
-                        buf[(gx, y)].set_char('·').set_style(g_style);
+                        g_style = g_style.fg(Color::DarkGray);
+                        buf[(gx, y)].set_char('┊').set_style(g_style);
                     }
                 }
             }
@@ -11150,19 +11152,19 @@ mod tests {
         let buf = app.render_to_buffer(80, 25);
         let body_row = App::line_text(&buf, PANEL_HEIGHT + 1);
         assert!(
-            !body_row.contains('·'),
+            !body_row.contains('┊'),
             "default body row should not contain gridline dots: {body_row:?}"
         );
 
         // :DOGY turns gridlines on — the rightmost column of each
-        // 9-char-wide empty cell becomes `·`.
+        // 9-char-wide empty cell becomes `┊`.
         drive_chord(&mut app, &[':', 'D', 'O', 'G', 'Y']);
         let buf = app.render_to_buffer(80, 25);
         // A body row past the pointer cell so no REVERSED highlight
         // suppresses the overlay.
         let body_row = App::line_text(&buf, PANEL_HEIGHT + 2);
         assert!(
-            body_row.matches('·').count() >= 4,
+            body_row.matches('┊').count() >= 4,
             "expected dotted gridline at each cell right edge: {body_row:?}"
         );
 
@@ -11171,7 +11173,7 @@ mod tests {
         let buf = app.render_to_buffer(80, 25);
         let body_row = App::line_text(&buf, PANEL_HEIGHT + 2);
         assert!(
-            !body_row.contains('·'),
+            !body_row.contains('┊'),
             "grid=No should suppress gridline dots: {body_row:?}"
         );
     }
@@ -11180,7 +11182,7 @@ mod tests {
     fn wysiwyg_display_grid_skips_cells_with_full_width_content() {
         let mut app = App::new();
         // Type a 9-char value that fills the default column width
-        // exactly. With gridlines on, the right-edge `·` would
+        // exactly. With gridlines on, the right-edge `┊` would
         // overwrite the last digit — verify we skip the overlay.
         drive_chord(&mut app, &['9', '8', '7', '6', '5', '4', '3', '2', '1']);
         enter(&mut app);
