@@ -882,6 +882,8 @@ transcripts! {
     m4_file_list_active => "M4_file_list_active.tsv",
     m4_file_list_worksheet => "M4_file_list_worksheet.tsv",
     m5_insert_sheet    => "M5_insert_sheet.tsv",
+    m5_delete_sheet    => "M5_delete_sheet.tsv",
+    m5_delete_file     => "M5_delete_file.tsv",
     m5_group_format    => "M5_group_format.tsv",
     m5_3d_sum          => "M5_3d_sum.tsv",
     m5_file_open       => "M5_file_open.tsv",

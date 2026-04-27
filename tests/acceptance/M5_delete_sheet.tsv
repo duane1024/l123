@@ -1,0 +1,54 @@
+# /Worksheet Delete Sheet — drop the current sheet.
+#
+# /WDS removes the worksheet at the pointer; sheets after it shift back
+# one slot.  The pointer stays at the same column/row, on whatever
+# sheet now sits at that index (clamped to the last remaining sheet).
+# Deleting the only remaining sheet is refused — there must always be
+# at least one sheet.
+
+# Seed sheet A and add a second sheet (B) with distinguishing data.
+KEYS 11
+ENTER
+UP
+ASSERT_CELL       A:A1  11
+
+# /WIS After: new blank sheet appears as B; pointer stays on A.
+KEY /
+KEY W
+KEY I
+KEY S
+KEY A
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1  11
+
+# Hop to B and seed it.
+CTRL_PGDN
+ASSERT_POINTER    B:A1
+KEYS 22
+ENTER
+UP
+ASSERT_CELL       B:A1  22
+
+# Hop back to A; pointer is now on the sheet we are about to delete.
+CTRL_PGUP
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1  11
+
+# /WDS on sheet A: it is destroyed; B's data shifts back into slot A.
+KEY /
+KEY W
+KEY D
+KEY S
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1  22
+
+# Only one sheet remains; /WDS now is a no-op (last sheet protected).
+KEY /
+KEY W
+KEY D
+KEY S
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A1
+ASSERT_CELL       A:A1  22

@@ -51,6 +51,14 @@ pub enum Action {
     WorksheetInsertSheetAfter,
     WorksheetDeleteRow,
     WorksheetDeleteColumn,
+    /// `/Worksheet Delete Sheet` — drop the worksheet at the pointer.
+    /// Sheets after it shift back one slot; refused on the last sheet.
+    WorksheetDeleteSheet,
+    /// `/Worksheet Delete File` — remove the foreground active file
+    /// from memory. When the last active file is deleted, the
+    /// workspace resets to a single blank workbook (mirrors
+    /// `/Worksheet Erase Yes`).
+    WorksheetDeleteFile,
     WorksheetColumnSetWidth,
     WorksheetColumnResetWidth,
     WorksheetColumnRangeSetWidth,
@@ -354,13 +362,13 @@ const WS_DELETE_MENU: &[MenuItem] = &[
         letter: 'S',
         name: "Sheet",
         help: "Delete one or more worksheets",
-        body: MenuBody::NotImplemented("ws-delete-sheet"),
+        body: MenuBody::Action(Action::WorksheetDeleteSheet),
     },
     MenuItem {
         letter: 'F',
         name: "File",
         help: "Remove the current file from memory",
-        body: MenuBody::NotImplemented("ws-delete-file"),
+        body: MenuBody::Action(Action::WorksheetDeleteFile),
     },
 ];
 

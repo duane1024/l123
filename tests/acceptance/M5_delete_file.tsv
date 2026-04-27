@@ -1,0 +1,76 @@
+# /Worksheet Delete File — drop the foreground active file from memory.
+#
+# Mirror of M5_file_open.tsv: load two distinct files alongside each
+# other, switch focus to the second, then /WDF and verify that the
+# survivor is the file we did NOT delete.  Deleting the last remaining
+# active file leaves a single blank workbook (mirrors /Worksheet Erase
+# Yes — there is always at least one active file).
+
+RM_FILE $TMPDIR/m5_delete_file_a.xlsx
+RM_FILE $TMPDIR/m5_delete_file_b.xlsx
+
+# --- build A on disk ---
+KEYS 11
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m5_delete_file_a.xlsx
+ENTER
+ASSERT_MODE     READY
+
+# --- fresh file; build B on disk ---
+KEY /
+KEY F
+KEY N
+KEY A
+KEYS 22
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m5_delete_file_b.xlsx
+ENTER
+ASSERT_MODE     READY
+
+# --- start from A via /File Retrieve ---
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/m5_delete_file_a.xlsx
+ENTER
+ASSERT_MODE     READY
+ASSERT_CELL     A:A1  11
+
+# --- /FOA loads B alongside; current view stays on A ---
+KEY /
+KEY F
+KEY O
+KEY A
+KEYS $TMPDIR/m5_delete_file_b.xlsx
+ENTER
+ASSERT_MODE     READY
+ASSERT_CELL     A:A1  11
+
+# --- Ctrl-End + Ctrl-PgDn rotates focus to file B ---
+CTRL_END
+ASSERT_STATUS   FILE
+CTRL_PGDN
+ASSERT_CELL     A:A1  22
+
+# --- /WDF deletes B; the surviving file (A) takes focus ---
+KEY /
+KEY W
+KEY D
+KEY F
+ASSERT_MODE     READY
+ASSERT_CELL     A:A1  11
+
+# --- /WDF on the last remaining file leaves one blank workbook ---
+KEY /
+KEY W
+KEY D
+KEY F
+ASSERT_MODE     READY
+ASSERT_POINTER  A:A1
+ASSERT_CELL     A:A1

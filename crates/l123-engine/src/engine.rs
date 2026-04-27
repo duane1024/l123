@@ -88,6 +88,12 @@ pub trait Engine {
     fn insert_sheet_at(&mut self, _at: u16) -> Result<()> {
         Err(EngineError::Unsupported("insert_sheet_at"))
     }
+    /// Drop the worksheet at `at`; existing sheets after it shift back
+    /// one position. Refused when `at` is the only remaining sheet —
+    /// every workbook must have at least one sheet.
+    fn delete_sheet_at(&mut self, _at: u16) -> Result<()> {
+        Err(EngineError::Unsupported("delete_sheet_at"))
+    }
     /// Number of worksheets in the current workbook.
     fn sheet_count(&self) -> u16 {
         0
