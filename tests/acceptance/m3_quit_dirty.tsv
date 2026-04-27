@@ -1,0 +1,46 @@
+# 1-2-3 R3 dirty-quit guard: /QY on a modified workbook does NOT exit
+# immediately. It opens a second No/Yes confirm warning that the
+# worksheet has unsaved changes. From there:
+#   - N (or default Enter) → back to READY, session continues
+#   - Y                    → end session
+#
+# Clean-path regression (clean workbook: /QY exits with no second
+# confirm) is already covered by M3_quit.tsv.
+
+ASSERT_MODE       READY
+ASSERT_RUNNING    true
+
+# Dirty the workbook with a label.
+KEYS hello
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: 'hello
+
+# /Q → first No/Yes confirm
+KEY /
+KEY Q
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   No
+ASSERT_PANEL_L2   Yes
+
+# Press Y → second confirm appears, session is still running. The
+# warning surfaces in the highlighted item's help text on line 3 since
+# our control-panel renderer reserves line 1 for the cell readout.
+KEY Y
+ASSERT_RUNNING    true
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   No
+ASSERT_PANEL_L2   Yes
+ASSERT_PANEL_L3   NOT SAVED
+
+# Press N → cancel back to READY, still running.
+KEY N
+ASSERT_MODE       READY
+ASSERT_RUNNING    true
+
+# /QYY → exits
+KEY /
+KEY Q
+KEY Y
+KEY Y
+ASSERT_RUNNING    false

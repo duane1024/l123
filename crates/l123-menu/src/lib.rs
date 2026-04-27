@@ -43,6 +43,11 @@ pub enum Action {
     /// Close the menu and return to READY. Used for explicit "No" / "Cancel"
     /// leaves in confirm submenus.
     Cancel,
+    /// `/QY` — request to end the session. Exits immediately when the
+    /// workbook is clean; opens [`QUIT_DIRTY_MENU`] (a second No/Yes
+    /// confirm) when there are unsaved changes. The second confirm's
+    /// Yes leaf fires [`Action::Quit`].
+    QuitConfirm,
     Quit,
     WorksheetEraseConfirm,
     WorksheetInsertRow,
@@ -456,6 +461,25 @@ const QUIT_MENU: &[MenuItem] = &[
         letter: 'Y',
         name: "Yes",
         help: "End l123 session",
+        body: MenuBody::Action(Action::QuitConfirm),
+    },
+];
+
+/// Second confirmation shown when the user requests `/QY` against a
+/// workbook with unsaved changes. Mirrors 1-2-3 R3.4a's "WORKSHEET
+/// CHANGES NOT SAVED" guard. Surfaced via the highlighted item's
+/// help text on control-panel line 3.
+pub const QUIT_DIRTY_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'N',
+        name: "No",
+        help: "NOT SAVED — do not end l123 session",
+        body: MenuBody::Action(Action::Cancel),
+    },
+    MenuItem {
+        letter: 'Y',
+        name: "Yes",
+        help: "NOT SAVED — end l123 session, lose unsaved changes",
         body: MenuBody::Action(Action::Quit),
     },
 ];
@@ -2921,7 +2945,7 @@ mod tests {
     #[test]
     fn resolve_quit_yes_is_action() {
         let node = resolve(&['Q', 'Y']).unwrap();
-        assert!(matches!(node.body, MenuBody::Action(Action::Quit)));
+        assert!(matches!(node.body, MenuBody::Action(Action::QuitConfirm)));
     }
 
     #[test]
