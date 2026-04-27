@@ -130,6 +130,33 @@ impl ZeroDisplay {
     }
 }
 
+/// `/Worksheet Global Default Other Clock` — what occupies the
+/// status-line clock slot.
+///
+/// Default is [`ClockDisplay::Filename`]: the active workbook's
+/// filename takes the slot when one exists, falling back to the
+/// 24-hour clock so an unsaved session still shows the date. This
+/// keeps prior status-line behavior intact.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClockDisplay {
+    Standard,
+    International,
+    None,
+    #[default]
+    Filename,
+}
+
+impl ClockDisplay {
+    pub fn label(self) -> &'static str {
+        match self {
+            ClockDisplay::Standard => "Standard",
+            ClockDisplay::International => "International",
+            ClockDisplay::None => "None",
+            ClockDisplay::Filename => "Filename",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Entry {
     kind: EntryKind,
@@ -355,6 +382,9 @@ pub struct App {
     /// While true, mutating commands push reverse entries onto the
     /// journal; Alt-F4 pops and applies. L123 defaults this to ON.
     undo_enabled: bool,
+    /// `/Worksheet Global Default Other Clock` — picks what the
+    /// status line's clock slot shows.
+    clock_display: ClockDisplay,
     menu: Option<MenuState>,
     point: Option<PointState>,
     prompt: Option<PromptState>,
@@ -1405,6 +1435,7 @@ impl App {
             global_protection: false,
             group_mode: false,
             undo_enabled: true,
+            clock_display: ClockDisplay::default(),
             menu: None,
             point: None,
             prompt: None,
@@ -2788,6 +2819,22 @@ impl App {
                 // the user just told us to be quiet.
                 self.beep_pending = false;
                 self.beep_enabled = false;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherClockStandard => {
+                self.clock_display = ClockDisplay::Standard;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherClockInternational => {
+                self.clock_display = ClockDisplay::International;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherClockNone => {
+                self.clock_display = ClockDisplay::None;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherClockFilename => {
+                self.clock_display = ClockDisplay::Filename;
                 self.close_menu();
             }
             Action::WorksheetEraseConfirm => self.execute_worksheet_erase(),
@@ -7660,15 +7707,28 @@ impl App {
     }
 
     fn render_status(&self, area: Rect, buf: &mut Buffer) {
-        // Left slot: the active workbook's base filename, or the
-        // current local date/time in 1-2-3 `DD-Mon-YYYY HH:MM` style.
-        let left_text = match self.wb().active_path.as_ref() {
-            Some(p) => p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| p.display().to_string()),
-            None => crate::clock::format_ddmmmyyyy_hhmm(crate::clock::local_now()),
+        // Left slot: filename or clock, per `/Worksheet Global Default
+        // Other Clock`. Filename mode falls back to the International
+        // clock when no file is loaded so the slot isn't blank in a
+        // fresh session.
+        let filename = || {
+            self.wb().active_path.as_ref().map(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| p.display().to_string())
+            })
+        };
+        let left_text = match self.clock_display {
+            ClockDisplay::Standard => {
+                crate::clock::format_ddmmmyy_hhmm_ampm(crate::clock::local_now())
+            }
+            ClockDisplay::International => {
+                crate::clock::format_ddmmmyyyy_hhmm(crate::clock::local_now())
+            }
+            ClockDisplay::None => String::new(),
+            ClockDisplay::Filename => filename()
+                .unwrap_or_else(|| crate::clock::format_ddmmmyyyy_hhmm(crate::clock::local_now())),
         };
         // Multi-sheet workbook → append "[<Letter>: <name>]" so users
         // can see which Excel tab their letter-addressed pointer is on.

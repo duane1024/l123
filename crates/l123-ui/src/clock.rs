@@ -50,7 +50,8 @@ pub fn local_from_unix(secs: i64) -> DateTime {
 }
 
 /// 1-2-3 R3.4a status-line format: `DD-MMM-YYYY HH:MM` with a
-/// three-letter English month abbreviation.
+/// three-letter English month abbreviation. Used by the
+/// International clock setting.
 pub fn format_ddmmmyyyy_hhmm(dt: DateTime) -> String {
     format!(
         "{:02}-{}-{:04} {:02}:{:02}",
@@ -59,6 +60,27 @@ pub fn format_ddmmmyyyy_hhmm(dt: DateTime) -> String {
         dt.year,
         dt.hour,
         dt.minute,
+    )
+}
+
+/// 1-2-3 R3.4a Standard clock: `DD-MMM-YY HH:MM AM/PM` (12-hour,
+/// 2-digit year). Midnight renders as `12:MM AM`; noon as `12:MM PM`.
+pub fn format_ddmmmyy_hhmm_ampm(dt: DateTime) -> String {
+    let yy = dt.year.rem_euclid(100);
+    let (hh12, ampm) = match dt.hour {
+        0 => (12, "AM"),
+        h @ 1..=11 => (h, "AM"),
+        12 => (12, "PM"),
+        h => (h - 12, "PM"),
+    };
+    format!(
+        "{:02}-{}-{:02} {:02}:{:02} {}",
+        dt.day,
+        month_abbr(dt.month),
+        yy,
+        hh12,
+        dt.minute,
+        ampm,
     )
 }
 
@@ -106,6 +128,46 @@ mod tests {
             minute: 0,
         };
         assert_eq!(format_ddmmmyyyy_hhmm(dt), "05-Jan-2026 09:00");
+    }
+
+    #[test]
+    fn standard_format_morning_and_afternoon() {
+        let am = DateTime {
+            year: 2026,
+            month: 4,
+            day: 23,
+            hour: 7,
+            minute: 2,
+        };
+        assert_eq!(format_ddmmmyy_hhmm_ampm(am), "23-Apr-26 07:02 AM");
+        let pm = DateTime {
+            year: 2026,
+            month: 4,
+            day: 23,
+            hour: 14,
+            minute: 2,
+        };
+        assert_eq!(format_ddmmmyy_hhmm_ampm(pm), "23-Apr-26 02:02 PM");
+    }
+
+    #[test]
+    fn standard_format_handles_midnight_and_noon() {
+        let midnight = DateTime {
+            year: 2026,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+        };
+        assert_eq!(format_ddmmmyy_hhmm_ampm(midnight), "01-Jan-26 12:00 AM");
+        let noon = DateTime {
+            year: 2026,
+            month: 1,
+            day: 1,
+            hour: 12,
+            minute: 0,
+        };
+        assert_eq!(format_ddmmmyy_hhmm_ampm(noon), "01-Jan-26 12:00 PM");
     }
 
     #[test]

@@ -1,0 +1,68 @@
+# /Worksheet Global Default Other Clock — toggle the status-line clock
+# slot through Standard / International / None / Filename.
+#
+# We can't assert on a live clock value (it changes between runs), so
+# instead we use a saved filename as a stable presence/absence signal.
+# Default mode is Filename, so the filename should be in the status
+# line right after the save. Toggling to Standard, International, or
+# None must remove it; toggling back to Filename restores it.
+# The format functions themselves are covered by clock.rs unit tests.
+
+SIZE 200 25
+
+RM_FILE $TMPDIR/wgdo_clock.xlsx
+
+# Save a workbook so active_path is set and the filename has something
+# stable to anchor on.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/wgdo_clock.xlsx
+ENTER
+ASSERT_MODE     READY
+ASSERT_STATUS   wgdo_clock.xlsx
+
+# /WGDOCS — switch to Standard (12-hour clock). The filename slot is
+# replaced by a clock string, so the filename disappears from screen.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY C
+KEY S
+ASSERT_MODE     READY
+ASSERT_SCREEN_NOT_CONTAINS   wgdo_clock.xlsx
+
+# /WGDOCI — International (24-hour). Still a clock; still no filename.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY C
+KEY I
+ASSERT_MODE     READY
+ASSERT_SCREEN_NOT_CONTAINS   wgdo_clock.xlsx
+
+# /WGDOCN — None blanks the slot entirely.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY C
+KEY N
+ASSERT_MODE     READY
+ASSERT_SCREEN_NOT_CONTAINS   wgdo_clock.xlsx
+
+# /WGDOCF — back to Filename. Filename returns.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY C
+KEY F
+ASSERT_MODE     READY
+ASSERT_STATUS   wgdo_clock.xlsx
