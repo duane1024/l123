@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Data Query Unique</title>
+<h1>/Data Query Unique</h1>
+<pre><a href="0120-data-query.html">/Data Query</a> Unique -- Performs the same operation as <a href="0141-data-query-extract.html">/Data Query Extract</a>
+(copies to the output range all records in the input range that match the
+criteria in the criteria range), but it eliminates duplicate records and
+sorts the records (in ascending order) in the output range by the first
+field listed there.
+
+<a href="0120-data-query.html">/Data Query</a> Unique uses the fields in the output range to determine
+duplicates. If two records are not exactly alike but the output range
+contains only fields that are the same for those two records, 1-2-3
+identifies the records as duplicates and enters only one of them in
+the output range. To avoid confusion about unique records, you can
+enter all the field names in the output range.
+
+1. Before you use <a href="0120-data-query.html">/Data Query</a> Unique, you must specify the input,
+    criteria, and output ranges.
+2. Select <a href="0120-data-query.html">/Data Query</a> Unique.
+
+<a href="0124-the-input-range.html">The Input Range</a>             <a href="0127-the-criteria-range.html">The Criteria Range</a>                 <a href="0137-the-output-range.html">The Output Range</a>
+<a href="0008-the-data-commands.html">Data Commands</a>                                                  <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

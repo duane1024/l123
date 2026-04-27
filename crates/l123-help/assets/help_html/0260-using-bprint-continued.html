@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Using BPrint (continued)</title>
+<h1>Using BPrint (continued)</h1>
+<pre><a href="0259-using-bprint.html">Using BPrint</a> (continued) -- To issue a BPrint command, type bprint followed by
+one or more of the following arguments, and then press ENTER. You can type the
+arguments in any order. If you don&#x27;t use arguments, BPrint displays a list of
+the files waiting to be printed.
+
+Argument     Result
+
+filename     Sends filename (an encoded file or text file) to the printer.
+-c filename  Cancels the printing of filename and removes it from the print
+              queue. filename must include a path and cannot be the file that
+              is currently printing.
+-h           Displays a Help screen about BPrint command arguments.
+-p=x         Directs printing to parallel port x. Replace x with 1 or 2.
+-s=x         Directs printing to serial port x. Replace x with 1 or 2.
+-pa          Pauses background printing.
+-q           Removes BPrint from memory.
+-r           Resumes printing jobs temporarily suspended with -pa.
+-t           Stops the current print job and cancels any remaining print jobs.
+
+<a href="0259-using-bprint.html">Previous</a>                      <a href="0258-print-background.html">/Print Background</a>                   <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

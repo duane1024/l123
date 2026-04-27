@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Worksheet Global Default Printer Pg-Length</title>
+<h1>/Worksheet Global Default Printer Pg-Length</h1>
+<pre><a href="0441-worksheet-global-default-printer.html">/Worksheet Global Default Printer</a> Pg-Length -- Sets the length of each
+page measured in standard lines. The Pg-Length setting determines where
+1-2-3 creates page breaks when printing and the number of printed lines
+per page, given the top and bottom margins.
+
+1. Select <a href="0441-worksheet-global-default-printer.html">/Worksheet Global Default Printer</a> Pg-Length.
+2. Enter a number of lines from 1 through 1000. Generally, the Pg-Length
+    setting should equal the number of standard lines per inch for your
+    printer times the length of your paper in inches. The default, 66,
+    defines a page length of 66 standard lines for 11-inch paper with
+    6 printed lines per inch.
+3. To update the 1-2-3 configuration file (123R34.CNF) so 1-2-3 uses
+    the new Pg-Length setting in future sessions, select /Worksheet
+    Global Default Update.
+
+The corresponding /Print command is /Print [B,E,F,P] Options Pg-Length.
+See <a href="0298-printer-information.html">Printer Information</a> for page length settings for specific printers.
+
+<a href="0016-the-worksheet-commands.html">Worksheet Commands</a>             <a href="0281-print-background-encoded-file-printer-options.html">/Print [B,E,F,P] Options</a>               <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

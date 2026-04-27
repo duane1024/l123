@@ -1,0 +1,20 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Data Query Find works only in active files</title>
+<h1>Data Query Find works only in active files</h1>
+<pre>Data Query Find works only in active files
+
+The following conditions could have caused this error:
+
+* You specified an input range that was an external table or was in a file
+   on disk. Either open the file you want to use or specify an input range
+   that is in an active file. You cannot use <a href="0142-data-query-find.html">/Data Query Find</a> with external
+   tables.
+
+* You specified an input range that was in an active file, but you used a
+   file reference that did not include a path. Select <a href="0123-data-query-input.html">/Data Query Input</a>,
+   and when 1-2-3 prompts you for the range, press F3 (NAME) and select
+   the file name from the displayed list. 1-2-3 automatically includes the
+   path when you use this method to create the file reference.
+
+<a href="0000-1-2-3-help-index.html">Help Index</a></pre>

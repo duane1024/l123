@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Macro Commands (continued)</title>
+<h1>Macro Commands (continued)</h1>
+<pre><a href="0319-macro-commands-continued.html">Macro Commands (continued)</a>
+
+    {FORM input-location,[call-table],[include-list],[exclude-list]}
+        Suspends macro execution so you can enter and edit data in
+        the unprotected cells in input-location. Macro execution
+        resumes when you press ENTER or ESC while the mode indicator
+        displays READY.
+
+           Input-location is a range that includes unprotected cells.
+           Call-table is a two-column range. The first column contains
+          a list of macro key names; the second contains subroutines that
+          1-2-3 executes when you press the keys listed in the first column.
+           Include-list and exclude-list are ranges that contain lists
+          of allowable keystrokes and keystrokes to ignore, respectively.
+          (Use one or the other of these arguments; if you use both, 1-2-3
+          ignores the exclude-list argument.)
+
+    For more information on using {FORM}, see Chapter 13 of Reference.
+
+<a href="0326-macro-commands-continued.html">Continued</a>           <a href="0324-macro-commands-continued.html">Previous</a>              <a href="0317-macro-command-index.html">Macro Index</a>               <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Worksheet Global Recalc (continued)</title>
+<h1>/Worksheet Global Recalc (continued)</h1>
+<pre><a href="0422-worksheet-global-recalc.html">/Worksheet Global Recalc</a> (continued)
+
+    Manual      1-2-3 recalculates formulas only when you press <a href="0519-f9-calc-key.html">F9 (CALC)</a>.
+                Manual recalculation occurs in the foreground, so you must
+                wait for 1-2-3 to complete it before continuing your work.
+    Iteration   Sets the number of recalculation passes (1 through 50) 1-2-3
+                makes for a complete recalculation. 1-2-3 uses this setting
+                when the order is Columnwise or Rowwise, or when the order
+                is Natural and a circular reference exists.
+2. If you selected Iteration, enter a number from 1 (default) through 50
+    to specify the number of recalculation passes.
+
+The recalculation settings affect all active files. When you use /File
+Open or <a href="0039-file-retrieve.html">/File Retrieve</a> to read a file into memory, 1-2-3 uses the new
+file&#x27;s recalculation settings for all active files during that session.
+
+When a worksheet contains formulas that link to data in active files or
+files on disk, use <a href="0018-file-admin-link-refresh.html">/File Admin Link-Refresh</a> to update those formulas.
+
+<a href="0422-worksheet-global-recalc.html">Previous</a>                       <a href="0417-worksheet-global.html">Worksheet Commands</a>                   <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

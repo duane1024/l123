@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Data Query Modify Replace</title>
+<h1>/Data Query Modify Replace</h1>
+<pre><a href="0144-data-query-modify.html">/Data Query Modify</a> Replace -- Replaces the original records in the input
+range with edited records from the output range. Use <a href="0144-data-query-modify.html">/Data Query Modify</a>
+Replace after you use <a href="0146-data-query-modify-extract.html">/Data Query Modify Extract</a> to replace records in a
+database table or external table with edited or updated records.
+
+CAUTION  To avoid writing over formulas in the input range, make sure
+the output range does not include names of fields that contain formulas.
+
+1. Before you use <a href="0144-data-query-modify.html">/Data Query Modify</a> Replace, you must specify the input,
+    criteria, and output ranges.
+2. Select <a href="0146-data-query-modify-extract.html">/Data Query Modify Extract</a> to copy records to the output range.
+3. Edit the records in the output range.
+    CAUTION  Do not add or delete rows in the output range or sort records
+    in the output range. If you do, 1-2-3 cannot match correctly the
+    edited records with records you are replacing in the input range.
+4. Select <a href="0144-data-query-modify.html">/Data Query Modify</a> Replace.
+
+<a href="0124-the-input-range.html">The Input Range</a>             <a href="0127-the-criteria-range.html">The Criteria Range</a>                <a href="0137-the-output-range.html">The Output Range</a>
+<a href="0008-the-data-commands.html">Data Commands</a>                                                 <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

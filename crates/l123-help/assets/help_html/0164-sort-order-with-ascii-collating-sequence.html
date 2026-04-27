@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Sort Order with ASCII Collating Sequence</title>
+<h1>Sort Order with ASCII Collating Sequence</h1>
+<pre><a href="0161-sort-order.html">Sort Order</a> with ASCII Collating Sequence
+
+Ascending  1. Blank cells
+            2. Labels -- all characters evaluated in LMBCS order
+            3. Values in numerical order
+Descending 1. Values in reverse numerical order
+            2. Labels -- all characters evaluated in reverse LMBCS order
+            3. Blank cells
+
+Uppercase letters precede lowercase letters. The following example shows
+how 1-2-3 sorts labels when some contain uppercase letters and some contain
+lowercase letters:
+
+      Original order           Ascending        Descending
+      AAAA                     AAAA             bbbb
+      aaaa                     BBBB             aaaa
+      BBBB                     aaaa             BBBB
+      bbbb                     bbbb             AAAA
+
+<a href="0161-sort-order.html">Sort Order</a>           <a href="0163-sort-order-with-numbers-first-collating-sequence.html">Numbers First</a>          <a href="0162-sort-order-with-numbers-last-collating-sequence.html">Numbers Last</a>            <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

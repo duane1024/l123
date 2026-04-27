@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Macro Commands (continued)</title>
+<h1>Macro Commands (continued)</h1>
+<pre><a href="0319-macro-commands-continued.html">Macro Commands (continued)</a>
+    {BREAK}
+        During data entry or selection of a 1-2-3 command, returns
+        1-2-3 to READY mode.
+
+    {BREAKOFF}
+        Disables CTRL-BREAK, preventing interruption of a macro
+        until the macro ends or reaches {BREAKON}.
+
+    {BREAKON}
+        Restores use of CTRL-BREAK while a macro is running, undoing
+        a {BREAKOFF} command.
+
+    {CLOSE}
+        Closes the open text file, if one is open. After executing a
+        {CLOSE} command, 1-2-3 goes directly to the next cell in the
+        macro. Do not include any further macro instructions in the same
+        cell as the {CLOSE} command because 1-2-3 will not execute them.
+
+<a href="0322-macro-commands-continued.html">Continued</a>           <a href="0320-macro-commands-continued.html">Previous</a>              <a href="0317-macro-command-index.html">Macro Index</a>               <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

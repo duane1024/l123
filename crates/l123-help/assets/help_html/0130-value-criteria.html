@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Value Criteria</title>
+<h1>Value Criteria</h1>
+<pre>Value Criteria -- Enter value criteria to search fields that contain values.
+
+    To search for an exact match, enter a number exactly as it appears in
+   the input range. For example, 1800 matches 1800 or 1800.00.
+    Enter a label prefix (&#x27; &quot; or ^) and one of the logical<a href="0222-operators.html"> perators</a>
+   (= &lt; &lt;= &gt; &gt;= and &lt;&gt;) before a value to search for values that match a
+   specific condition. For example, &#x27;&gt;1500 matches all entries that are
+   greater than 1500.
+
+   For example, if you specify A21..B22 as the criteria range, 1-2-3
+   matches records in the input range where Sales equals 1800.
+   If you specify E25..F26 as the criteria range, 1-2-3 matches records
+   where Sales is greater than 1800.
+
+        A          B                            E          F
+   21  Name      Sales                    25   Name      Sales
+   22             1800                    26            &#x27;&gt;1800
+
+<a href="0127-the-criteria-range.html">The Criteria Range</a>      <a href="0126-data-query-criteria.html">/Data Query Criteria</a>      <a href="0008-the-data-commands.html">Data Commands</a>     <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

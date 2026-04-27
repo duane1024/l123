@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Cannot modify a range that is not in memory</title>
+<h1>Cannot modify a range that is not in memory</h1>
+<pre>Cannot modify a range that is not in memory
+
+You were using a 1-2-3 command and one of the following problems occurred:
+
+* Instead of specifying a range in an active file, you specified a range
+   in a file on disk or a range name assigned to an external table.
+
+* You used a file reference to specify a range in another active file, but
+   the reference did not include a path and/or extension. Reselect the
+   command, and when 1-2-3 prompts you for the range, press F3 (NAME) and
+   select the file name from the displayed list. 1-2-3 automatically includes
+   the path and extension when you use this method to create file references.
+
+* One of the settings used by the selected command is an undefined range
+   name. For example, you could have selected <a href="0141-data-query-extract.html">/Data Query Extract</a> when the
+   range name specified as the output range was undefined. To solve the
+   problem, either change the setting that caused the error or redefine
+   the undefined range name with <a href="0375-range-name-create.html">/Range Name Create</a> or Labels.
+
+<a href="0000-1-2-3-help-index.html">Help Index</a></pre>

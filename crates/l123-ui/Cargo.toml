@@ -12,6 +12,7 @@ wk3 = ["l123-engine/wk3"]
 [dependencies]
 l123-core = { workspace = true }
 l123-engine = { workspace = true }
+l123-help = { workspace = true }
 l123-menu = { workspace = true }
 l123-parse = { workspace = true }
 l123-io = { workspace = true }

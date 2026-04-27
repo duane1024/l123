@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>Table Definition</title>
+<h1>Table Definition</h1>
+<pre>Table Definition -- A table definition is a six-column range that contains
+information describing an external table. The range contains the following:
+
+Column 1 -- Field names (required). A field name is the name of a field
+             as you want it to appear in the external table.
+Column 2 -- Data types (required). The data type identifies the type of
+             data in a field. 1-2-3 has two data types: labels and values.
+Column 3 -- Field widths (required for label fields; may or may not be
+             required for fields containing values).
+Column 4 -- Column labels (may or may not be required). A column label is
+             an alternate version of a field name.
+Column 5 -- Field descriptions (may or may not be required).
+Column 6 -- Field creation strings (may or may not be required).
+
+NOTE  Columns 4, 5, and 6 may be ignored by the DataLens driver you use,
+depending on the requirements of the driver. For information on whether you
+need to include information in these columns, open DATALENS.WK3 and see &quot;About
+the Table Definition&quot; in the worksheet that has information about the driver.
+
+<a href="0198-table-definition-continued.html">Continued</a>            <a href="0195-data-external-create-procedure.html">/Data External Create Procedure</a>                <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

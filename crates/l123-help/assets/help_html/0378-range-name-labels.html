@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Range Name Labels</title>
+<h1>/Range Name Labels</h1>
+<pre><a href="0372-range-name.html">/Range Name</a> Labels -- Assigns range names to single-cell ranges, using the
+labels (up to 15 characters long) in adjacent cells as the range names.
+Use <a href="0372-range-name.html">/Range Name</a> Labels to assign an existing label as the range name for the
+cell immediately above, below, to the right, or to the left of the label.
+See <a href="0375-range-name-create.html">/Range Name Create</a> for rules on characters in range names.
+
+1. Select <a href="0372-range-name.html">/Range Name</a> Labels.
+2. Select Right, Down, Left, or Up to indicate the position of the cells
+    you are naming in relation to the labels.
+3. Specify the range that contains the labels you want to use as range
+    names.
+
+In any formulas that use a range address (for example, B5..B5 as opposed
+to just B5) to refer to a cell you named with <a href="0372-range-name.html">/Range Name</a> Labels, 1-2-3
+replaces the range address with the corresponding range name. For example,
+when you assign the name APRIL to B5, 1-2-3 changes the formula @MAX(B5..B5)
+to @MAX(APRIL), but 1-2-3 does not change the formula +B5/30.
+
+<a href="0365-specifying-ranges.html">Specifying Ranges</a>                                          <a href="0373-defined-range-names.html">Defined Range Names</a>
+<a href="0014-the-range-commands.html">Range Commands</a>                                             <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

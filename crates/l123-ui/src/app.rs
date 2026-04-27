@@ -45,7 +45,7 @@ use ratatui::{
 };
 use ratatui_image::{picker::Picker, picker::ProtocolType, Image, Resize};
 
-use crate::help::{HelpTopic, HELP_TOPICS};
+use crate::help::HelpState;
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
 const ROW_GUTTER: u16 = 5;
@@ -1291,18 +1291,6 @@ pub(crate) struct NameListState {
 }
 
 const NAME_LIST_PAGE_SIZE: usize = 10;
-const HELP_PAGE_SIZE: u16 = 15;
-
-/// F1 HELP overlay state.
-#[derive(Debug, Clone)]
-pub(crate) struct HelpState {
-    /// Index into [`crate::help::HELP_TOPICS`].
-    topic: usize,
-    /// First body line shown at the top of the visible area.
-    scroll: u16,
-    /// Mode that was active when F1 was pressed; restored on Esc.
-    return_mode: Mode,
-}
 
 impl PromptNext {
     fn accepts_char(self, c: char) -> bool {
@@ -1487,6 +1475,126 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+/// One body row of the help overlay: a slice of plain text plus zero
+/// or more link spans expressed as `(byte_range, link_index)` pairs.
+/// `link_index` references the page's `links` slice so the renderer
+/// can decide whether to paint that link as focused.
+struct HelpRow<'a> {
+    text: &'a str,
+    /// `(start, end, link_index)` byte ranges into `text`.
+    links: Vec<(usize, usize, usize)>,
+}
+
+/// Split a help page's body into rows for rendering. Each newline
+/// becomes a row; every link is attached to the row(s) it covers
+/// (links never cross newlines in the corpus, but we clip defensively).
+fn build_help_rows(state: &HelpState) -> Vec<HelpRow<'_>> {
+    let body = state.page.body.as_str();
+    let mut rows: Vec<HelpRow<'_>> = Vec::new();
+    let mut row_start = 0;
+    let mut row_idx_starts: Vec<usize> = vec![0];
+    for (i, ch) in body.char_indices() {
+        if ch == '\n' {
+            rows.push(HelpRow {
+                text: &body[row_start..i],
+                links: Vec::new(),
+            });
+            row_start = i + 1;
+            row_idx_starts.push(row_start);
+        }
+    }
+    rows.push(HelpRow {
+        text: &body[row_start..],
+        links: Vec::new(),
+    });
+
+    for (li, link) in state.page.links.iter().enumerate() {
+        // Find which row contains link.start.
+        let row = match row_idx_starts.binary_search(&link.start) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        };
+        if row >= rows.len() {
+            continue;
+        }
+        let r_start = row_idx_starts[row];
+        let r_end = if row + 1 < row_idx_starts.len() {
+            row_idx_starts[row + 1] - 1 // strip the '\n'
+        } else {
+            body.len()
+        };
+        let s = link.start.saturating_sub(r_start);
+        let e = link.end.min(r_end).saturating_sub(r_start);
+        if s < e {
+            rows[row].links.push((s, e, li));
+        }
+    }
+    rows
+}
+
+/// Visible row index of the link at `focus`, if any.
+fn link_row_for_focus(rows: &[HelpRow<'_>], focus: usize) -> Option<usize> {
+    rows.iter()
+        .position(|r| r.links.iter().any(|(_, _, li)| *li == focus))
+}
+
+/// Paint a help body row into `buf`. The row is left-padded by one
+/// space (matches the existing overlay) and clipped to `width`.
+fn render_help_row(buf: &mut Buffer, x: u16, y: u16, width: u16, row: &HelpRow<'_>, focus: usize) {
+    let normal = Style::default();
+    let link_style = Style::default().fg(Color::Green);
+    let focus_style = Style::default()
+        .fg(Color::Black)
+        .bg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+
+    let buf_left = buf.area.x;
+    let buf_right = buf.area.x + buf.area.width;
+    let mut col = x;
+    if col < buf_right && y < buf.area.y + buf.area.height {
+        buf[(col, y)].set_char(' ').set_style(normal);
+        col += 1;
+    }
+    let avail = width.saturating_sub(1);
+    let end_col = x + 1 + avail;
+
+    let text_bytes = row.text.as_bytes();
+    let mut i = 0;
+    while i < text_bytes.len() && col < end_col && col < buf_right {
+        let in_link = row
+            .links
+            .iter()
+            .find(|(s, e, _)| i >= *s && i < *e)
+            .map(|(_, _, li)| *li);
+        let style = match in_link {
+            Some(li) if li == focus => focus_style,
+            Some(_) => link_style,
+            None => normal,
+        };
+        let ch_end = next_char_boundary_str(row.text, i);
+        let ch = row.text[i..ch_end].chars().next().unwrap_or(' ');
+        if col >= buf_left {
+            buf[(col, y)].set_char(ch).set_style(style);
+        }
+        col += 1;
+        i = ch_end;
+    }
+    // Pad remainder of the row with spaces so a previous frame doesn't
+    // bleed through.
+    while col < end_col && col < buf_right {
+        buf[(col, y)].set_char(' ').set_style(normal);
+        col += 1;
+    }
+}
+
+fn next_char_boundary_str(s: &str, mut i: usize) -> usize {
+    i += 1;
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
+}
+
 /// Write `text` at `(x, y)` into `buf`, padded or truncated to exactly
 /// `width` cells, with `style` applied over the whole span.
 fn set_line(buf: &mut Buffer, x: u16, y: u16, text: &str, width: u16, style: Style) {
@@ -1618,9 +1726,7 @@ fn is_retrievable_workbook(path: &Path) -> bool {
 /// R3.4a behavior of suspending to a DOS shell ("Type EXIT to return
 /// to 1-2-3"). Errors from the spawn are printed to the underlying
 /// terminal and otherwise swallowed; we always try to restore the TUI.
-fn suspend_to_shell<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-) -> anyhow::Result<()>
+fn suspend_to_shell<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> anyhow::Result<()>
 where
     B::Error: Send + Sync + 'static,
 {
@@ -4014,11 +4120,10 @@ impl App {
             return;
         }
         let return_mode = self.mode;
-        self.help = Some(HelpState {
-            topic: 0,
-            scroll: 0,
-            return_mode,
-        });
+        let Some(state) = HelpState::open(return_mode) else {
+            return;
+        };
+        self.help = Some(state);
         self.mode = Mode::Help;
     }
 
@@ -4035,32 +4140,18 @@ impl App {
         };
         match k.code {
             KeyCode::Esc => self.close_help(),
-            KeyCode::Tab => {
-                state.topic = (state.topic + 1) % HELP_TOPICS.len();
-                state.scroll = 0;
+            KeyCode::Up => state.focus_up(),
+            KeyCode::Down => state.focus_down(),
+            KeyCode::Left => state.focus_left(),
+            KeyCode::Right => state.focus_right(),
+            KeyCode::Enter => {
+                if let Some(link) = state.page.links.get(state.focus) {
+                    let target = link.target.clone();
+                    state.follow(&target);
+                }
             }
-            KeyCode::BackTab => {
-                state.topic = if state.topic == 0 {
-                    HELP_TOPICS.len() - 1
-                } else {
-                    state.topic - 1
-                };
-                state.scroll = 0;
-            }
-            KeyCode::Up => {
-                state.scroll = state.scroll.saturating_sub(1);
-            }
-            KeyCode::Down => {
-                state.scroll = state.scroll.saturating_add(1);
-            }
-            KeyCode::PageUp => {
-                state.scroll = state.scroll.saturating_sub(HELP_PAGE_SIZE);
-            }
-            KeyCode::PageDown => {
-                state.scroll = state.scroll.saturating_add(HELP_PAGE_SIZE);
-            }
-            KeyCode::Home => {
-                state.scroll = 0;
+            KeyCode::Backspace => {
+                state.pop();
             }
             _ => {}
         }
@@ -8719,14 +8810,14 @@ impl App {
         }
     }
 
-    /// Draw the F1 help overlay: header bar with the topic title, body
-    /// (scrollable), footer with key hints.
+    /// Draw the F1 help overlay: header bar with the page title, body
+    /// (with hyperlinks colorized — focused link reversed), footer with
+    /// key hints. Body rows are clipped to the available height; the
+    /// renderer auto-scrolls so the focused link stays visible.
     fn render_help_overlay(&self, area: Rect, buf: &mut Buffer) {
         let Some(state) = self.help.as_ref() else {
             return;
         };
-        let topic: &HelpTopic = &HELP_TOPICS[state.topic.min(HELP_TOPICS.len() - 1)];
-
         if area.height == 0 || area.width == 0 {
             return;
         }
@@ -8735,45 +8826,67 @@ impl App {
             .bg(Color::Cyan)
             .add_modifier(Modifier::BOLD);
         let footer_style = Style::default().fg(Color::Black).bg(Color::Cyan);
-        let body_style = Style::default();
 
-        // Top header: "Help — Index   [topic 1/8]".
-        let header = format!(
-            " {}   [topic {}/{}] ",
-            topic.title,
-            state.topic + 1,
-            HELP_TOPICS.len()
-        );
-        set_line(buf, area.x, area.y, &header, area.width, header_style);
+        // Top header: " <Title>                                       HELP "
+        let title = state.page.title.as_str();
+        let header_left = format!(" {} ", title);
+        set_line(buf, area.x, area.y, &header_left, area.width, header_style);
+        // Right-aligned "HELP" tag.
+        let tag = " HELP ";
+        if (tag.len() as u16) <= area.width {
+            let tag_x = area.x + area.width - tag.len() as u16;
+            set_line(buf, tag_x, area.y, tag, tag.len() as u16, header_style);
+        }
 
         // Reserve one row for the footer; the rest is the body window.
         let footer_y = area.y + area.height.saturating_sub(1);
         let body_top = area.y + 1;
         let body_height = footer_y.saturating_sub(body_top);
+        let body_width = area.width;
 
-        // Skip the first `state.scroll` body lines.
-        let lines: Vec<&str> = topic.body.lines().collect();
-        let start = (state.scroll as usize).min(lines.len());
-        let end = (start + body_height as usize).min(lines.len());
-        for (i, line) in lines[start..end].iter().enumerate() {
-            let text = format!(" {}", line);
+        // Split body into (line_text, link_spans) per row, with link
+        // spans expressed as byte ranges into the line. We then auto-
+        // scroll so the focused link's row is on screen.
+        let rows = build_help_rows(state);
+        let focus_row = link_row_for_focus(&rows, state.focus);
+        let scroll = match focus_row {
+            Some(fr) => {
+                let bh = body_height as usize;
+                fr.saturating_sub(bh.saturating_sub(1))
+            }
+            None => 0,
+        };
+
+        let visible = rows
+            .iter()
+            .skip(scroll)
+            .take(body_height as usize)
+            .enumerate();
+        for (i, row) in visible {
+            render_help_row(
+                buf,
+                area.x,
+                body_top + i as u16,
+                body_width,
+                row,
+                state.focus,
+            );
+        }
+        // Blank out remaining body rows.
+        let drawn = rows.len().saturating_sub(scroll).min(body_height as usize);
+        for i in drawn..body_height as usize {
             set_line(
                 buf,
                 area.x,
                 body_top + i as u16,
-                &text,
+                "",
                 area.width,
-                body_style,
+                Style::default(),
             );
-        }
-        // Blank out remaining body rows (in case a previous frame drew
-        // something taller).
-        for i in (end - start)..body_height as usize {
-            set_line(buf, area.x, body_top + i as u16, "", area.width, body_style);
         }
 
         // Footer.
-        let footer = " Tab/Shift-Tab: next/prev topic   PgUp/PgDn: scroll   Esc: close ";
+        let footer = " ↑/↓: next/prev link   ENTER: follow   BACKSPACE: back   ESC: close ";
         set_line(buf, area.x, footer_y, footer, area.width, footer_style);
     }
 
@@ -11537,10 +11650,7 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(
-            !app.is_dirty(),
-            "successful /FS should clear the dirty bit"
-        );
+        assert!(!app.is_dirty(), "successful /FS should clear the dirty bit");
 
         let _ = std::fs::remove_file(&target);
         let _ = std::fs::remove_dir(&dir);

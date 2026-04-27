@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.35;margin:2rem;max-width:96rem}a{color:#0645ad}pre{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:1rem;overflow:auto}.meta{color:#555}.links li{margin:.25rem 0}</style>
+<title>/Worksheet Global Default Printer Interface</title>
+<h1>/Worksheet Global Default Printer Interface</h1>
+<pre><a href="0441-worksheet-global-default-printer.html">/Worksheet Global Default Printer</a> Interface -- Identifies the printer port
+through which your printer and computer are connected.
+
+1. Select <a href="0441-worksheet-global-default-printer.html">/Worksheet Global Default Printer</a> Interface.
+2. Select one of the following:
+    1 (Parallel 1), 2 (Serial 1), 3 (Parallel 2), 4 (Serial 2),
+    5 (Output Device LPT1), 6 (Output Device LPT2), 7 (Output Device LPT3),
+    8 (Output Device COM1), 9 (Output Device COM2). If you selected 2 or 4
+    (Serial), select a baud rate from the menu, and set the printer to accept
+    8 data bits, 1 stop bit (or 2 stop bits at 110 baud), and no parity.
+    See your printer manual for instructions on making these settings.
+    Select 5, 6, 7, 8, or 9 if your printer is on a local area network.
+3. To update the 1-2-3 configuration file (123R34.CNF) so 1-2-3 uses the new
+    Interface setting in future sessions, select <a href="0417-worksheet-global.html">/Worksheet Global</a>
+    Default Update.
+
+The corresponding /Print command is /Print [B,E,F,P] Options Advanced Device
+Interface.
+
+<a href="0016-the-worksheet-commands.html">Worksheet Commands</a>         <a href="0301-print-background-encoded-file-printer-options-advanced.html">/Print [B,E,F,P] Options Advanced</a>        <a href="0000-1-2-3-help-index.html">Help Index</a></pre>
