@@ -1,0 +1,19 @@
+# /File List Other — list every file (any extension) in the session
+# directory.  Content/loader behavior is exercised by unit tests; this
+# transcript only walks the UI state transitions.
+
+KEY /
+KEY F
+KEY L
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Other
+
+KEY O
+ASSERT_MODE      FILES
+ASSERT_PANEL_L2  File List — Other
+
+DOWN
+ASSERT_MODE      FILES
+
+ESC
+ASSERT_MODE      READY

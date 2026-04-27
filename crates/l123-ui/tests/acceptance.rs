@@ -893,6 +893,7 @@ transcripts! {
     m4_file_new        => "M4_file_new.tsv",
     m4_file_dir        => "M4_file_dir.tsv",
     m4_file_list_active => "M4_file_list_active.tsv",
+    m4_file_list_other => "M4_file_list_other.tsv",
     m4_file_list_worksheet => "M4_file_list_worksheet.tsv",
     m5_insert_sheet    => "M5_insert_sheet.tsv",
     m5_delete_sheet    => "M5_delete_sheet.tsv",
