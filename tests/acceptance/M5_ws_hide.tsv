@@ -1,0 +1,70 @@
+# /Worksheet Hide — Enable hides the current worksheet and redirects
+# the pointer to the next visible one; Disable redisplays every
+# hidden sheet.  Refuses to hide the only visible sheet.
+
+SIZE 80 25
+
+# Seed sheet A with a marker, insert a sheet after, seed sheet B,
+# come back to A.  /WISA leaves the pointer on A; Ctrl-PgDn reveals
+# the new blank.
+KEYS markerA
+ENTER
+KEY /
+KEY W
+KEY I
+KEY S
+KEY A
+ASSERT_POINTER   A:A1
+CTRL_PGDN
+ASSERT_POINTER   B:A1
+KEYS markerB
+ENTER
+CTRL_PGUP
+ASSERT_POINTER   A:A1
+
+# /WHE hides sheet A; pointer redirects to the first remaining
+# visible sheet (B).  Ctrl-PgUp would normally jump back to A but A
+# is hidden, so the pointer stays put.
+KEY /
+KEY W
+KEY H
+ASSERT_PANEL_L2  Enable
+ASSERT_PANEL_L2  Disable
+KEY E
+ASSERT_MODE      READY
+ASSERT_POINTER   B:A1
+ASSERT_CELL      B:A1   markerB
+CTRL_PGUP
+ASSERT_POINTER   B:A1
+
+# Trying to hide the last visible sheet errors out (sheet B is
+# the only visible one now).  Press ENTER to dismiss the error.
+KEY /
+KEY W
+KEY H
+KEY E
+ASSERT_MODE      ERROR
+ASSERT_PANEL_L2  Cannot hide the only visible sheet
+ENTER
+ASSERT_MODE      READY
+
+# /WHD redisplays sheet A.  Ctrl-PgUp jumps back to it.
+KEY /
+KEY W
+KEY H
+KEY D
+ASSERT_MODE      READY
+CTRL_PGUP
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1   markerA
+
+# Hide A again, then Alt-F4 undoes the hide.
+KEY /
+KEY W
+KEY H
+KEY E
+ASSERT_POINTER   B:A1
+ALT_F 4
+CTRL_PGUP
+ASSERT_POINTER   A:A1
+ASSERT_CELL      A:A1   markerA
