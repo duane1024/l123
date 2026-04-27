@@ -13,6 +13,7 @@ pub mod contents;
 pub mod fill;
 pub mod font_style;
 pub mod format;
+pub mod international;
 pub mod label;
 pub mod merge;
 pub mod mode;
@@ -34,6 +35,9 @@ pub use contents::{format_number_general, parse_typed_value, CellContents, Infer
 pub use fill::{Fill, FillPattern};
 pub use font_style::FontStyle;
 pub use format::{format_number, Format, FormatKind};
+pub use international::{
+    CurrencyConfig, CurrencyPosition, DateIntl, International, NegativeStyle, Punctuation, TimeIntl,
+};
 pub use label::LabelPrefix;
 pub use merge::Merge;
 pub use mode::Mode;

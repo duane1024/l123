@@ -1,0 +1,75 @@
+# /Worksheet Status — STAT page now includes an International box.
+
+SIZE 80 30
+
+# Default International on /WS — Punct A, Date A, Time A, Sign,
+# Currency $ Prefix.
+KEY /
+KEY W
+KEY S
+ASSERT_MODE     STAT
+ASSERT_SCREEN   International
+ASSERT_SCREEN   Punctuation: A
+ASSERT_SCREEN   Date:        A (MM/DD/YY long, MM/DD short)
+ASSERT_SCREEN   Time:        A (HH:MM:SS long, HH:MM short)
+ASSERT_SCREEN   Negative:    Sign
+ASSERT_SCREEN   Currency:    $n (Prefix)
+ESC
+ASSERT_MODE     READY
+
+# Flip Punctuation, Date, Time, Negative, and Currency Suffix; STAT
+# reflects each change.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY P
+KEY B
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY D
+KEY C
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY T
+KEY B
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY N
+KEY P
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY C
+KEY S
+KEYS EUR
+ENTER
+
+KEY /
+KEY W
+KEY S
+ASSERT_MODE     STAT
+ASSERT_SCREEN   Punctuation: B
+ASSERT_SCREEN   Date:        C
+ASSERT_SCREEN   Time:        B
+ASSERT_SCREEN   Negative:    Parens
+ASSERT_SCREEN   Currency:    nEUR (Suffix)
+ESC
+ASSERT_MODE     READY

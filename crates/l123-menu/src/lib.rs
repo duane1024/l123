@@ -92,6 +92,40 @@ pub enum Action {
     WorksheetGlobalDefaultOtherBeepEnable,
     /// `/Worksheet Global Default Other Beep Disable`.
     WorksheetGlobalDefaultOtherBeepDisable,
+    /// `/Worksheet Global Default Other International Punctuation A..H`
+    /// — locale punctuation triple (decimal, argument, thousands).
+    WorksheetGlobalDefaultOtherIntlPunctuationA,
+    WorksheetGlobalDefaultOtherIntlPunctuationB,
+    WorksheetGlobalDefaultOtherIntlPunctuationC,
+    WorksheetGlobalDefaultOtherIntlPunctuationD,
+    WorksheetGlobalDefaultOtherIntlPunctuationE,
+    WorksheetGlobalDefaultOtherIntlPunctuationF,
+    WorksheetGlobalDefaultOtherIntlPunctuationG,
+    WorksheetGlobalDefaultOtherIntlPunctuationH,
+    /// `/Worksheet Global Default Other International Currency Prefix|
+    /// Suffix` — chooses where the currency symbol sits, then prompts
+    /// for the symbol string.
+    WorksheetGlobalDefaultOtherIntlCurrencyPrefix,
+    WorksheetGlobalDefaultOtherIntlCurrencySuffix,
+    /// `/Worksheet Global Default Other International Date A..D` —
+    /// selects the international date style used by D4 (long) and
+    /// D5 (short).
+    WorksheetGlobalDefaultOtherIntlDateA,
+    WorksheetGlobalDefaultOtherIntlDateB,
+    WorksheetGlobalDefaultOtherIntlDateC,
+    WorksheetGlobalDefaultOtherIntlDateD,
+    /// `/Worksheet Global Default Other International Time A..D` —
+    /// selects the international time style used by D8 (long) and
+    /// D9 (short).
+    WorksheetGlobalDefaultOtherIntlTimeA,
+    WorksheetGlobalDefaultOtherIntlTimeB,
+    WorksheetGlobalDefaultOtherIntlTimeC,
+    WorksheetGlobalDefaultOtherIntlTimeD,
+    /// `/Worksheet Global Default Other International Negative
+    /// Parens|Sign` — controls how negative Currency/Comma values
+    /// display.
+    WorksheetGlobalDefaultOtherIntlNegativeParens,
+    WorksheetGlobalDefaultOtherIntlNegativeSign,
     RangeErase,
     RangeLabelLeft,
     RangeLabelRight,
@@ -111,6 +145,25 @@ pub enum Action {
     RangeFormatDateShortIntl,
     RangeFormatText,
     RangeFormatReset,
+    /// `/Worksheet Global Format` leaves — set the workbook-wide default
+    /// cell format that cells without a per-cell `/RF` override inherit.
+    /// Mirrors the [`RangeFormat*`](Action::RangeFormatFixed) family;
+    /// each takes the same kind of argument (decimals where applicable)
+    /// and applies immediately — no POINT step, since the global is a
+    /// single-target setting.
+    WorksheetGlobalFormatFixed,
+    WorksheetGlobalFormatScientific,
+    WorksheetGlobalFormatCurrency,
+    WorksheetGlobalFormatComma,
+    WorksheetGlobalFormatGeneral,
+    WorksheetGlobalFormatPercent,
+    WorksheetGlobalFormatDateDmy,
+    WorksheetGlobalFormatDateDm,
+    WorksheetGlobalFormatDateMy,
+    WorksheetGlobalFormatDateLongIntl,
+    WorksheetGlobalFormatDateShortIntl,
+    WorksheetGlobalFormatText,
+    WorksheetGlobalFormatReset,
     Copy,
     Move,
     FileSave,
@@ -118,6 +171,39 @@ pub enum Action {
     FileXtractFormulas,
     FileXtractValues,
     FileImportNumbers,
+    /// `/File Import Text` — read a plain-text file and store each line
+    /// as a label down a single column starting at the pointer. The
+    /// counterpart to `FileImportNumbers`; no CSV parsing.
+    FileImportText,
+    /// `/File Combine Copy Entire-File` — overwrite cells starting at
+    /// the pointer with the contents of every non-empty cell in the
+    /// source file.
+    FileCombineCopyEntire,
+    /// `/File Combine Copy Named-Or-Specified-Range` — same as
+    /// `FileCombineCopyEntire` but anchored to a user-typed source
+    /// range like `A1..C5`.
+    FileCombineCopyNamed,
+    /// `/File Combine Add Entire-File` — numerically add each source
+    /// cell to the corresponding target cell. Source labels and target
+    /// labels are skipped (no overwrite).
+    FileCombineAddEntire,
+    /// `/File Combine Add Named-Or-Specified-Range`.
+    FileCombineAddNamed,
+    /// `/File Combine Subtract Entire-File` — numerically subtract each
+    /// source cell from the corresponding target cell. Same label rules
+    /// as `FileCombineAddEntire`.
+    FileCombineSubtractEntire,
+    /// `/File Combine Subtract Named-Or-Specified-Range`.
+    FileCombineSubtractNamed,
+    /// `/File Erase Worksheet` — delete a worksheet file from disk after
+    /// a No/Yes confirm.
+    FileEraseWorksheet,
+    /// `/File Erase Print` — delete a print-settings file from disk.
+    FileErasePrint,
+    /// `/File Erase Graph` — delete a graph file from disk.
+    FileEraseGraph,
+    /// `/File Erase Other` — delete any file from disk.
+    FileEraseOther,
     FileNew,
     FileOpenBefore,
     FileOpenAfter,
@@ -507,12 +593,186 @@ const WG_DEFAULT_OTHER_BEEP_MENU: &[MenuItem] = &[
     },
 ];
 
+const WG_DEFAULT_OTHER_INTL_PUNCTUATION_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "A",
+        help: "Decimal . | argument , | thousands , (US default)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationA),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "B",
+        help: "Decimal , | argument . | thousands .",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationB),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "C",
+        help: "Decimal . | argument , | thousands (space)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationC),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "D",
+        help: "Decimal , | argument . | thousands (space)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationD),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "E",
+        help: "Decimal . | argument ; | thousands ,",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationE),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "F",
+        help: "Decimal , | argument ; | thousands .",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationF),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "G",
+        help: "Decimal . | argument ; | thousands (space)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationG),
+    },
+    MenuItem {
+        letter: 'H',
+        name: "H",
+        help: "Decimal , | argument ; | thousands (space)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationH),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_CURRENCY_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'P',
+        name: "Prefix",
+        help: "Currency symbol leads the number ($1234)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlCurrencyPrefix),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Suffix",
+        help: "Currency symbol trails the number (1234€)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlCurrencySuffix),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_DATE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "A",
+        help: "MM/DD/YY (long), MM/DD (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlDateA),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "B",
+        help: "DD/MM/YY (long), DD/MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlDateB),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "C",
+        help: "DD.MM.YY (long), DD.MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlDateC),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "D",
+        help: "YY-MM-DD (long), MM-DD (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlDateD),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_TIME_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "A",
+        help: "HH:MM:SS (long), HH:MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlTimeA),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "B",
+        help: "HH.MM.SS (long), HH.MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlTimeB),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "C",
+        help: "HH,MM,SS (long), HH,MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlTimeC),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "D",
+        help: "HH:MM:SS (long), HH:MM (short) — colon fallback",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlTimeD),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_NEGATIVE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'P',
+        name: "Parens",
+        help: "Show negatives in parentheses: (1234.50)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlNegativeParens),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Sign",
+        help: "Show negatives with a leading minus: -1234.50",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlNegativeSign),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'P',
+        name: "Punctuation",
+        help: "Decimal / argument / thousands character triple (A..H)",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_PUNCTUATION_MENU),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Currency",
+        help: "Currency symbol position (Prefix / Suffix) and string",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_CURRENCY_MENU),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Date",
+        help: "International date style (D4 long, D5 short)",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_DATE_MENU),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Time",
+        help: "International time style (D8 long, D9 short)",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_TIME_MENU),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Negative",
+        help: "Negative-number display: Parens or Sign",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_NEGATIVE_MENU),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to the parent menu",
+        body: MenuBody::NotImplemented("wgdo-intl-quit"),
+    },
+];
+
 const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'I',
         name: "International",
         help: "Locale-specific punctuation, dates, and currency",
-        body: MenuBody::NotImplemented("wgdo-intl"),
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_MENU),
     },
     MenuItem {
         letter: 'H',
@@ -650,7 +910,7 @@ const WS_GLOBAL_MENU: &[MenuItem] = &[
         letter: 'F',
         name: "Format",
         help: "Set global cell display format",
-        body: MenuBody::NotImplemented("wg-format"),
+        body: MenuBody::Submenu(WG_FORMAT_MENU),
     },
     MenuItem {
         letter: 'L',
@@ -870,6 +1130,108 @@ const RANGE_FORMAT_DATE_MENU: &[MenuItem] = &[
         name: "Time",
         help: "Time format (D6..D9)",
         body: MenuBody::NotImplemented("rf-date-time"),
+    },
+];
+
+const WG_FORMAT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'F',
+        name: "Fixed",
+        help: "Default to fixed number of decimal places",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatFixed),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Sci",
+        help: "Default to scientific notation",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatScientific),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Currency",
+        help: "Default to currency format with symbol",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatCurrency),
+    },
+    MenuItem {
+        letter: ',',
+        name: ",",
+        help: "Default to comma-separated (no currency symbol)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatComma),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "General",
+        help: "Default to General format",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatGeneral),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Percent",
+        help: "Default to Percent (value × 100) with % sign",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatPercent),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Date",
+        help: "Default to a Date format (D1..D5, Time for D6..D9)",
+        body: MenuBody::Submenu(WG_FORMAT_DATE_MENU),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Text",
+        help: "Default to showing formulas instead of values",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatText),
+    },
+    MenuItem {
+        letter: 'H',
+        name: "Hidden",
+        help: "Default to hiding cell display",
+        body: MenuBody::NotImplemented("wg-format-hidden"),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Reset global format to General",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatReset),
+    },
+];
+
+const WG_FORMAT_DATE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: '1',
+        name: "1",
+        help: "DD-MMM-YY",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateDmy),
+    },
+    MenuItem {
+        letter: '2',
+        name: "2",
+        help: "DD-MMM",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateDm),
+    },
+    MenuItem {
+        letter: '3',
+        name: "3",
+        help: "MMM-YY",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateMy),
+    },
+    MenuItem {
+        letter: '4',
+        name: "4",
+        help: "Long international (MM/DD/YY)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateLongIntl),
+    },
+    MenuItem {
+        letter: '5',
+        name: "5",
+        help: "Short international (MM/DD)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatDateShortIntl),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Time",
+        help: "Time format (D6..D9)",
+        body: MenuBody::NotImplemented("wg-format-date-time"),
     },
 ];
 
@@ -2141,6 +2503,108 @@ mod tests {
     }
 
     #[test]
+    fn resolve_worksheet_global_format_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (&['W', 'G', 'F', 'F'], Action::WorksheetGlobalFormatFixed),
+            (
+                &['W', 'G', 'F', 'S'],
+                Action::WorksheetGlobalFormatScientific,
+            ),
+            (&['W', 'G', 'F', 'C'], Action::WorksheetGlobalFormatCurrency),
+            (&['W', 'G', 'F', ','], Action::WorksheetGlobalFormatComma),
+            (&['W', 'G', 'F', 'G'], Action::WorksheetGlobalFormatGeneral),
+            (&['W', 'G', 'F', 'P'], Action::WorksheetGlobalFormatPercent),
+            (&['W', 'G', 'F', 'T'], Action::WorksheetGlobalFormatText),
+            (&['W', 'G', 'F', 'R'], Action::WorksheetGlobalFormatReset),
+            (
+                &['W', 'G', 'F', 'D', '1'],
+                Action::WorksheetGlobalFormatDateDmy,
+            ),
+            (
+                &['W', 'G', 'F', 'D', '5'],
+                Action::WorksheetGlobalFormatDateShortIntl,
+            ),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_wgdo_intl_punctuation_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (
+                &['W', 'G', 'D', 'O', 'I', 'P', 'A'],
+                Action::WorksheetGlobalDefaultOtherIntlPunctuationA,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'P', 'B'],
+                Action::WorksheetGlobalDefaultOtherIntlPunctuationB,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'P', 'H'],
+                Action::WorksheetGlobalDefaultOtherIntlPunctuationH,
+            ),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_wgdo_intl_date_time_negative_currency_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (
+                &['W', 'G', 'D', 'O', 'I', 'D', 'A'],
+                Action::WorksheetGlobalDefaultOtherIntlDateA,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'D', 'D'],
+                Action::WorksheetGlobalDefaultOtherIntlDateD,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'T', 'A'],
+                Action::WorksheetGlobalDefaultOtherIntlTimeA,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'T', 'D'],
+                Action::WorksheetGlobalDefaultOtherIntlTimeD,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'N', 'P'],
+                Action::WorksheetGlobalDefaultOtherIntlNegativeParens,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'N', 'S'],
+                Action::WorksheetGlobalDefaultOtherIntlNegativeSign,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'C', 'P'],
+                Action::WorksheetGlobalDefaultOtherIntlCurrencyPrefix,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'C', 'S'],
+                Action::WorksheetGlobalDefaultOtherIntlCurrencySuffix,
+            ),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn root_names_all_start_with_capital() {
         for m in ROOT {
             let c = m.name.chars().next().unwrap();
@@ -2207,5 +2671,77 @@ mod tests {
     fn wysiwyg_quit_maps_to_cancel() {
         let q = resolve_within(WYSIWYG_ROOT, &['Q']).unwrap();
         assert!(matches!(q.body, MenuBody::Action(Action::Cancel)));
+    }
+
+    #[test]
+    fn resolve_file_import_text() {
+        let node = resolve(&['F', 'I', 'T']).unwrap();
+        assert!(matches!(node.body, MenuBody::Action(Action::FileImportText)));
+    }
+
+    #[test]
+    fn resolve_file_combine_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (&['F', 'C', 'C', 'E'], Action::FileCombineCopyEntire),
+            (&['F', 'C', 'C', 'N'], Action::FileCombineCopyNamed),
+            (&['F', 'C', 'A', 'E'], Action::FileCombineAddEntire),
+            (&['F', 'C', 'A', 'N'], Action::FileCombineAddNamed),
+            (&['F', 'C', 'S', 'E'], Action::FileCombineSubtractEntire),
+            (&['F', 'C', 'S', 'N'], Action::FileCombineSubtractNamed),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_file_erase_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (&['F', 'E', 'W'], Action::FileEraseWorksheet),
+            (&['F', 'E', 'P'], Action::FileErasePrint),
+            (&['F', 'E', 'G'], Action::FileEraseGraph),
+            (&['F', 'E', 'O'], Action::FileEraseOther),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn file_admin_subtree_is_navigable_with_unimplemented_leaves() {
+        let admin = resolve(&['F', 'A']).unwrap();
+        assert_eq!(admin.name, "Admin");
+        assert!(matches!(admin.body, MenuBody::Submenu(_)));
+
+        let leaf_paths: &[&[char]] = &[
+            &['F', 'A', 'R', 'G'], // Reservation Get
+            &['F', 'A', 'R', 'R'], // Reservation Release
+            &['F', 'A', 'S', 'F'], // Seal File
+            &['F', 'A', 'S', 'R'], // Seal Reservation-Setting
+            &['F', 'A', 'S', 'D'], // Seal Disable
+            &['F', 'A', 'T', 'W'], // Table Worksheet
+            &['F', 'A', 'T', 'P'], // Table Print
+            &['F', 'A', 'T', 'G'], // Table Graph
+            &['F', 'A', 'T', 'O'], // Table Other
+            &['F', 'A', 'T', 'A'], // Table Active
+            &['F', 'A', 'T', 'L'], // Table Linked
+            &['F', 'A', 'L'],      // Link-Refresh
+        ];
+        for path in leaf_paths {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            assert!(
+                matches!(node.body, MenuBody::NotImplemented(_)),
+                "{path:?} should be NotImplemented, got {:?}",
+                node.body
+            );
+        }
     }
 }

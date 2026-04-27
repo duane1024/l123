@@ -23,9 +23,10 @@ use crossterm::{
 use l123_core::cell_render::{apply_halign_to_rendered, halign_to_label_prefix};
 use l123_core::{
     address::col_to_letters, label::is_value_starter, plan_row_spill, render_label,
-    render_value_in_cell, Address, Alignment, Border, CellContents, Comment, ErrKind, Fill,
-    FontStyle, Format, FormatKind, HAlign, LabelPrefix, Merge, Mode, Range, RangeInput, RgbColor,
-    SheetId, SheetState, SpillSlot, Table, TextStyle, Value,
+    render_value_in_cell, Address, Alignment, Border, CellContents, Comment, CurrencyPosition,
+    DateIntl, ErrKind, Fill, FontStyle, Format, FormatKind, HAlign, International, LabelPrefix,
+    Merge, Mode, NegativeStyle, Punctuation, Range, RangeInput, RgbColor, SheetId, SheetState,
+    SpillSlot, Table, TextStyle, TimeIntl, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
@@ -67,6 +68,16 @@ const COMMENT_MARKER: char = '\'';
 /// side indicator zone (`FILE GROUP UNDO CALC CIRC MEM NUM …`) from
 /// getting shoved off-screen on an 80-column terminal.
 const STATUS_SHEET_NAME_MAX: usize = 20;
+
+/// Build a `ParseConfig` from the workbook's current `International`
+/// for handing to `l123_parse::to_engine_source_with_config`. Argument
+/// separator and decimal point come from the punctuation table.
+fn parse_config_from(intl: &International) -> l123_parse::ParseConfig {
+    l123_parse::ParseConfig {
+        argument_sep: intl.punctuation.argument_sep(),
+        decimal_point: intl.punctuation.decimal_char(),
+    }
+}
 
 /// Emit a single BEL character to stdout and flush. The terminal's
 /// own preferences decide whether that rings, flashes, or is ignored —
@@ -146,6 +157,17 @@ struct Workbook {
     engine: IronCalcEngine,
     cells: HashMap<Address, CellContents>,
     cell_formats: HashMap<Address, Format>,
+    /// Workbook-wide default cell format set by `/Worksheet Global
+    /// Format`. Cells without a `cell_formats` entry inherit this.
+    /// Initialized to General.
+    global_format: Format,
+    /// `/Worksheet Global Default Other International` — punctuation,
+    /// date/time intl style, negative style, and currency symbol/
+    /// position. Threaded into `format_number` and `parse_typed_value`
+    /// so cell display and number entry honor the configured locale.
+    /// Persistence to L123.CNF via `/WGDU` is out of scope; session-
+    /// only for now.
+    international: International,
     /// Per-cell text-style overrides (bold / italic / underline) set
     /// by the WYSIWYG `:Format Bold|Italic|Underline Set|Clear`
     /// commands.  Empty style = no entry.
@@ -263,6 +285,8 @@ impl Workbook {
             engine: IronCalcEngine::new().expect("IronCalc engine init"),
             cells: HashMap::new(),
             cell_formats: HashMap::new(),
+            global_format: Format::GENERAL,
+            international: International::default(),
             cell_text_styles: HashMap::new(),
             cell_alignments: HashMap::new(),
             cell_fills: HashMap::new(),
@@ -302,7 +326,11 @@ impl WorkbookView for Workbook {
         self.cell_formats
             .get(&addr)
             .copied()
-            .unwrap_or(Format::GENERAL)
+            .unwrap_or(self.global_format)
+    }
+
+    fn international(&self) -> &International {
+        &self.international
     }
 }
 
@@ -678,6 +706,13 @@ enum JournalEntry {
     },
     /// Restore the workbook-wide default column width.
     GlobalColWidth { prev: u8 },
+    /// Restore the workbook-wide default cell format set by `/Worksheet
+    /// Global Format`.
+    GlobalFormat { prev: Format },
+    /// Restore the workbook-wide international settings (punctuation,
+    /// dates, times, negative style, currency) as a single snapshot.
+    /// One entry per `/WGDOI ...` mutation.
+    GlobalInternational { prev: International },
     /// Restore the workbook-wide default label prefix.
     DefaultLabelPrefix { prev: LabelPrefix },
     /// Group of entries popped and applied together — used when
@@ -719,6 +754,12 @@ struct PromptState {
 enum PromptNext {
     /// Then go to POINT and apply `Format { kind, decimals: <buffer> }`.
     RangeFormat {
+        kind: FormatKind,
+    },
+    /// Set the workbook-wide default format to `Format { kind, decimals:
+    /// <buffer> }`. Unlike `RangeFormat`, no POINT step follows — the
+    /// global is a single-target setting.
+    WorksheetGlobalFormat {
         kind: FormatKind,
     },
     /// Set the current column's width to the buffered number.
@@ -800,6 +841,12 @@ enum PromptNext {
     /// there. Silent no-op on parse failure (matches 1-2-3's "Esc back
     /// to READY" feel for an unrecognized address).
     Goto,
+    /// `/Worksheet Global Default Other International Currency
+    /// Prefix|Suffix` — after the user types the symbol string, store
+    /// it on `International.currency` along with the chosen position.
+    WorksheetGlobalDefaultOtherIntlCurrencySymbol {
+        position: CurrencyPosition,
+    },
 }
 
 /// /File Xtract sub-command: does the extracted file keep formulas,
@@ -876,6 +923,7 @@ impl PromptNext {
     fn accepts_char(self, c: char) -> bool {
         match self {
             PromptNext::RangeFormat { .. }
+            | PromptNext::WorksheetGlobalFormat { .. }
             | PromptNext::WorksheetColumnSetWidth
             | PromptNext::WorksheetColumnRangeSetWidth
             | PromptNext::WorksheetGlobalColWidth
@@ -915,6 +963,11 @@ impl PromptNext {
             | PromptNext::PrintFileMarginTop
             | PromptNext::PrintFileMarginBottom
             | PromptNext::PrintFilePgLength => c.is_ascii_digit(),
+            // Currency symbols are short printable strings — accept
+            // any printable graphic plus space. No tab/newline.
+            PromptNext::WorksheetGlobalDefaultOtherIntlCurrencySymbol { .. } => {
+                c != '\n' && c != '\t'
+            }
         }
     }
 }
@@ -2175,20 +2228,28 @@ impl App {
                 },
                 None,
             ),
-            EntryKind::Value => match l123_core::parse_typed_value(&entry.buffer) {
-                Some(iv) => (CellContents::Constant(Value::Number(iv.number)), iv.format),
-                None => (
-                    CellContents::Formula {
-                        expr: entry.buffer,
-                        cached_value: None,
-                    },
-                    None,
-                ),
-            },
+            EntryKind::Value => {
+                let intl = self.wb().international.clone();
+                match l123_core::parse_typed_value(&entry.buffer, &intl) {
+                    Some(iv) => (CellContents::Constant(Value::Number(iv.number)), iv.format),
+                    None => (
+                        CellContents::Formula {
+                            expr: entry.buffer,
+                            cached_value: None,
+                        },
+                        None,
+                    ),
+                }
+            }
             // EDIT commits re-parse the full source buffer so the user can
             // change prefix or type (label ↔ value) via the first-char rule.
             EntryKind::Edit => {
-                CellContents::from_source_with_format(&entry.buffer, self.default_label_prefix)
+                let intl = self.wb().international.clone();
+                CellContents::from_source_with_format(
+                    &entry.buffer,
+                    self.default_label_prefix,
+                    &intl,
+                )
             }
         };
         self.push_to_engine(&contents);
@@ -2419,6 +2480,12 @@ impl App {
             }
             JournalEntry::GlobalColWidth { prev } => {
                 self.wb_mut().default_col_width = prev;
+            }
+            JournalEntry::GlobalFormat { prev } => {
+                self.wb_mut().global_format = prev;
+            }
+            JournalEntry::GlobalInternational { prev } => {
+                self.wb_mut().international = prev;
             }
             JournalEntry::DefaultLabelPrefix { prev } => {
                 self.default_label_prefix = prev;
@@ -2772,6 +2839,50 @@ impl App {
                 self.beep_enabled = false;
                 self.close_menu();
             }
+            Action::WorksheetGlobalDefaultOtherIntlPunctuationA => {
+                self.set_punctuation(Punctuation::A)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlPunctuationB => {
+                self.set_punctuation(Punctuation::B)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlPunctuationC => {
+                self.set_punctuation(Punctuation::C)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlPunctuationD => {
+                self.set_punctuation(Punctuation::D)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlPunctuationE => {
+                self.set_punctuation(Punctuation::E)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlPunctuationF => {
+                self.set_punctuation(Punctuation::F)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlPunctuationG => {
+                self.set_punctuation(Punctuation::G)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlPunctuationH => {
+                self.set_punctuation(Punctuation::H)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlCurrencyPrefix => {
+                self.start_currency_symbol_prompt(CurrencyPosition::Prefix)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlCurrencySuffix => {
+                self.start_currency_symbol_prompt(CurrencyPosition::Suffix)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlDateA => self.set_date_intl(DateIntl::A),
+            Action::WorksheetGlobalDefaultOtherIntlDateB => self.set_date_intl(DateIntl::B),
+            Action::WorksheetGlobalDefaultOtherIntlDateC => self.set_date_intl(DateIntl::C),
+            Action::WorksheetGlobalDefaultOtherIntlDateD => self.set_date_intl(DateIntl::D),
+            Action::WorksheetGlobalDefaultOtherIntlTimeA => self.set_time_intl(TimeIntl::A),
+            Action::WorksheetGlobalDefaultOtherIntlTimeB => self.set_time_intl(TimeIntl::B),
+            Action::WorksheetGlobalDefaultOtherIntlTimeC => self.set_time_intl(TimeIntl::C),
+            Action::WorksheetGlobalDefaultOtherIntlTimeD => self.set_time_intl(TimeIntl::D),
+            Action::WorksheetGlobalDefaultOtherIntlNegativeParens => {
+                self.set_negative_style(NegativeStyle::Parens)
+            }
+            Action::WorksheetGlobalDefaultOtherIntlNegativeSign => {
+                self.set_negative_style(NegativeStyle::Sign)
+            }
             Action::WorksheetEraseConfirm => self.execute_worksheet_erase(),
             Action::WorksheetColumnSetWidth => self.start_col_width_prompt(),
             Action::WorksheetColumnResetWidth => self.execute_col_reset_width(),
@@ -2884,6 +2995,47 @@ impl App {
                     kind: FormatKind::DateShortIntl,
                     decimals: 0,
                 },
+            }),
+            Action::WorksheetGlobalFormatFixed => {
+                self.start_global_decimals_prompt(FormatKind::Fixed)
+            }
+            Action::WorksheetGlobalFormatScientific => {
+                self.start_global_decimals_prompt(FormatKind::Scientific)
+            }
+            Action::WorksheetGlobalFormatCurrency => {
+                self.start_global_decimals_prompt(FormatKind::Currency)
+            }
+            Action::WorksheetGlobalFormatComma => {
+                self.start_global_decimals_prompt(FormatKind::Comma)
+            }
+            Action::WorksheetGlobalFormatPercent => {
+                self.start_global_decimals_prompt(FormatKind::Percent)
+            }
+            Action::WorksheetGlobalFormatGeneral => self.set_global_format(Format::GENERAL),
+            Action::WorksheetGlobalFormatReset => self.set_global_format(Format::GENERAL),
+            Action::WorksheetGlobalFormatText => self.set_global_format(Format {
+                kind: FormatKind::Text,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateDmy => self.set_global_format(Format {
+                kind: FormatKind::DateDmy,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateDm => self.set_global_format(Format {
+                kind: FormatKind::DateDm,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateMy => self.set_global_format(Format {
+                kind: FormatKind::DateMy,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateLongIntl => self.set_global_format(Format {
+                kind: FormatKind::DateLongIntl,
+                decimals: 0,
+            }),
+            Action::WorksheetGlobalFormatDateShortIntl => self.set_global_format(Format {
+                kind: FormatKind::DateShortIntl,
+                decimals: 0,
             }),
             Action::FileSave => self.start_file_save_prompt(),
             Action::FileRetrieve => self.start_file_retrieve_prompt(),
@@ -3675,6 +3827,8 @@ impl App {
             engine,
             cells,
             cell_formats,
+            global_format: Format::GENERAL,
+            international: International::default(),
             cell_text_styles,
             cell_alignments,
             cell_fills,
@@ -4870,6 +5024,20 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    /// `/Worksheet Global Format <Fixed|Sci|Currency|Comma|Percent>` —
+    /// prompt for decimal places, then set the workbook's global format
+    /// (no POINT step).
+    fn start_global_decimals_prompt(&mut self, kind: FormatKind) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter number of decimal places (0..15):".into(),
+            buffer: "2".into(),
+            next: PromptNext::WorksheetGlobalFormat { kind },
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
     fn start_col_width_prompt(&mut self) {
         self.menu = None;
         let p = self.wb().pointer;
@@ -4921,6 +5089,58 @@ impl App {
         self.default_label_prefix = new_prefix;
         self.push_journal_batch(vec![JournalEntry::DefaultLabelPrefix { prev }]);
         self.close_menu();
+    }
+
+    /// `/Worksheet Global Format <…>` — change the workbook-wide
+    /// default cell format. Journals the previous format so Alt-F4
+    /// reverts. Does not touch per-cell `cell_formats` overrides.
+    fn set_global_format(&mut self, new_format: Format) {
+        let prev = self.wb().global_format;
+        self.wb_mut().global_format = new_format;
+        self.push_journal_batch(vec![JournalEntry::GlobalFormat { prev }]);
+        self.close_menu();
+    }
+
+    /// `/Worksheet Global Default Other International <field>` — apply
+    /// `mutator` to the workbook's `International` and journal a
+    /// snapshot of the previous state for one-step undo.
+    fn set_international(&mut self, mutator: impl FnOnce(&mut International)) {
+        let prev = self.wb().international.clone();
+        mutator(&mut self.wb_mut().international);
+        self.push_journal_batch(vec![JournalEntry::GlobalInternational { prev }]);
+        self.close_menu();
+    }
+
+    fn set_punctuation(&mut self, p: Punctuation) {
+        self.set_international(|i| i.punctuation = p);
+    }
+
+    fn set_date_intl(&mut self, d: DateIntl) {
+        self.set_international(|i| i.date_intl = d);
+    }
+
+    fn set_time_intl(&mut self, t: TimeIntl) {
+        self.set_international(|i| i.time_intl = t);
+    }
+
+    fn set_negative_style(&mut self, n: NegativeStyle) {
+        self.set_international(|i| i.negative_style = n);
+    }
+
+    /// `/Worksheet Global Default Other International Currency
+    /// Prefix|Suffix` — open a string prompt seeded with the current
+    /// symbol; on commit, apply both the new symbol and the chosen
+    /// position.
+    fn start_currency_symbol_prompt(&mut self, position: CurrencyPosition) {
+        self.menu = None;
+        let buffer = self.wb().international.currency.symbol.clone();
+        self.prompt = Some(PromptState {
+            label: "Enter currency symbol:".into(),
+            buffer,
+            next: PromptNext::WorksheetGlobalDefaultOtherIntlCurrencySymbol { position },
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
     }
 
     /// `/Worksheet Column Column-Range Set-Width` — prompt for the new
@@ -5116,6 +5336,18 @@ impl App {
                 let decimals = decimals.min(15);
                 let format = Format { kind, decimals };
                 self.begin_point(PendingCommand::RangeFormat { format });
+            }
+            PromptNext::WorksheetGlobalFormat { kind } => {
+                let decimals: u8 = p.buffer.parse().unwrap_or(2);
+                let decimals = decimals.min(15);
+                self.set_global_format(Format { kind, decimals });
+            }
+            PromptNext::WorksheetGlobalDefaultOtherIntlCurrencySymbol { position } => {
+                let symbol = p.buffer;
+                self.set_international(|i| {
+                    i.currency.symbol = symbol;
+                    i.currency.position = position;
+                });
             }
             PromptNext::WorksheetColumnSetWidth => {
                 let default = self.wb().default_col_width;
@@ -5635,7 +5867,8 @@ impl App {
             CellContents::Formula { expr, .. } => {
                 let names = self.wb_mut().engine.all_sheet_names();
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
-                let excel = l123_parse::to_engine_source(expr, &names_ref);
+                let cfg = parse_config_from(&self.wb().international);
+                let excel = l123_parse::to_engine_source_with_config(expr, &names_ref, &cfg);
                 self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
@@ -5792,7 +6025,8 @@ impl App {
             CellContents::Formula { expr, .. } => {
                 let names = self.wb_mut().engine.all_sheet_names();
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
-                let excel = l123_parse::to_engine_source(expr, &names_ref);
+                let cfg = parse_config_from(&self.wb().international);
+                let excel = l123_parse::to_engine_source_with_config(expr, &names_ref, &cfg);
                 self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
@@ -6564,12 +6798,15 @@ impl App {
         outer.render(area, buf);
 
         // Upper band: two side-by-side sub-boxes (Recalculation + Cell
-        // display). Lower band: the environment readout.
+        // display). Mid band: International box. Lower band: the
+        // environment readout. Heights chosen so the whole overlay
+        // fits inside an 80x30 terminal (the standard transcript size).
         let band = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(6),
                 Constraint::Length(1),
+                Constraint::Length(7),
                 Constraint::Min(1),
             ])
             .split(outer_inner);
@@ -6609,17 +6846,61 @@ impl App {
         let prefix = self.default_label_prefix.char();
         let col_width = self.wb().default_col_width;
         let zero = self.zero_display.label();
+        let global_format = self.wb().global_format;
         Paragraph::new(vec![
-            // Global default format isn't wired to `/Worksheet Global
-            // Format` yet, so report the generic default — matches
-            // what a cell with no explicit format gets.
-            Line::from("Format:       (G)"),
+            Line::from(format!("Format:       {global_format}")),
             Line::from(format!("Label prefix: {prefix}")),
             Line::from(format!("Column width: {col_width}")),
             Line::from(format!("Zero setting: {zero}")),
         ])
         .style(text_style)
         .render(cell_inner, buf);
+
+        let intl_box = Block::default()
+            .borders(Borders::ALL)
+            .border_style(text_style)
+            .title("International")
+            .style(text_style);
+        let intl_inner = intl_box.inner(band[2]);
+        intl_box.render(band[2], buf);
+        let intl = &self.wb().international;
+        let currency_display = match intl.currency.position {
+            CurrencyPosition::Prefix => format!("{}n", intl.currency.symbol),
+            CurrencyPosition::Suffix => format!("n{}", intl.currency.symbol),
+        };
+        Paragraph::new(vec![
+            Line::from(format!(
+                "Punctuation: {} (decimal {} arg {} thousands {})",
+                intl.punctuation.label(),
+                intl.punctuation.decimal_char(),
+                intl.punctuation.argument_sep(),
+                if intl.punctuation.thousands_sep() == ' ' {
+                    "(space)".to_string()
+                } else {
+                    intl.punctuation.thousands_sep().to_string()
+                },
+            )),
+            Line::from(format!(
+                "Date:        {} ({} long, {} short)",
+                intl.date_intl.label(),
+                intl.date_intl.long_label(),
+                intl.date_intl.short_label(),
+            )),
+            Line::from(format!(
+                "Time:        {} ({} long, {} short)",
+                intl.time_intl.label(),
+                intl.time_intl.long_label(),
+                intl.time_intl.short_label(),
+            )),
+            Line::from(format!("Negative:    {}", intl.negative_style.label())),
+            Line::from(format!(
+                "Currency:    {} ({})",
+                currency_display,
+                intl.currency.position.label()
+            )),
+        ])
+        .style(text_style)
+        .render(intl_inner, buf);
 
         let info = crate::sysinfo::SysInfo::probe();
         let mem_free = info
@@ -6668,7 +6949,7 @@ impl App {
             )),
         ])
         .style(text_style)
-        .render(band[2], buf);
+        .render(band[3], buf);
     }
 
     fn render_control_panel(&self, area: Rect, buf: &mut Buffer) {
@@ -7124,14 +7405,10 @@ impl App {
         }
     }
 
-    /// Resolve the format for a given cell — the per-cell override if set,
-    /// else General.
+    /// Resolve the format for a given cell — the per-cell override if
+    /// set, else the workbook's global default ([`Workbook::global_format`]).
     fn format_for_cell(&self, addr: Address) -> Format {
-        self.wb()
-            .cell_formats
-            .get(&addr)
-            .copied()
-            .unwrap_or(Format::GENERAL)
+        self.wb().format_for_cell(addr)
     }
 
     /// `[Wn]` tag when the current column's width differs from the
@@ -7331,7 +7608,8 @@ impl App {
                         }
                         Some(other) => {
                             let fmt = self.format_for_cell(addr);
-                            let s = render_own_width(other, w as usize, fmt);
+                            let s =
+                                render_own_width(other, w as usize, fmt, &self.wb().international);
                             RowInput::Rendered(apply_halign_to_rendered(&s, halign, w as usize))
                         }
                     }
@@ -7526,7 +7804,12 @@ impl App {
                         }
                         Some(other) => {
                             let fmt = self.format_for_cell(m.anchor);
-                            let s = render_own_width(other, span_w as usize, fmt);
+                            let s = render_own_width(
+                                other,
+                                span_w as usize,
+                                fmt,
+                                &self.wb().international,
+                            );
                             apply_halign_to_rendered(&s, halign, span_w as usize)
                         }
                     };
@@ -7809,7 +8092,12 @@ enum RowInput {
 /// Render non-label cell contents into exactly `width` chars. An
 /// `Empty` / `Value::Empty` / unevaluated formula produces blanks so
 /// the result can slot directly into [`SpillSlot::Rendered`].
-fn render_own_width(contents: &CellContents, width: usize, format: Format) -> String {
+fn render_own_width(
+    contents: &CellContents,
+    width: usize,
+    format: Format,
+    intl: &International,
+) -> String {
     match contents {
         CellContents::Empty => " ".repeat(width),
         CellContents::Label { .. } => {
@@ -7818,12 +8106,12 @@ fn render_own_width(contents: &CellContents, width: usize, format: Format) -> St
             " ".repeat(width)
         }
         CellContents::Constant(v) => {
-            render_value_in_cell(v, width, format).unwrap_or_else(|| " ".repeat(width))
+            render_value_in_cell(v, width, format, intl).unwrap_or_else(|| " ".repeat(width))
         }
         CellContents::Formula {
             cached_value: Some(v),
             ..
-        } => render_value_in_cell(v, width, format).unwrap_or_else(|| " ".repeat(width)),
+        } => render_value_in_cell(v, width, format, intl).unwrap_or_else(|| " ".repeat(width)),
         CellContents::Formula {
             cached_value: None, ..
         } => " ".repeat(width),

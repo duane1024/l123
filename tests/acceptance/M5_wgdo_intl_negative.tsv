@@ -1,0 +1,62 @@
+# /Worksheet Global Default Other International Negative Parens|Sign —
+# affects how negative Currency and Comma values display. Default is
+# Sign (leading minus). Parens wraps the magnitude in `(…)`.
+
+SIZE 80 30
+
+# Widen column A so parens-wrapped negatives fit without overflowing.
+KEY /
+KEY W
+KEY C
+KEY S
+KEYS 12
+ENTER
+
+# Negative comma cell.
+KEYS -1234.50
+ENTER
+HOME
+KEY /
+KEY R
+KEY F
+KEY ,
+KEY 2
+ENTER
+ENTER
+ASSERT_CELL       A:A1  -1,234.50
+
+# /WGDOIN P — Parens style. Negative now wraps in `(...)`.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY N
+ASSERT_PANEL_L2   Parens
+ASSERT_PANEL_L2   Sign
+KEY P
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  (1,234.50)
+
+# Currency reflects the same setting.
+KEY /
+KEY R
+KEY F
+KEY C
+KEY 2
+ENTER
+ENTER
+ASSERT_CELL       A:A1  ($1234.50)
+
+# /WGDOIN S — Sign style restores the minus prefix.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY N
+KEY S
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  -$1234.50

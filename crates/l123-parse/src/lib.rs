@@ -20,6 +20,30 @@
 
 use l123_core::address::{col_to_letters, letters_to_col, MAX_COLS, MAX_ROWS};
 
+/// Locale-specific punctuation the parser must honor when translating
+/// to Excel input. Defaults to Punct A: `,` arg-sep, `.` decimal —
+/// Excel's native shape, and a no-op translation.
+///
+/// Built from `l123_core::Punctuation` by the caller; kept as a small
+/// owned struct here so `l123-parse` doesn't take a dependency on
+/// `l123-core::International` itself.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ParseConfig {
+    /// Character separating function arguments in Lotus source.
+    pub argument_sep: char,
+    /// Character used as the decimal point in numeric literals.
+    pub decimal_point: char,
+}
+
+impl Default for ParseConfig {
+    fn default() -> Self {
+        Self {
+            argument_sep: ',',
+            decimal_point: '.',
+        }
+    }
+}
+
 /// Translate a Lotus-shape formula source (first char already classified
 /// as a value-starter) into an Excel-shape formula that always begins with
 /// `=`. Pure numeric literals (e.g. `"42"`, `"-3.5"`) are also translated,
@@ -28,23 +52,37 @@ use l123_core::address::{col_to_letters, letters_to_col, MAX_COLS, MAX_ROWS};
 /// `sheets` maps `SheetId(n)` → the engine's sheet name. Pass an empty
 /// slice to skip sheet-qualified reference translation (legacy tests,
 /// or contexts where the workbook is not available).
+///
+/// Uses default `ParseConfig` (Punct A: `,` arg-sep, `.` decimal). For
+/// non-default Punctuation, call [`to_engine_source_with_config`].
 pub fn to_engine_source(lotus: &str, sheets: &[&str]) -> String {
+    to_engine_source_with_config(lotus, sheets, &ParseConfig::default())
+}
+
+/// Like [`to_engine_source`], but threads a [`ParseConfig`] for
+/// non-default Punctuation A-H. The user's argument separator is
+/// translated to Excel's `,`; the user's decimal point is translated
+/// to Excel's `.`.
+pub fn to_engine_source_with_config(lotus: &str, sheets: &[&str], cfg: &ParseConfig) -> String {
     let body = match lotus.chars().next() {
         Some('@') | Some('+') => &lotus[1..],
         _ => lotus,
     };
-    let translated = translate(body, sheets);
+    let translated = translate(body, sheets, cfg);
     format!("={translated}")
 }
 
 /// One pass: handles string-literal transparency, strips inner `@`
 /// sigils, expands sheet-qualified refs when `sheets` is non-empty,
-/// and rewrites `..` → `:` for unqualified ranges.
-fn translate(s: &str, sheets: &[&str]) -> String {
+/// rewrites `..` → `:` for unqualified ranges, and translates the
+/// user's argument-separator and decimal-point to Excel's `,` and `.`.
+fn translate(s: &str, sheets: &[&str], cfg: &ParseConfig) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_string = false;
     let bytes = s.as_bytes();
     let mut i = 0;
+    let arg_sep_byte = cfg.argument_sep as u32;
+    let dec_byte = cfg.decimal_point as u32;
     while i < bytes.len() {
         let b = bytes[i];
         if b == b'"' {
@@ -69,9 +107,26 @@ fn translate(s: &str, sheets: &[&str]) -> String {
                 continue;
             }
         }
+        // Range separator `..` always wins over single-`.` arg-sep.
+        // Preserves the design where `A1..A5` is a range under every
+        // Punctuation, even when arg-sep is `.` (Punct B/D).
         if b == b'.' && i + 1 < bytes.len() && bytes[i + 1] == b'.' {
             out.push(':');
             i += 2;
+            continue;
+        }
+        // Translate the user's argument separator to Excel's `,`.
+        // Skipped when arg-sep is already `,` (Punct A/C).
+        if cfg.argument_sep != ',' && (b as u32) == arg_sep_byte {
+            out.push(',');
+            i += 1;
+            continue;
+        }
+        // Translate the user's decimal point to Excel's `.`. Skipped
+        // when decimal is already `.` (Punct A/C/E/G).
+        if cfg.decimal_point != '.' && (b as u32) == dec_byte {
+            out.push('.');
+            i += 1;
             continue;
         }
         let ch_end = next_char_boundary(s, i);
@@ -615,5 +670,98 @@ mod tests {
         // Sheet C not in list — no expansion, but `:` still in output.
         // IronCalc will error on this, which is the correct signal.
         assert!(got.starts_with('='));
+    }
+
+    // ---- Punctuation A-H — non-default ParseConfig ----
+
+    fn cfg_punct_b() -> ParseConfig {
+        // Punct B: argument `.`, decimal `,`.
+        ParseConfig {
+            argument_sep: '.',
+            decimal_point: ',',
+        }
+    }
+
+    fn cfg_punct_e() -> ParseConfig {
+        // Punct E: argument `;`, decimal `.`.
+        ParseConfig {
+            argument_sep: ';',
+            decimal_point: '.',
+        }
+    }
+
+    #[test]
+    fn punct_e_translates_semicolon_arg_sep_to_comma() {
+        let cfg = cfg_punct_e();
+        assert_eq!(
+            to_engine_source_with_config("@SUM(A1;A2;A3)", &[], &cfg),
+            "=SUM(A1,A2,A3)"
+        );
+        assert_eq!(
+            to_engine_source_with_config("@IF(A1>0;1;2)", &[], &cfg),
+            "=IF(A1>0,1,2)"
+        );
+    }
+
+    #[test]
+    fn punct_e_keeps_double_dot_as_range() {
+        // `..` greedy-eat fires before any single-`.` translation,
+        // so range syntax always means range regardless of Punctuation.
+        let cfg = cfg_punct_e();
+        assert_eq!(
+            to_engine_source_with_config("@SUM(A1..A5)", &[], &cfg),
+            "=SUM(A1:A5)"
+        );
+    }
+
+    #[test]
+    fn punct_b_translates_dot_arg_sep_to_comma() {
+        let cfg = cfg_punct_b();
+        assert_eq!(
+            to_engine_source_with_config("@SUM(A1.A2.A3)", &[], &cfg),
+            "=SUM(A1,A2,A3)"
+        );
+    }
+
+    #[test]
+    fn punct_b_translates_decimal_comma_to_dot() {
+        let cfg = cfg_punct_b();
+        // `1,5` is the decimal `1.5` under Punct B; translate so
+        // IronCalc parses it correctly.
+        assert_eq!(
+            to_engine_source_with_config("+1,5+2,5", &[], &cfg),
+            "=1.5+2.5"
+        );
+    }
+
+    #[test]
+    fn punct_b_keeps_double_dot_as_range_even_with_dot_arg_sep() {
+        let cfg = cfg_punct_b();
+        // Range `A1..A5` wins over single-`.` arg sep.
+        assert_eq!(
+            to_engine_source_with_config("@SUM(A1..A5)", &[], &cfg),
+            "=SUM(A1:A5)"
+        );
+    }
+
+    #[test]
+    fn punct_e_strings_are_not_mutated() {
+        // Even with `;` as the arg-sep, semicolons inside strings
+        // pass through untouched.
+        let cfg = cfg_punct_e();
+        assert_eq!(
+            to_engine_source_with_config("@IF(A1>0;\"a;b\";\"c\")", &[], &cfg),
+            "=IF(A1>0,\"a;b\",\"c\")"
+        );
+    }
+
+    #[test]
+    fn punct_a_default_is_unchanged_from_two_arg_form() {
+        let cfg = ParseConfig::default();
+        let s = sheets();
+        assert_eq!(
+            to_engine_source_with_config("@SUM(A1..A5)", &s, &cfg),
+            to_engine_source("@SUM(A1..A5)", &s)
+        );
     }
 }

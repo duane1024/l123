@@ -1,0 +1,69 @@
+# Alt-F4 reverts each /WGDOI* mutation. One journal entry per change.
+
+SIZE 80 30
+
+# Seed a comma cell so we can see Punctuation changes.
+KEYS 1234567
+ENTER
+HOME
+KEY /
+KEY R
+KEY F
+KEY ,
+KEY 0
+ENTER
+ENTER
+ASSERT_CELL       A:A1  1,234,567
+
+# /WGDOIP B — flip to Punct B (thousands `.`).
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY P
+KEY B
+ASSERT_CELL       A:A1  1.234.567
+
+# Alt-F4 reverts to Punct A.
+ALT_F 4
+ASSERT_CELL       A:A1  1,234,567
+
+# Date Intl undo round-trip.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY D
+KEY C
+KEYS  0.0
+# Rendering only changes when the cell uses D4/D5; just verify the
+# setting is back to A after Alt-F4 by exercising another change.
+ALT_F 4
+
+# /WGDOIN P then Alt-F4: sign style restored.
+KEYS -1
+ENTER
+HOME
+KEY /
+KEY R
+KEY F
+KEY C
+KEY 0
+ENTER
+ENTER
+ASSERT_CELL       A:A1  -$1
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY N
+KEY P
+ASSERT_CELL       A:A1  ($1)
+ALT_F 4
+ASSERT_CELL       A:A1  -$1

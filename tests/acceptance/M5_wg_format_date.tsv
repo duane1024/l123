@@ -1,0 +1,33 @@
+# /Worksheet Global Format Date — Date submenu mirrors /RFD.
+# Picking D1..D5 (or Time 1..4) sets the workbook-wide default format
+# for cells that have no explicit per-cell format.
+
+KEYS 35000
+ENTER
+HOME
+
+# /WGFD opens the Date submenu (1..5, plus Time).
+KEY /
+KEY W
+KEY G
+KEY F
+KEY D
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   1
+ASSERT_PANEL_L2   2
+ASSERT_PANEL_L2   5
+
+# Pick D1 → applied to the workbook directly (no decimals, no POINT).
+KEY 1
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (D1) 35000
+
+# /WGFD3 swaps to D3.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY D
+KEY 3
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (D3) 35000

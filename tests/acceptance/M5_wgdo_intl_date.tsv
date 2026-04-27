@@ -1,0 +1,70 @@
+# /Worksheet Global Default Other International Date A..D — selects
+# the date order/separator used by D4 (long) and D5 (short). Serial
+# 36540 = 2000-01-15.
+
+SIZE 80 30
+
+# Seed serial 36540, format as D4 (long international date).
+KEYS 36540
+ENTER
+HOME
+KEY /
+KEY R
+KEY F
+KEY D
+KEY 4
+ENTER
+ENTER
+ASSERT_PANEL_L1   A:A1: (D4) 36540
+
+# Default Date Intl A: MM/DD/YY.
+ASSERT_CELL       A:A1  01/15/00
+
+# /WGDOID B — DD/MM/YY.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY D
+ASSERT_PANEL_L2   A
+ASSERT_PANEL_L2   B
+ASSERT_PANEL_L2   C
+ASSERT_PANEL_L2   D
+KEY B
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  15/01/00
+
+# /WGDOID C — DD.MM.YY.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY D
+KEY C
+ASSERT_CELL       A:A1  15.01.00
+
+# /WGDOID D — YY-MM-DD.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY D
+KEY D
+ASSERT_CELL       A:A1  00-01-15
+
+# Switch the cell to D5 (short international). With Date D the short
+# form is MM-DD.
+KEY /
+KEY R
+KEY F
+KEY D
+KEY 5
+ENTER
+ENTER
+ASSERT_CELL       A:A1  01-15

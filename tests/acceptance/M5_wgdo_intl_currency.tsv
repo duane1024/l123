@@ -1,0 +1,60 @@
+# /Worksheet Global Default Other International Currency Prefix|Suffix
+# — chooses where the currency symbol sits and prompts for the symbol.
+
+SIZE 80 30
+
+# Widen column A so the suffix variants fit without overflowing
+# to asterisks (default width 9 is not enough for "USD1234.50").
+KEY /
+KEY W
+KEY C
+KEY S
+KEYS 14
+ENTER
+
+# Seed a currency cell.
+KEYS 1234.50
+ENTER
+HOME
+KEY /
+KEY R
+KEY F
+KEY C
+KEY 2
+ENTER
+ENTER
+ASSERT_PANEL_L1   (C2)
+ASSERT_CELL       A:A1  $1234.50
+
+# /WGDOIC P — Prefix mode, prompt seeded with current symbol "$".
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY C
+ASSERT_PANEL_L2   Prefix
+ASSERT_PANEL_L2   Suffix
+KEY P
+ASSERT_PANEL_L3   currency symbol
+ASSERT_PANEL_L2   $
+# Replace the seeded "$" with a 3-char prefix string.
+KEYS USD
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  USD1234.50
+
+# /WGDOIC S — Suffix mode with a different symbol.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY C
+KEY S
+KEYS EUR
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  1234.50EUR
