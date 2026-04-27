@@ -5,7 +5,7 @@
 <pre><a href="0319-macro-commands-continued.html">Macro Commands (continued)</a>
     {ONERROR branch-location,[message-location]}
         Traps errors that occur while a macro is running. If an error occurs
-        during a macro after an {ONERROR} command, 1-2-3 branches to the
+        during a macro after an {ONERROR} command, l123 branches to the
         macro instructions in branch-location (optionally recording the error
         message in message-location) instead of terminating the macro.
 
@@ -14,7 +14,7 @@
         text file with either read (r), modify (m), or append (a) access.
 
     {PANELOFF [clear]}
-        Freezes the control panel and status line until 1-2-3 encounters a
+        Freezes the control panel and status line until l123 encounters a
         {PANELON} command or the macro ends. The optional clear argument
         clears the control panel and status line before freezing them.
 

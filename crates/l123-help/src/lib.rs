@@ -112,7 +112,7 @@ mod tests {
     fn index_page_loads() {
         let page = load_page(INDEX_FILENAME).expect("index page must be embedded");
         assert_eq!(page.filename, INDEX_FILENAME);
-        assert_eq!(page.title, "1-2-3 Help Index");
+        assert_eq!(page.title, "l123 Help Index");
         assert!(!page.body.is_empty());
         assert!(!page.links.is_empty(), "index has hyperlinks");
     }

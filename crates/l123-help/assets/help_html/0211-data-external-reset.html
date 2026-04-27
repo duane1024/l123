@@ -3,17 +3,17 @@
 <title>/Data External Reset</title>
 <h1>/Data External Reset</h1>
 <pre><a href="0190-data-external.html">/Data External</a> Reset -- Disconnects an external table, ending all data
-exchange between 1-2-3 and the external table. After you use this command,
+exchange between l123 and the external table. After you use this command,
 any data queries or database @functions that refer to the table may result
-in errors. 1-2-3 will not update these queries or @functions until you
+in errors. l123 will not update these queries or @functions until you
 select <a href="0212-data-external-use.html">/Data External Use</a> and specify that table again.
 
 1. Select <a href="0190-data-external.html">/Data External</a> Reset.
 2. Specify the range name of the external table you want to stop using.
 
 If the table you specified was the only one in use in the associated
-external database, 1-2-3 ends the connection to the external database. If
+external database, l123 ends the connection to the external database. If
 the external database containing the table you specified was the only one
-in use for a particular DataLens driver, 1-2-3 disconnects from the driver.
+in use for a particular DataLens driver, l123 disconnects from the driver.
 
 <a href="0190-data-external.html">/Data External</a>                   <a href="0008-the-data-commands.html">Data Commands</a>                      <a href="0000-1-2-3-help-index.html">Help Index</a></pre>

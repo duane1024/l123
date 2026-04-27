@@ -1,4 +1,4 @@
-# F1 opens the help overlay, loaded with the 1-2-3 Help Index page.
+# F1 opens the help overlay, loaded with the l123 Help Index page.
 # ↑/↓/←/→ move focus 2D-style between hyperlinks (matching classic
 # 1-2-3); ENTER follows; BACKSPACE pops the history stack; ESC closes
 # back to the underlying mode.
@@ -8,7 +8,7 @@ ASSERT_MODE       READY
 # F1 from READY → HELP overlay showing the index page title and footer.
 F 1
 ASSERT_MODE       HELP
-ASSERT_SCREEN     1-2-3 Help Index
+ASSERT_SCREEN     l123 Help Index
 ASSERT_SCREEN     HELP
 
 # The footer shows the navigation hints.
@@ -27,7 +27,7 @@ ASSERT_SCREEN     Add-In Commands -- Press ALT-F10
 
 # BACKSPACE returns to the index, focus reset to the top-of-page link.
 BACKSPACE
-ASSERT_SCREEN     1-2-3 Help Index
+ASSERT_SCREEN     l123 Help Index
 
 # Now exercise RIGHT: from "About 1-2-3 Help" (col 0), one DOWN drops
 # us into the grid, RIGHT moves to "Macro Basics" in column 1, ENTER

@@ -499,7 +499,7 @@ const QUIT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'N',
         name: "No",
-        help: "Do not end l123 session",
+        help: "Do not end l123 session; return to READY mode",
         body: MenuBody::Action(Action::Cancel),
     },
     MenuItem {
@@ -518,13 +518,13 @@ pub const QUIT_DIRTY_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'N',
         name: "No",
-        help: "NOT SAVED — do not end l123 session",
+        help: "WORKSHEET CHANGES NOT SAVED — End l123 anyway?",
         body: MenuBody::Action(Action::Cancel),
     },
     MenuItem {
         letter: 'Y',
         name: "Yes",
-        help: "NOT SAVED — end l123 session, lose unsaved changes",
+        help: "WORKSHEET CHANGES NOT SAVED — End l123 anyway?",
         body: MenuBody::Action(Action::Quit),
     },
 ];
