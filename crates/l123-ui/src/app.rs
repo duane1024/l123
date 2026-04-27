@@ -402,6 +402,20 @@ fn display_mode_default_style(mode: DisplayMode) -> Style {
     }
 }
 
+/// Pick the label prefix to render with, given the cell's stored
+/// prefix and any xlsx-imported `HAlign` override. The stored
+/// `Backslash` (repeat-fill) prefix is a Lotus directive with no
+/// faithful Excel equivalent — Excel saves such cells with
+/// `HAlign::Left` (its text default), which we must NOT let clobber
+/// the fill semantics on re-import. For every other stored prefix,
+/// an explicit halign override wins.
+fn effective_label_prefix(stored: LabelPrefix, halign: HAlign) -> LabelPrefix {
+    if stored == LabelPrefix::Backslash {
+        return LabelPrefix::Backslash;
+    }
+    halign_to_label_prefix(halign).unwrap_or(stored)
+}
+
 #[derive(Debug)]
 struct Entry {
     kind: EntryKind,
@@ -9241,7 +9255,7 @@ impl App {
                     match self.wb().cells.get(&addr) {
                         None | Some(CellContents::Empty) => RowInput::Empty,
                         Some(CellContents::Label { prefix, text }) => {
-                            let eff_prefix = halign_to_label_prefix(halign).unwrap_or(*prefix);
+                            let eff_prefix = effective_label_prefix(*prefix, halign);
                             RowInput::Label {
                                 prefix: eff_prefix,
                                 text: text.clone(),
@@ -9458,7 +9472,7 @@ impl App {
                     let painted_text = match self.wb().cells.get(&m.anchor) {
                         None | Some(CellContents::Empty) => " ".repeat(span_w as usize),
                         Some(CellContents::Label { prefix, text }) => {
-                            let eff_prefix = halign_to_label_prefix(halign).unwrap_or(*prefix);
+                            let eff_prefix = effective_label_prefix(*prefix, halign);
                             render_label(eff_prefix, text, span_w as usize)
                         }
                         Some(other) => {
@@ -10686,6 +10700,39 @@ mod tests {
             }
             other => panic!("expected Label, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn backslash_prefix_repeat_fills_when_xlsx_halign_is_left() {
+        // Reproduces the post-import regression: an xlsx that came from
+        // a Lotus-saved sheet stores `\-` as Label{Backslash, "-"} and
+        // separately carries HAlign::Left (Excel's text default). The
+        // grid renderer was letting Left override the stored Backslash
+        // prefix, so the cell rendered as a single "-" left-padded
+        // rather than as a span of dashes.
+        let mut app = App::new();
+        app.wb_mut().cells.insert(
+            Address::A1,
+            CellContents::Label {
+                prefix: LabelPrefix::Backslash,
+                text: "-".into(),
+            },
+        );
+        app.wb_mut().cell_alignments.insert(
+            Address::A1,
+            Alignment {
+                horizontal: HAlign::Left,
+                ..Alignment::DEFAULT
+            },
+        );
+        let buf = app.render_to_buffer(80, 25);
+        let got = app
+            .cell_rendered_text(&buf, "A:A1")
+            .expect("A1 must be in viewport");
+        assert_eq!(
+            got, "---------",
+            "Backslash prefix must override imported HAlign::Left, got {got:?}"
+        );
     }
 
     fn temp_test_dir(tag: &str) -> PathBuf {
