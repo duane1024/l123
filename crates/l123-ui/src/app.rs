@@ -777,6 +777,12 @@ pub struct App {
     /// `/Worksheet Status` panel or the `/Worksheet Global Default
     /// Status` defaults panel.
     stat_view: StatView,
+    /// Set by `Action::System` and consumed by the event loop on the
+    /// next iteration: leaves the alt-screen, drops raw mode, spawns
+    /// `$SHELL`, and on its exit restores the TUI. Lives on `App`
+    /// instead of being executed inline because the dispatcher doesn't
+    /// own the `Terminal`; the event loop does.
+    pending_system_suspend: bool,
 }
 
 /// User-visible identity shown on the startup splash. The renderer
@@ -1238,6 +1244,11 @@ pub(crate) enum FileListKind {
     Worksheet,
     /// Currently-loaded active files (single-file workbook today).
     Active,
+    /// Every regular file in the session directory, regardless of
+    /// extension. Enter on a spreadsheet extension (xlsx, csv, and
+    /// wk3 with `--features wk3`) retrieves the file; on anything
+    /// else it just dismisses the overlay.
+    Other,
 }
 
 #[derive(Debug, Clone)]
@@ -1564,6 +1575,78 @@ fn list_worksheet_files_in(dir: &Path) -> Vec<PathBuf> {
     entries
 }
 
+/// List every regular file in `dir`, sorted by filename. Hidden files
+/// (leading dot) are skipped to match `/File List Worksheet`'s convention.
+/// Backs `/File List Other`.
+fn list_all_files_in(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<PathBuf> = read
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| !n.starts_with('.'))
+                .unwrap_or(false)
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// True if `path`'s extension is one l123 knows how to retrieve as a
+/// workbook — driver for `/File List Other`'s Enter behavior.
+fn is_retrievable_workbook(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    if ext.eq_ignore_ascii_case("xlsx") || ext.eq_ignore_ascii_case("csv") {
+        return true;
+    }
+    #[cfg(feature = "wk3")]
+    if ext.eq_ignore_ascii_case("wk3") {
+        return true;
+    }
+    false
+}
+
+/// `/System` — leave the alt screen + raw mode, run an interactive
+/// shell, and on its exit restore the TUI. Mirrors the original 1-2-3
+/// R3.4a behavior of suspending to a DOS shell ("Type EXIT to return
+/// to 1-2-3"). Errors from the spawn are printed to the underlying
+/// terminal and otherwise swallowed; we always try to restore the TUI.
+fn suspend_to_shell<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+) -> anyhow::Result<()>
+where
+    B::Error: Send + Sync + 'static,
+{
+    let mut stdout = io::stdout();
+    disable_raw_mode()?;
+    execute!(stdout, LeaveAlternateScreen, DisableMouseCapture)?;
+    terminal.show_cursor()?;
+
+    println!();
+    println!("(Type 'exit' to return to 1-2-3.)");
+
+    #[cfg(windows)]
+    let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+    #[cfg(not(windows))]
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+
+    if let Err(e) = std::process::Command::new(&shell).status() {
+        eprintln!("l123: /System: failed to launch {shell}: {e}");
+    }
+
+    enable_raw_mode()?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    terminal.clear()?;
+    Ok(())
+}
+
 /// Render a source-engine [`CellView`] into the `set_user_input`
 /// string shape appropriate for `/File Xtract`'s kind. Formulas keeps
 /// the formula string; Values flattens it to the cached scalar.
@@ -1873,6 +1956,7 @@ impl App {
             display_mode: DisplayMode::default(),
             show_gridlines: false,
             stat_view: StatView::Worksheet,
+            pending_system_suspend: false,
         }
     }
 
@@ -2006,6 +2090,11 @@ impl App {
             terminal.draw(|f| self.render(f.area(), f.buffer_mut()))?;
             if self.take_pending_beep() {
                 emit_bell();
+            }
+            if self.pending_system_suspend {
+                self.pending_system_suspend = false;
+                suspend_to_shell(terminal)?;
+                continue;
             }
             if event::poll(Duration::from_millis(100))? {
                 match event::read()? {
@@ -3741,6 +3830,12 @@ impl App {
             Action::FileDir => self.start_file_dir_prompt(),
             Action::FileListWorksheet => self.open_file_list(FileListKind::Worksheet),
             Action::FileListActive => self.open_file_list(FileListKind::Active),
+            Action::FileListOther => self.open_file_list(FileListKind::Other),
+            Action::System => {
+                self.menu = None;
+                self.pending_system_suspend = true;
+                self.mode = Mode::Ready;
+            }
             Action::GraphTypeLine => self.set_graph_type(GraphType::Line),
             Action::GraphTypeBar => self.set_graph_type(GraphType::Bar),
             Action::GraphTypeXY => self.set_graph_type(GraphType::XY),
@@ -3826,6 +3921,10 @@ impl App {
                 list_worksheet_files_in(&cwd)
             }
             FileListKind::Active => self.wb_mut().active_path.iter().cloned().collect(),
+            FileListKind::Other => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                list_all_files_in(&cwd)
+            }
         };
         self.file_list = Some(FileListState {
             kind,
@@ -3886,6 +3985,17 @@ impl App {
                     FileListKind::Active => {
                         // Already the active file — just dismiss.
                         self.mode = Mode::Ready;
+                    }
+                    FileListKind::Other => {
+                        if let Some(path) = fl.entries.get(fl.highlight).cloned() {
+                            if is_retrievable_workbook(&path) {
+                                self.retrieve_by_extension(path);
+                            } else {
+                                self.mode = Mode::Ready;
+                            }
+                        } else {
+                            self.mode = Mode::Ready;
+                        }
                     }
                 }
             }
@@ -8455,11 +8565,13 @@ impl App {
         let header = match fl.kind {
             FileListKind::Worksheet => " File List — Worksheet",
             FileListKind::Active => " File List — Active",
+            FileListKind::Other => " File List — Other",
         };
         let tail = if fl.entries.is_empty() {
             match fl.kind {
                 FileListKind::Worksheet => " (no worksheet files in directory)".to_string(),
                 FileListKind::Active => " (no active file)".to_string(),
+                FileListKind::Other => " (no files in directory)".to_string(),
             }
         } else {
             format!(
@@ -8499,6 +8611,7 @@ impl App {
             let empty_msg = match fl.kind {
                 FileListKind::Worksheet => "(no worksheet files in directory)",
                 FileListKind::Active => "(no active file)",
+                FileListKind::Other => "(no files in directory)",
             };
             set_line(
                 buf,
@@ -10779,6 +10892,99 @@ mod tests {
 
         let _ = std::fs::remove_file(&a);
         let _ = std::fs::remove_file(&b);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// `list_all_files_in` includes every regular file (any extension)
+    /// and skips dotfiles, sorted by filename.
+    #[test]
+    fn list_all_files_in_returns_every_file_no_dotfiles() {
+        let dir = temp_test_dir("list_other");
+        let names_in = [
+            "zeta.xlsx",
+            "notes.txt",
+            "data.csv",
+            "alpha.bin",
+            ".hidden",
+            "README",
+        ];
+        for name in names_in {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let got = list_all_files_in(&dir);
+        let names: Vec<String> = got
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["README", "alpha.bin", "data.csv", "notes.txt", "zeta.xlsx"]
+        );
+        for name in names_in {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// /File List Other → Enter on a `.csv` file routes through the CSV
+    /// loader: the workbook ends up populated with that file's rows.
+    #[test]
+    fn file_list_other_enter_loads_csv() {
+        let dir = temp_test_dir("list_other_csv");
+        let path = dir.join("data.csv");
+        std::fs::write(&path, b"7,8,9\n").unwrap();
+
+        let mut app = App::new();
+        app.file_list = Some(FileListState {
+            kind: FileListKind::Other,
+            entries: vec![path.clone()],
+            highlight: 0,
+            view_offset: 0,
+        });
+        app.mode = Mode::Files;
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(app.file_list.is_none());
+        match app.wb().cells.get(&Address::A1).unwrap() {
+            CellContents::Constant(Value::Number(n)) => assert_eq!(*n, 7.0),
+            other => panic!("A1 expected Number(7) from data.csv, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// /File List Other → Enter on a non-spreadsheet file just dismisses
+    /// the overlay, leaving the workbook untouched.
+    #[test]
+    fn file_list_other_enter_on_unsupported_extension_dismisses() {
+        let dir = temp_test_dir("list_other_dismiss");
+        let path = dir.join("readme.txt");
+        std::fs::write(&path, b"hello").unwrap();
+
+        let mut app = App::new();
+        app.wb_mut().active_path = Some(PathBuf::from("orig.xlsx"));
+        app.file_list = Some(FileListState {
+            kind: FileListKind::Other,
+            entries: vec![path.clone()],
+            highlight: 0,
+            view_offset: 0,
+        });
+        app.mode = Mode::Files;
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Ready);
+        assert!(app.file_list.is_none());
+        // Workbook untouched: active_path still points at the pre-existing
+        // file, no cells were planted.
+        assert_eq!(
+            app.wb().active_path.as_deref(),
+            Some(PathBuf::from("orig.xlsx").as_path())
+        );
+        assert!(app.wb().cells.is_empty());
+
+        let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
 

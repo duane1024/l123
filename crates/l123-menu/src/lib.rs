@@ -381,6 +381,11 @@ pub enum Action {
     FileDir,
     FileListWorksheet,
     FileListActive,
+    FileListOther,
+    /// `/System` — suspend the TUI and shell out to `$SHELL` (or
+    /// `cmd.exe` on Windows). The shell's exit returns control to
+    /// l123 with the workbook untouched.
+    System,
     GraphTypeLine,
     GraphTypeBar,
     GraphTypeXY,
@@ -1812,7 +1817,7 @@ const FILE_LIST_MENU: &[MenuItem] = &[
         letter: 'O',
         name: "Other",
         help: "List any file",
-        body: MenuBody::NotImplemented("f-list-other"),
+        body: MenuBody::Action(Action::FileListOther),
     },
     MenuItem {
         letter: 'A',
@@ -3053,7 +3058,7 @@ pub const ROOT: &[MenuItem] = &[
         letter: 'S',
         name: "System",
         help: "Suspend to OS shell",
-        body: MenuBody::NotImplemented("system"),
+        body: MenuBody::Action(Action::System),
     },
     MenuItem {
         letter: 'Q',
