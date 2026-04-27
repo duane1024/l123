@@ -479,6 +479,10 @@ struct Workbook {
     /// a single Enter. `None` until the file has been saved at least
     /// once.
     active_path: Option<PathBuf>,
+    /// True when the workbook has unsaved changes. Drives the `/QY`
+    /// warn-on-quit second confirm. Flipped on by mutating commits;
+    /// cleared on a successful `/FS`.
+    dirty: bool,
     pointer: Address,
     viewport_col_offset: u16,
     viewport_row_offset: u32,
@@ -534,6 +538,7 @@ impl Workbook {
             default_col_width: 9,
             hidden_cols: HashSet::new(),
             active_path: None,
+            dirty: false,
             pointer: Address::A1,
             viewport_col_offset: 0,
             viewport_row_offset: 0,
@@ -1843,6 +1848,12 @@ impl App {
         self.recalc_pending
     }
 
+    /// True if the active workbook has unsaved changes. Drives the
+    /// `/QY` warn-on-quit second confirm.
+    pub fn is_dirty(&self) -> bool {
+        self.wb().dirty
+    }
+
     pub fn run() -> anyhow::Result<()> {
         Self::run_with_file(None)
     }
@@ -2577,6 +2588,7 @@ impl App {
         if let Some(fmt) = inferred_format {
             self.wb_mut().cell_formats.insert(p, fmt);
         }
+        self.wb_mut().dirty = true;
         self.mode = Mode::Ready;
     }
 
@@ -3103,6 +3115,14 @@ impl App {
     fn execute_action(&mut self, action: Action) {
         match action {
             Action::Cancel => self.close_menu(),
+            Action::QuitConfirm => {
+                if self.is_dirty() {
+                    self.menu = Some(MenuState::rooted_at(menu::QUIT_DIRTY_MENU));
+                } else {
+                    self.running = false;
+                    self.close_menu();
+                }
+            }
             Action::Quit => {
                 self.running = false;
                 self.close_menu();
@@ -3882,6 +3902,7 @@ impl App {
         let prev = self.wb().frozen.get(&sheet).copied();
         self.wb_mut().frozen.insert(sheet, new);
         self.push_journal_batch(vec![JournalEntry::Frozen { sheet, prev }]);
+        self.wb_mut().dirty = true;
         self.close_menu();
     }
 
@@ -3891,6 +3912,7 @@ impl App {
         if prev.is_some() {
             self.wb_mut().frozen.remove(&sheet);
             self.push_journal_batch(vec![JournalEntry::Frozen { sheet, prev }]);
+            self.wb_mut().dirty = true;
         }
         self.close_menu();
     }
@@ -4437,6 +4459,7 @@ impl App {
             default_col_width: 9,
             hidden_cols: HashSet::new(),
             active_path: Some(path),
+            dirty: false,
             pointer: Address::A1,
             viewport_col_offset: 0,
             viewport_row_offset: 0,
@@ -4616,6 +4639,7 @@ impl App {
         self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
         self.wb_mut().active_path = Some(path);
+        self.wb_mut().dirty = false;
         self.mode = Mode::Ready;
     }
 
@@ -4738,6 +4762,7 @@ impl App {
             path
         };
         self.wb_mut().active_path = Some(active);
+        self.wb_mut().dirty = false;
         self.mode = Mode::Ready;
     }
 
@@ -4888,6 +4913,7 @@ impl App {
         }
         if self.wb_mut().engine.save_xlsx(&path).is_ok() {
             self.wb_mut().active_path = Some(path);
+            self.wb_mut().dirty = false;
         }
     }
 
@@ -4978,6 +5004,9 @@ impl App {
                 }
             }
         }
+        if !batch.is_empty() {
+            self.wb_mut().dirty = true;
+        }
         self.push_journal_batch(batch);
         self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
@@ -5032,6 +5061,9 @@ impl App {
                 });
             }
         }
+        if !batch.is_empty() {
+            self.wb_mut().dirty = true;
+        }
         self.push_journal_batch(batch);
         self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
@@ -5048,6 +5080,9 @@ impl App {
                     batch.push(JournalEntry::ColInsert { sheet, at: at + k });
                 }
             }
+        }
+        if !batch.is_empty() {
+            self.wb_mut().dirty = true;
         }
         self.push_journal_batch(batch);
         self.wb_mut().engine.recalc();
@@ -5411,6 +5446,7 @@ impl App {
                 for r in ranges {
                     self.execute_range_erase(*r);
                 }
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             PendingCommand::CopyFrom => {
@@ -5421,6 +5457,7 @@ impl App {
             }
             PendingCommand::CopyTo { source } => {
                 if self.execute_copy(source, first) {
+                    self.wb_mut().dirty = true;
                     self.mode = Mode::Ready;
                 }
                 // On dim-mismatch error, set_error already put the app
@@ -5428,6 +5465,7 @@ impl App {
             }
             PendingCommand::MoveTo { source } => {
                 if self.execute_move(source, first) {
+                    self.wb_mut().dirty = true;
                     self.mode = Mode::Ready;
                 }
             }
@@ -5435,18 +5473,21 @@ impl App {
                 for r in ranges {
                     self.execute_range_label(*r, new_prefix);
                 }
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             PendingCommand::RangeFormat { format } => {
                 for r in ranges {
                     self.execute_range_format(*r, format);
                 }
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             PendingCommand::RangeTextStyle { bits, set } => {
                 for r in ranges {
                     self.execute_range_text_style(*r, bits, set);
                 }
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             PendingCommand::RangeNameCreate => {
@@ -5457,6 +5498,7 @@ impl App {
                         .insert(name.to_ascii_lowercase(), first);
                     self.wb_mut().engine.recalc();
                     self.refresh_formula_caches();
+                    self.wb_mut().dirty = true;
                 }
                 self.mode = Mode::Ready;
             }
@@ -5484,24 +5526,28 @@ impl App {
                 for r in ranges {
                     self.execute_col_range_width(*r, Some(width));
                 }
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             PendingCommand::ColumnRangeResetWidth => {
                 for r in ranges {
                     self.execute_col_range_width(*r, None);
                 }
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             PendingCommand::ColumnHide => {
                 for r in ranges {
                     self.execute_col_hide_display(*r, true);
                 }
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             PendingCommand::ColumnDisplay => {
                 for r in ranges {
                     self.execute_col_hide_display(*r, false);
                 }
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             // Mouse-drag selection has no command to execute. Enter
@@ -5740,6 +5786,7 @@ impl App {
         let prev = self.wb().global_format;
         self.wb_mut().global_format = new_format;
         self.push_journal_batch(vec![JournalEntry::GlobalFormat { prev }]);
+        self.wb_mut().dirty = true;
         self.close_menu();
     }
 
@@ -5750,6 +5797,7 @@ impl App {
         let prev = self.wb().international.clone();
         mutator(&mut self.wb_mut().international);
         self.push_journal_batch(vec![JournalEntry::GlobalInternational { prev }]);
+        self.wb_mut().dirty = true;
         self.close_menu();
     }
 
@@ -5816,6 +5864,7 @@ impl App {
             });
         }
         self.push_journal_batch(batch);
+        self.wb_mut().dirty = true;
         self.close_menu();
     }
 
@@ -6011,6 +6060,7 @@ impl App {
                     });
                 }
                 self.push_journal_batch(batch);
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             PromptNext::WorksheetColumnRangeSetWidth => {
@@ -6024,6 +6074,7 @@ impl App {
                 let prev = default;
                 self.wb_mut().default_col_width = width;
                 self.push_journal_batch(vec![JournalEntry::GlobalColWidth { prev }]);
+                self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
             }
             PromptNext::WorksheetGlobalRecalcIteration => {
@@ -6048,6 +6099,7 @@ impl App {
                         .remove(&p.buffer.to_ascii_lowercase());
                     self.wb_mut().engine.recalc();
                     self.refresh_formula_caches();
+                    self.wb_mut().dirty = true;
                 }
                 self.mode = Mode::Ready;
             }
@@ -6673,6 +6725,9 @@ impl App {
                     });
                 }
             }
+        }
+        if !batch.is_empty() {
+            self.wb_mut().dirty = true;
         }
         self.push_journal_batch(batch);
         self.wb_mut().engine.recalc();
@@ -8774,7 +8829,11 @@ impl App {
         } else {
             (String::new(), None)
         };
-        let left = format!(" {left_text}{sheet_suffix}");
+        // SPEC §4: prefix the left slot with `*` when the workbook has
+        // unsaved changes; otherwise a leading space keeps the column
+        // alignment.
+        let prefix = if self.is_dirty() { '*' } else { ' ' };
+        let left = format!("{prefix}{left_text}{sheet_suffix}");
         // Active status indicators, in the order 1-2-3 displays them.
         // For M2 we emit CALC only; the others arrive with their features.
         let mut indicators = Vec::new();
@@ -10336,6 +10395,38 @@ mod tests {
         let _ = std::fs::remove_dir(&dir);
     }
 
+    /// /FR clears the dirty bit: the in-memory workbook now matches
+    /// what's on disk, so a follow-up /Q should not warn.
+    #[test]
+    fn file_retrieve_clears_dirty_bit() {
+        let dir = temp_test_dir("file_retrieve_dirty");
+        let target = dir.join("sheet.xlsx");
+
+        let mut app = App::new();
+        drive_save_keys(&mut app, "42", &target);
+        assert!(target.exists());
+
+        let mut app2 = App::new();
+        for c in "hi".chars() {
+            app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app2.is_dirty(), "label commit should mark dirty");
+
+        for c in ['/', 'F', 'R'] {
+            app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        for c in target.to_str().unwrap().chars() {
+            app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(!app2.is_dirty(), "successful /FR should clear dirty bit");
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
     /// Cancel path: pressing C on the confirm submenu leaves the
     /// existing file untouched.
     #[test]
@@ -10357,6 +10448,301 @@ mod tests {
         assert!(app.save_confirm.is_none());
         let after_len = std::fs::metadata(&target).unwrap().len();
         assert_eq!(before_len, after_len, "Cancel unexpectedly wrote the file");
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    fn drive_chord(app: &mut App, chord: &[char]) {
+        for c in chord {
+            app.handle_key(KeyEvent::new(KeyCode::Char(*c), KeyModifiers::NONE));
+        }
+    }
+
+    fn drive_chars(app: &mut App, s: &str) {
+        for c in s.chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    fn enter(app: &mut App) {
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    /// Commit `1` at A1 and force the workbook back to a clean
+    /// baseline. Used by dirty-bit tests for mutators that need an
+    /// existing cell to operate on.
+    fn seed_a1_clean(app: &mut App) {
+        drive_chord(app, &['1']);
+        enter(app);
+        app.wb_mut().dirty = false;
+    }
+
+    #[test]
+    fn range_erase_marks_dirty() {
+        let mut app = App::new();
+        seed_a1_clean(&mut app);
+        // /RE auto-anchors POINT at the pointer; Enter erases the
+        // single-cell range A1..A1.
+        drive_chord(&mut app, &['/', 'R', 'E']);
+        enter(&mut app);
+        assert!(app.is_dirty(), "/RE should mark dirty");
+    }
+
+    #[test]
+    fn copy_marks_dirty() {
+        let mut app = App::new();
+        seed_a1_clean(&mut app);
+        // /C: FROM-Enter (A1..A1), RIGHT, TO-Enter (B1).
+        drive_chord(&mut app, &['/', 'C']);
+        enter(&mut app);
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        enter(&mut app);
+        assert!(app.is_dirty(), "/C should mark dirty");
+    }
+
+    #[test]
+    fn move_marks_dirty() {
+        let mut app = App::new();
+        seed_a1_clean(&mut app);
+        drive_chord(&mut app, &['/', 'M']);
+        enter(&mut app);
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        enter(&mut app);
+        assert!(app.is_dirty(), "/M should mark dirty");
+    }
+
+    #[test]
+    fn range_format_marks_dirty() {
+        let mut app = App::new();
+        seed_a1_clean(&mut app);
+        // /RFG → General format → POINT → Enter applies to A1..A1.
+        drive_chord(&mut app, &['/', 'R', 'F', 'G']);
+        enter(&mut app);
+        assert!(app.is_dirty(), "/RFG should mark dirty");
+    }
+
+    #[test]
+    fn range_name_create_marks_dirty() {
+        let mut app = App::new();
+        // /RNC → name "sales" → Enter → POINT (A1..A1) → Enter.
+        drive_chord(&mut app, &['/', 'R', 'N', 'C']);
+        drive_chars(&mut app, "sales");
+        enter(&mut app);
+        enter(&mut app);
+        assert!(app.is_dirty(), "/RNC should mark dirty");
+    }
+
+    #[test]
+    fn range_name_delete_marks_dirty() {
+        let mut app = App::new();
+        // Create first.
+        drive_chord(&mut app, &['/', 'R', 'N', 'C']);
+        drive_chars(&mut app, "sales");
+        enter(&mut app);
+        enter(&mut app);
+        app.wb_mut().dirty = false;
+        // /RND → name "sales" → Enter.
+        drive_chord(&mut app, &['/', 'R', 'N', 'D']);
+        drive_chars(&mut app, "sales");
+        enter(&mut app);
+        assert!(app.is_dirty(), "/RND should mark dirty");
+    }
+
+    #[test]
+    fn ws_column_set_width_marks_dirty() {
+        let mut app = App::new();
+        // /WCS prompts for width; type 15 + Enter.
+        drive_chord(&mut app, &['/', 'W', 'C', 'S']);
+        drive_chars(&mut app, "15");
+        enter(&mut app);
+        assert!(app.is_dirty(), "/WCS should mark dirty");
+    }
+
+    #[test]
+    fn ws_column_reset_width_marks_dirty() {
+        let mut app = App::new();
+        drive_chord(&mut app, &['/', 'W', 'C', 'S']);
+        drive_chars(&mut app, "15");
+        enter(&mut app);
+        app.wb_mut().dirty = false;
+        // /WCR resets the current column to the default width.
+        drive_chord(&mut app, &['/', 'W', 'C', 'R']);
+        assert!(app.is_dirty(), "/WCR should mark dirty");
+    }
+
+    #[test]
+    fn ws_column_range_set_width_marks_dirty() {
+        let mut app = App::new();
+        // /WCCS prompts for width; type 12 + Enter, then POINT, Enter applies.
+        drive_chord(&mut app, &['/', 'W', 'C', 'C', 'S']);
+        drive_chars(&mut app, "12");
+        enter(&mut app);
+        enter(&mut app);
+        assert!(app.is_dirty(), "/WCCS should mark dirty");
+    }
+
+    #[test]
+    fn ws_column_range_reset_width_marks_dirty() {
+        let mut app = App::new();
+        // First set a non-default width so the reset has something to do.
+        drive_chord(&mut app, &['/', 'W', 'C', 'C', 'S']);
+        drive_chars(&mut app, "12");
+        enter(&mut app);
+        enter(&mut app);
+        app.wb_mut().dirty = false;
+        // /WCCR is the column-range reset; POINT, Enter.
+        drive_chord(&mut app, &['/', 'W', 'C', 'C', 'R']);
+        enter(&mut app);
+        assert!(app.is_dirty(), "/WCCR should mark dirty");
+    }
+
+    #[test]
+    fn ws_column_hide_marks_dirty() {
+        let mut app = App::new();
+        drive_chord(&mut app, &['/', 'W', 'C', 'H']);
+        enter(&mut app);
+        assert!(app.is_dirty(), "/WCH should mark dirty");
+    }
+
+    #[test]
+    fn ws_column_display_marks_dirty() {
+        let mut app = App::new();
+        drive_chord(&mut app, &['/', 'W', 'C', 'H']);
+        enter(&mut app);
+        app.wb_mut().dirty = false;
+        drive_chord(&mut app, &['/', 'W', 'C', 'D']);
+        enter(&mut app);
+        assert!(app.is_dirty(), "/WCD should mark dirty");
+    }
+
+    #[test]
+    fn ws_titles_set_marks_dirty() {
+        let mut app = App::new();
+        // /WTH freezes the rows above the pointer.
+        drive_chord(&mut app, &['/', 'W', 'T', 'H']);
+        assert!(app.is_dirty(), "/WTH should mark dirty");
+    }
+
+    #[test]
+    fn ws_titles_clear_marks_dirty() {
+        let mut app = App::new();
+        drive_chord(&mut app, &['/', 'W', 'T', 'H']);
+        app.wb_mut().dirty = false;
+        // /WTC on a sheet that has frozen titles should clear them.
+        drive_chord(&mut app, &['/', 'W', 'T', 'C']);
+        assert!(app.is_dirty(), "/WTC (with prior titles) should mark dirty");
+    }
+
+    #[test]
+    fn ws_titles_clear_no_op_does_not_dirty() {
+        // /WTC on a sheet without titles is a no-op — no journal, no
+        // dirty flip. Matches the existing M5_ws_titles transcript's
+        // "quiet no-op" expectation.
+        let mut app = App::new();
+        drive_chord(&mut app, &['/', 'W', 'T', 'C']);
+        assert!(!app.is_dirty(), "/WTC on clean sheet should remain clean");
+    }
+
+    #[test]
+    fn wg_global_format_marks_dirty() {
+        let mut app = App::new();
+        // /WGFG sets global format to General — routes through
+        // set_global_format and journals a GlobalFormat entry.
+        drive_chord(&mut app, &['/', 'W', 'G', 'F', 'G']);
+        assert!(app.is_dirty(), "/WGFG should mark dirty");
+    }
+
+    #[test]
+    fn wg_global_col_width_marks_dirty() {
+        let mut app = App::new();
+        // /WGCS prompts for the new default column width; type 12 + Enter.
+        drive_chord(&mut app, &['/', 'W', 'G', 'C']);
+        drive_chord(&mut app, &['S']);
+        drive_chars(&mut app, "12");
+        enter(&mut app);
+        assert!(app.is_dirty(), "/WGCS should mark dirty");
+    }
+
+    #[test]
+    fn wgd_intl_punctuation_marks_dirty() {
+        let mut app = App::new();
+        // /WGDOIPB switches Punctuation from the default (A) to B,
+        // mutating Workbook.international.
+        drive_chord(&mut app, &['/', 'W', 'G', 'D', 'O', 'I', 'P', 'B']);
+        assert!(app.is_dirty(), "/WGDOIPB should mark dirty");
+    }
+
+    #[test]
+    fn ws_erase_yields_clean_workbook() {
+        // /WEY discards the workbook for a fresh blank one — there are
+        // no changes left to save, so /Q should not warn afterwards.
+        let mut app = App::new();
+        drive_chars(&mut app, "hi");
+        enter(&mut app);
+        assert!(app.is_dirty());
+        drive_chord(&mut app, &['/', 'W', 'E', 'Y']);
+        assert!(!app.is_dirty(), "/WEY should leave the workbook clean");
+    }
+
+    #[test]
+    fn wysiwyg_bold_marks_dirty() {
+        let mut app = App::new();
+        drive_chars(&mut app, "hi");
+        enter(&mut app);
+        app.wb_mut().dirty = false;
+        // :FBS → POINT → Enter applies Bold to A1..A1.
+        drive_chord(&mut app, &[':', 'F', 'B', 'S']);
+        enter(&mut app);
+        assert!(app.is_dirty(), ":FBS should mark dirty");
+    }
+
+    /// Structural mutators (insert/delete row & col) flip the dirty
+    /// bit. Each runs against a fresh `App::new()` so the assertion
+    /// isolates one mutator.
+    #[test]
+    fn structural_mutators_mark_dirty() {
+        for chord in [
+            &['/', 'W', 'I', 'R'][..],
+            &['/', 'W', 'I', 'C'][..],
+            &['/', 'W', 'D', 'R'][..],
+            &['/', 'W', 'D', 'C'][..],
+        ] {
+            let mut app = App::new();
+            assert!(!app.is_dirty(), "fresh App should be clean");
+            drive_chord(&mut app, chord);
+            let chord_str: String = chord.iter().collect();
+            assert!(app.is_dirty(), "{chord_str} should mark dirty");
+        }
+    }
+
+    /// Dirty-bit lifecycle: a fresh App is clean; committing a label
+    /// flips it dirty; a successful `/FS` clears it. Drives the
+    /// `/QY` warn-on-quit guard.
+    #[test]
+    fn dirty_bit_tracks_modifications_and_save() {
+        let mut app = App::new();
+        assert!(!app.is_dirty(), "fresh workbook should be clean");
+
+        for c in "hi".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.is_dirty(), "label commit should mark dirty");
+
+        let dir = temp_test_dir("dirty_bit");
+        let target = dir.join("clean.xlsx");
+        for c in ['/', 'F', 'S'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        for c in target.to_str().unwrap().chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            !app.is_dirty(),
+            "successful /FS should clear the dirty bit"
+        );
 
         let _ = std::fs::remove_file(&target);
         let _ = std::fs::remove_dir(&dir);

@@ -1,0 +1,22 @@
+# SPEC §4: status line shows `*` followed by the default left-slot
+# content when the workbook has unsaved changes. After /FS the bit
+# clears; a follow-up commit re-dirties and the `*` returns.
+
+SIZE 200 25
+RM_FILE $TMPDIR/m10_status_dirty.xlsx
+
+# Save establishes the filename in the left slot and clears dirty.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m10_status_dirty.xlsx
+ENTER
+ASSERT_MODE      READY
+ASSERT_STATUS    m10_status_dirty.xlsx
+
+# A label commit dirties; the `*` marker should appear immediately
+# before the filename.
+KEYS x
+ENTER
+ASSERT_MODE      READY
+ASSERT_STATUS    *m10_status_dirty.xlsx
