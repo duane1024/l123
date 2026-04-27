@@ -1,0 +1,78 @@
+# /File Combine — merge a disk file into the active workbook starting
+# at the pointer. Three operations (Copy / Add / Subtract) cross two
+# scopes (Entire-File / Named-Or-Specified-Range), six leaves total.
+#
+# This transcript builds a small source file, then exercises Copy
+# Entire-File, Add Entire-File, and Add Named-Or-Specified-Range.
+
+RM_FILE $TMPDIR/m4_combine_src.xlsx
+
+# --- build the source file: A1=10, A2=20 ---
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m4_combine_src.xlsx
+ENTER
+ASSERT_MODE     READY
+
+# --- fresh workbook; pointer at B2; /FCCE merges source onto pointer ---
+KEY /
+KEY F
+KEY N
+KEY A
+ASSERT_MODE     READY
+RIGHT
+DOWN
+ASSERT_POINTER  A:B2
+KEY /
+KEY F
+KEY C
+ASSERT_MODE     MENU
+ASSERT_PANEL_L2 Copy
+ASSERT_PANEL_L2 Add
+ASSERT_PANEL_L2 Subtract
+KEY C
+ASSERT_PANEL_L2 Entire-File
+KEY E
+ASSERT_PANEL_L3 Enter source file name
+KEYS $TMPDIR/m4_combine_src.xlsx
+ENTER
+ASSERT_MODE     READY
+ASSERT_CELL     A:B2  10
+ASSERT_CELL     A:B3  20
+
+# --- /FCAE adds the source values to existing targets ---
+KEY /
+KEY F
+KEY C
+KEY A
+KEY E
+KEYS $TMPDIR/m4_combine_src.xlsx
+ENTER
+ASSERT_MODE     READY
+ASSERT_CELL     A:B2  20
+ASSERT_CELL     A:B3  40
+
+# --- /FCSN subtracts a typed source range (A1..A1 = 10) at pointer ---
+KEY /
+KEY F
+KEY C
+KEY S
+ASSERT_PANEL_L2 Entire-File
+ASSERT_PANEL_L2 Named/Specified-Range
+KEY N
+ASSERT_PANEL_L3 Enter source file name
+KEYS $TMPDIR/m4_combine_src.xlsx
+ENTER
+ASSERT_PANEL_L3 Enter source range
+KEYS A1..A1
+ENTER
+ASSERT_MODE     READY
+# B2 was 20, minus source A1 (10) = 10. B3 untouched (range covered only A1).
+ASSERT_CELL     A:B2  10
+ASSERT_CELL     A:B3  40

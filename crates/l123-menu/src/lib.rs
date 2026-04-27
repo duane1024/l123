@@ -296,6 +296,36 @@ pub enum Action {
     FileEraseGraph,
     /// `/File Erase Other` — delete any file from disk.
     FileEraseOther,
+    /// `/File Admin Reservation Get` — acquire the active file's edit
+    /// reservation. Wired as a typed action; behavior is currently a
+    /// menu-close (no in-memory reservation model yet).
+    FileAdminReservationGet,
+    /// `/File Admin Reservation Release` — release the active file's
+    /// edit reservation. See `FileAdminReservationGet` for current
+    /// behavior.
+    FileAdminReservationRelease,
+    /// `/File Admin Seal File` — password-seal the active file. Stub
+    /// today (IronCalc 0.7 doesn't model encrypted xlsx).
+    FileAdminSealFile,
+    /// `/File Admin Seal Reservation-Setting` — password-seal the
+    /// reservation behavior. Stub today.
+    FileAdminSealReservationSetting,
+    /// `/File Admin Seal Disable` — disable an existing seal (requires
+    /// the seal password). Stub today.
+    FileAdminSealDisable,
+    /// `/File Admin Table {Worksheet|Print|Graph|Other|Active|Linked}`
+    /// — build a table of files of the given kind in the session
+    /// directory. Stubs today; the listing is provided by the simpler
+    /// `/File List` family.
+    FileAdminTableWorksheet,
+    FileAdminTablePrint,
+    FileAdminTableGraph,
+    FileAdminTableOther,
+    FileAdminTableActive,
+    FileAdminTableLinked,
+    /// `/File Admin Link-Refresh` — refresh formulas that reference
+    /// linked files. Stub today.
+    FileAdminLinkRefresh,
     FileNew,
     FileOpenBefore,
     FileOpenAfter,
@@ -1930,13 +1960,13 @@ const FILE_ADMIN_RESERVATION_MENU: &[MenuItem] = &[
         letter: 'G',
         name: "Get",
         help: "Acquire the file's reservation for editing",
-        body: MenuBody::NotImplemented("f-admin-reservation-get"),
+        body: MenuBody::Action(Action::FileAdminReservationGet),
     },
     MenuItem {
         letter: 'R',
         name: "Release",
         help: "Release the file's reservation",
-        body: MenuBody::NotImplemented("f-admin-reservation-release"),
+        body: MenuBody::Action(Action::FileAdminReservationRelease),
     },
 ];
 
@@ -1945,19 +1975,19 @@ const FILE_ADMIN_SEAL_MENU: &[MenuItem] = &[
         letter: 'F',
         name: "File",
         help: "Seal the file with a password",
-        body: MenuBody::NotImplemented("f-admin-seal-file"),
+        body: MenuBody::Action(Action::FileAdminSealFile),
     },
     MenuItem {
         letter: 'R',
         name: "Reservation-Setting",
         help: "Seal the reservation behavior of this file",
-        body: MenuBody::NotImplemented("f-admin-seal-reservation-setting"),
+        body: MenuBody::Action(Action::FileAdminSealReservationSetting),
     },
     MenuItem {
         letter: 'D',
         name: "Disable",
         help: "Disable an existing seal (requires the seal password)",
-        body: MenuBody::NotImplemented("f-admin-seal-disable"),
+        body: MenuBody::Action(Action::FileAdminSealDisable),
     },
 ];
 
@@ -1966,37 +1996,37 @@ const FILE_ADMIN_TABLE_MENU: &[MenuItem] = &[
         letter: 'W',
         name: "Worksheet",
         help: "Build a table of worksheet files in the session directory",
-        body: MenuBody::NotImplemented("f-admin-table-worksheet"),
+        body: MenuBody::Action(Action::FileAdminTableWorksheet),
     },
     MenuItem {
         letter: 'P',
         name: "Print",
         help: "Build a table of print-settings files",
-        body: MenuBody::NotImplemented("f-admin-table-print"),
+        body: MenuBody::Action(Action::FileAdminTablePrint),
     },
     MenuItem {
         letter: 'G',
         name: "Graph",
         help: "Build a table of graph files",
-        body: MenuBody::NotImplemented("f-admin-table-graph"),
+        body: MenuBody::Action(Action::FileAdminTableGraph),
     },
     MenuItem {
         letter: 'O',
         name: "Other",
         help: "Build a table of any file type",
-        body: MenuBody::NotImplemented("f-admin-table-other"),
+        body: MenuBody::Action(Action::FileAdminTableOther),
     },
     MenuItem {
         letter: 'A',
         name: "Active",
         help: "Build a table of currently active files",
-        body: MenuBody::NotImplemented("f-admin-table-active"),
+        body: MenuBody::Action(Action::FileAdminTableActive),
     },
     MenuItem {
         letter: 'L',
         name: "Linked",
         help: "Build a table of files linked via formula references",
-        body: MenuBody::NotImplemented("f-admin-table-linked"),
+        body: MenuBody::Action(Action::FileAdminTableLinked),
     },
 ];
 
@@ -2023,7 +2053,7 @@ const FILE_ADMIN_MENU: &[MenuItem] = &[
         letter: 'L',
         name: "Link-Refresh",
         help: "Refresh formulas that reference linked files",
-        body: MenuBody::NotImplemented("f-admin-link-refresh"),
+        body: MenuBody::Action(Action::FileAdminLinkRefresh),
     },
 ];
 
@@ -3442,32 +3472,34 @@ mod tests {
     }
 
     #[test]
-    fn file_admin_subtree_is_navigable_with_unimplemented_leaves() {
+    fn file_admin_leaves_resolve_to_typed_actions() {
         let admin = resolve(&['F', 'A']).unwrap();
         assert_eq!(admin.name, "Admin");
         assert!(matches!(admin.body, MenuBody::Submenu(_)));
 
-        let leaf_paths: &[&[char]] = &[
-            &['F', 'A', 'R', 'G'], // Reservation Get
-            &['F', 'A', 'R', 'R'], // Reservation Release
-            &['F', 'A', 'S', 'F'], // Seal File
-            &['F', 'A', 'S', 'R'], // Seal Reservation-Setting
-            &['F', 'A', 'S', 'D'], // Seal Disable
-            &['F', 'A', 'T', 'W'], // Table Worksheet
-            &['F', 'A', 'T', 'P'], // Table Print
-            &['F', 'A', 'T', 'G'], // Table Graph
-            &['F', 'A', 'T', 'O'], // Table Other
-            &['F', 'A', 'T', 'A'], // Table Active
-            &['F', 'A', 'T', 'L'], // Table Linked
-            &['F', 'A', 'L'],      // Link-Refresh
+        let cases: &[(&[char], Action)] = &[
+            (&['F', 'A', 'R', 'G'], Action::FileAdminReservationGet),
+            (&['F', 'A', 'R', 'R'], Action::FileAdminReservationRelease),
+            (&['F', 'A', 'S', 'F'], Action::FileAdminSealFile),
+            (
+                &['F', 'A', 'S', 'R'],
+                Action::FileAdminSealReservationSetting,
+            ),
+            (&['F', 'A', 'S', 'D'], Action::FileAdminSealDisable),
+            (&['F', 'A', 'T', 'W'], Action::FileAdminTableWorksheet),
+            (&['F', 'A', 'T', 'P'], Action::FileAdminTablePrint),
+            (&['F', 'A', 'T', 'G'], Action::FileAdminTableGraph),
+            (&['F', 'A', 'T', 'O'], Action::FileAdminTableOther),
+            (&['F', 'A', 'T', 'A'], Action::FileAdminTableActive),
+            (&['F', 'A', 'T', 'L'], Action::FileAdminTableLinked),
+            (&['F', 'A', 'L'], Action::FileAdminLinkRefresh),
         ];
-        for path in leaf_paths {
+        for (path, expected) in cases {
             let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
-            assert!(
-                matches!(node.body, MenuBody::NotImplemented(_)),
-                "{path:?} should be NotImplemented, got {:?}",
-                node.body
-            );
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
         }
     }
 }

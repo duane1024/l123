@@ -1,0 +1,53 @@
+# /File Erase Worksheet — delete a worksheet file from disk after a
+# No/Yes confirmation submenu (mirrors /Worksheet Erase's confirm).
+#
+# 1) Save a workbook so a real file exists.
+# 2) /FEW with No on the confirm leaves it on disk.
+# 3) /FEW with Yes deletes it.
+
+RM_FILE $TMPDIR/m4_file_erase.xlsx
+
+# --- seed: write a value and save ---
+KEYS 7
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m4_file_erase.xlsx
+ENTER
+ASSERT_MODE     READY
+ASSERT_FILE_BYTES_CONTAIN $TMPDIR/m4_file_erase.xlsx  xl/
+
+# --- /FEW prompts for filename, then No on the confirm ---
+KEY /
+KEY F
+KEY E
+ASSERT_MODE     MENU
+ASSERT_PANEL_L2 Worksheet
+ASSERT_PANEL_L2 Print
+ASSERT_PANEL_L2 Graph
+ASSERT_PANEL_L2 Other
+
+KEY W
+ASSERT_MODE     MENU
+ASSERT_PANEL_L3 Enter file to erase
+KEYS $TMPDIR/m4_file_erase.xlsx
+ENTER
+
+# Confirm submenu visible — No / Yes.
+ASSERT_PANEL_L2 No
+ASSERT_PANEL_L2 Yes
+KEY N
+ASSERT_MODE     READY
+ASSERT_FILE_BYTES_CONTAIN $TMPDIR/m4_file_erase.xlsx  xl/
+
+# --- /FEW again, this time Yes — file should be gone ---
+KEY /
+KEY F
+KEY E
+KEY W
+KEYS $TMPDIR/m4_file_erase.xlsx
+ENTER
+KEY Y
+ASSERT_MODE     READY
+ASSERT_FILE_NOT_EXISTS $TMPDIR/m4_file_erase.xlsx
