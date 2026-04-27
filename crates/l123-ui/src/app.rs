@@ -373,6 +373,35 @@ impl ClockDisplay {
     }
 }
 
+/// `:Display Mode` — picks the default style for cells with no
+/// xlsx-imported fill or font color. Cells that *do* carry a fill or
+/// font color always paint that color regardless of mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// Today's behavior — no default fg/bg, terminal defaults show
+    /// through. Closest analog to R3.4a B&W mode in a TUI.
+    #[default]
+    BW,
+    /// Paper look — white background, black text on otherwise-unstyled
+    /// cells. Matches R3.4a's default WYSIWYG appearance.
+    Color,
+    /// Inverse paper — black background, white text on otherwise-
+    /// unstyled cells.
+    Reverse,
+}
+
+fn display_mode_default_style(mode: DisplayMode) -> Style {
+    match mode {
+        DisplayMode::BW => Style::default(),
+        DisplayMode::Color => Style::default()
+            .bg(Color::Rgb(0xFF, 0xFF, 0xFF))
+            .fg(Color::Rgb(0x00, 0x00, 0x00)),
+        DisplayMode::Reverse => Style::default()
+            .bg(Color::Rgb(0x00, 0x00, 0x00))
+            .fg(Color::Rgb(0xFF, 0xFF, 0xFF)),
+    }
+}
+
 #[derive(Debug)]
 struct Entry {
     kind: EntryKind,
@@ -734,6 +763,16 @@ pub struct App {
     /// Persisted defaults set by `/Worksheet Global Default …` and
     /// written back to `L123.CNF` by `/Worksheet Global Default Update`.
     defaults: GlobalDefaults,
+    /// `:Display Mode` — empty-cell color fallback. Cells with an
+    /// xlsx-imported fill or font color paint that color regardless.
+    display_mode: DisplayMode,
+    /// `:Display Options Grid` — when true, paint a dim dashed glyph at each
+    /// cell's rightmost column whenever that position would otherwise
+    /// be a space. Best-effort vertical gridlines only — horizontals
+    /// would cost a whole terminal row per cell row, which halves the
+    /// visible row count. Defaults to off so every existing acceptance
+    /// transcript that snapshots cell content sees the same byte stream.
+    show_gridlines: bool,
     /// Which payload `Mode::Stat` is currently rendering — the standard
     /// `/Worksheet Status` panel or the `/Worksheet Global Default
     /// Status` defaults panel.
@@ -1831,6 +1870,8 @@ impl App {
             beep_count: 0,
             beep_pending: false,
             defaults: GlobalDefaults::default(),
+            display_mode: DisplayMode::default(),
+            show_gridlines: false,
             stat_view: StatView::Worksheet,
         }
     }
@@ -3527,6 +3568,26 @@ impl App {
                 },
                 set: false,
             }),
+            Action::DisplayModeColor => {
+                self.display_mode = DisplayMode::Color;
+                self.close_menu();
+            }
+            Action::DisplayModeBW => {
+                self.display_mode = DisplayMode::BW;
+                self.close_menu();
+            }
+            Action::DisplayModeReverse => {
+                self.display_mode = DisplayMode::Reverse;
+                self.close_menu();
+            }
+            Action::DisplayOptionsGridYes => {
+                self.show_gridlines = true;
+                self.close_menu();
+            }
+            Action::DisplayOptionsGridNo => {
+                self.show_gridlines = false;
+                self.close_menu();
+            }
             Action::RangeFormatText => self.begin_point(PendingCommand::RangeFormat {
                 format: Format {
                     kind: FormatKind::Text,
@@ -8995,7 +9056,7 @@ impl App {
                 let mut cell_style = if highlighted {
                     Style::default().add_modifier(Modifier::REVERSED)
                 } else {
-                    Style::default()
+                    display_mode_default_style(self.display_mode)
                 };
                 // xlsx-imported background fill paints behind the cell
                 // contents.  Skip on the pointer highlight so the
@@ -9038,6 +9099,24 @@ impl App {
                 while printed < w {
                     buf[(x + printed, y)].set_char(' ').set_style(cell_style);
                     printed += 1;
+                }
+                // `:Display Options Grid Yes` — paint a dim dashed glyph at the
+                // cell's rightmost column when that position would
+                // otherwise be a space. Real R3.4a draws magenta lines
+                // in the inter-glyph pixels; we don't have sub-character
+                // precision and we're rendering text not graphics, so a
+                // plain DarkGray reads as a subtle separator on every
+                // terminal theme without competing with cell content.
+                // Skip on highlighted cells so the REVERSED selection
+                // stays loud, and skip when the cell content reached
+                // the edge (don't overwrite data).
+                if self.show_gridlines && !highlighted && w > 0 {
+                    let gx = x + w - 1;
+                    if buf[(gx, y)].symbol() == " " {
+                        let mut g_style = cell_style;
+                        g_style = g_style.fg(Color::DarkGray);
+                        buf[(gx, y)].set_char('┊').set_style(g_style);
+                    }
                 }
             }
 
@@ -11032,6 +11111,90 @@ mod tests {
         drive_chord(&mut app, &['/', 'W', 'C', 'H']);
         enter(&mut app);
         assert!(app.is_dirty(), "/WCH should mark dirty");
+    }
+
+    #[test]
+    fn wysiwyg_display_mode_color_paints_white_bg_on_empty_cell() {
+        let mut app = App::new();
+        drive_chord(&mut app, &[':', 'D', 'M', 'C']);
+        assert_eq!(app.mode, Mode::Ready);
+        let buf = app.render_to_buffer(80, 25);
+        assert_eq!(app.cell_bg_rendered(&buf, "A:B5"), Some((0xFF, 0xFF, 0xFF)));
+        assert_eq!(app.cell_fg_rendered(&buf, "A:B5"), Some((0x00, 0x00, 0x00)));
+    }
+
+    #[test]
+    fn wysiwyg_display_mode_reverse_paints_black_bg() {
+        let mut app = App::new();
+        drive_chord(&mut app, &[':', 'D', 'M', 'R']);
+        let buf = app.render_to_buffer(80, 25);
+        assert_eq!(app.cell_bg_rendered(&buf, "A:B5"), Some((0x00, 0x00, 0x00)));
+        assert_eq!(app.cell_fg_rendered(&buf, "A:B5"), Some((0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn wysiwyg_display_mode_bw_leaves_terminal_default() {
+        let mut app = App::new();
+        // Switch to Color, then back to B&W — B&W should clear the
+        // RGB BG so the terminal default shows through (read-back
+        // returns None for non-RGB cells).
+        drive_chord(&mut app, &[':', 'D', 'M', 'C']);
+        drive_chord(&mut app, &[':', 'D', 'M', 'B']);
+        let buf = app.render_to_buffer(80, 25);
+        assert_eq!(app.cell_bg_rendered(&buf, "A:B5"), None);
+        assert_eq!(app.cell_fg_rendered(&buf, "A:B5"), None);
+    }
+
+    #[test]
+    fn wysiwyg_display_grid_yes_paints_dotted_right_edges() {
+        let mut app = App::new();
+        // Default off — no gridline glyphs anywhere.
+        let buf = app.render_to_buffer(80, 25);
+        let body_row = App::line_text(&buf, PANEL_HEIGHT + 1);
+        assert!(
+            !body_row.contains('┊'),
+            "default body row should not contain gridline dots: {body_row:?}"
+        );
+
+        // :DOGY turns gridlines on — the rightmost column of each
+        // 9-char-wide empty cell becomes `┊`.
+        drive_chord(&mut app, &[':', 'D', 'O', 'G', 'Y']);
+        let buf = app.render_to_buffer(80, 25);
+        // A body row past the pointer cell so no REVERSED highlight
+        // suppresses the overlay.
+        let body_row = App::line_text(&buf, PANEL_HEIGHT + 2);
+        assert!(
+            body_row.matches('┊').count() >= 4,
+            "expected dotted gridline at each cell right edge: {body_row:?}"
+        );
+
+        // :DOGN turns them back off.
+        drive_chord(&mut app, &[':', 'D', 'O', 'G', 'N']);
+        let buf = app.render_to_buffer(80, 25);
+        let body_row = App::line_text(&buf, PANEL_HEIGHT + 2);
+        assert!(
+            !body_row.contains('┊'),
+            "grid=No should suppress gridline dots: {body_row:?}"
+        );
+    }
+
+    #[test]
+    fn wysiwyg_display_grid_skips_cells_with_full_width_content() {
+        let mut app = App::new();
+        // Type a 9-char value that fills the default column width
+        // exactly. With gridlines on, the right-edge `┊` would
+        // overwrite the last digit — verify we skip the overlay.
+        drive_chord(&mut app, &['9', '8', '7', '6', '5', '4', '3', '2', '1']);
+        enter(&mut app);
+        drive_chord(&mut app, &[':', 'D', 'O', 'G', 'Y']);
+        let buf = app.render_to_buffer(80, 25);
+        // Move the pointer off A1 so the highlight doesn't suppress
+        // anything for an unrelated reason; assert by reading the
+        // actual cell content.
+        let painted = (0..9)
+            .map(|i| buf[(ROW_GUTTER + i, PANEL_HEIGHT + 1)].symbol().to_string())
+            .collect::<String>();
+        assert_eq!(painted, "987654321", "filled cell must not be clipped");
     }
 
     #[test]

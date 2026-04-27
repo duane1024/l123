@@ -293,9 +293,52 @@ way as `/` — first letter descends without Enter.
   W          F       G      N            P      D        S        T     Q
 ```
 
-All top-level items display the muscle-memory path.  Only `:Format`
-has live leaves today; every other top-level descends into
-"Not implemented yet".
+All top-level items display the muscle-memory path.  `:Worksheet
+Column-Width`, `:Format`, and `:Display Mode` / `:Display Options
+Grid` have live leaves today; the rest descend into "Not implemented
+yet".
+
+### :Worksheet  (W)
+
+```
+Column-Width  Row  Page  Quit
+C             R    P     Q
+```
+
+- **Column-Width** → Set | Reset   **[MVP]** — aliased onto the
+  `/Worksheet Column Set-Width` and `Reset-Width` plumbing; the same
+  per-column width state drives the `[Wn]` tag on control-panel line 1.
+- **Row**   **[STR]**
+- **Page**   **[STR]**
+- **Quit** — return to READY
+
+### :Display  (D)
+
+```
+Mode  Options  Zoom  Colors  Rows  Font-Directory  Default  Quit
+M     O        Z     C       R     F               D        Q
+```
+
+- **Mode** → Color | B&W | Reverse | Quit   **[MVP]**
+  - **Color** — paper look: white background + black text on cells
+    without an xlsx-imported fill or font color.
+  - **B&W** — terminal default; no RGB written to unstyled cells
+    (today's default behavior).
+  - **Reverse** — inverse paper: black background + white text on
+    unstyled cells.
+- **Options** → Grid | Frame | Page-Breaks | Cell-Pointer | Quit
+  - **Grid** → Yes | No   **[MVP]** — best-effort vertical gridlines:
+    paints a dim `┊` at each cell's rightmost column when that
+    position would otherwise be a space. Real R3.4a draws gridlines in
+    the inter-glyph pixels (sub-character precision we don't have);
+    horizontal gridlines would cost a whole terminal row per data row,
+    halving visible row count, so we skip them.
+  - **Frame**, **Page-Breaks**, **Cell-Pointer**   **[STR]**
+- **Zoom**, **Colors**, **Rows**, **Font-Directory**, **Default**   **[STR]**
+- **Quit** — return to READY
+
+`:Display Mode` and `:Display Options Grid` are session-level — they
+do not persist across runs and are not written to xlsx.
 
 ### :Format  (F)
 

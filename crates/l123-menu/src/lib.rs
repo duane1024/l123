@@ -422,6 +422,16 @@ pub enum Action {
     FormatUnderlineClear,
     /// `:Format Reset` — clear bold + italic + underline on a range.
     FormatReset,
+    /// `:Display Mode Color` — paper-look default cell background.
+    DisplayModeColor,
+    /// `:Display Mode B&W` — strip default cell color (terminal default).
+    DisplayModeBW,
+    /// `:Display Mode Reverse` — invert default cell colors.
+    DisplayModeReverse,
+    /// `:Display Options Grid Yes` — show row/column gutter.
+    DisplayOptionsGridYes,
+    /// `:Display Options Grid No` — hide row/column gutter.
+    DisplayOptionsGridNo,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -2757,13 +2767,187 @@ const WYSIWYG_FORMAT_MENU: &[MenuItem] = &[
     },
 ];
 
+const WYSIWYG_WORKSHEET_COLUMN_WIDTH_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'S',
+        name: "Set",
+        help: "Set the width of the current column",
+        body: MenuBody::Action(Action::WorksheetColumnSetWidth),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Reset column width to the global default",
+        body: MenuBody::Action(Action::WorksheetColumnResetWidth),
+    },
+];
+
+const WYSIWYG_WORKSHEET_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Column-Width",
+        help: "Set or reset the current column's width",
+        body: MenuBody::Submenu(WYSIWYG_WORKSHEET_COLUMN_WIDTH_MENU),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Row",
+        help: "Set or auto-fit row height",
+        body: MenuBody::NotImplemented("wysiwyg-worksheet-row"),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Page",
+        help: "Insert or remove manual page breaks",
+        body: MenuBody::NotImplemented("wysiwyg-worksheet-page"),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
+const WYSIWYG_DISPLAY_MODE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Color",
+        help: "Default to white worksheet background, black text",
+        body: MenuBody::Action(Action::DisplayModeColor),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "B&W",
+        help: "Strip default cell color (terminal default)",
+        body: MenuBody::Action(Action::DisplayModeBW),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reverse",
+        help: "Invert default cell colors",
+        body: MenuBody::Action(Action::DisplayModeReverse),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
+const WYSIWYG_DISPLAY_OPTIONS_GRID_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'Y',
+        name: "Yes",
+        help: "Show the row/column gutter",
+        body: MenuBody::Action(Action::DisplayOptionsGridYes),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "No",
+        help: "Hide the row/column gutter",
+        body: MenuBody::Action(Action::DisplayOptionsGridNo),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
+const WYSIWYG_DISPLAY_OPTIONS_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'G',
+        name: "Grid",
+        help: "Show or hide the row/column gutter",
+        body: MenuBody::Submenu(WYSIWYG_DISPLAY_OPTIONS_GRID_MENU),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Frame",
+        help: "Frame style",
+        body: MenuBody::NotImplemented("wysiwyg-display-options-frame"),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Page-Breaks",
+        help: "Show or hide page break markers",
+        body: MenuBody::NotImplemented("wysiwyg-display-options-page-breaks"),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Cell-Pointer",
+        help: "Cell pointer style",
+        body: MenuBody::NotImplemented("wysiwyg-display-options-cell-pointer"),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
+const WYSIWYG_DISPLAY_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'M',
+        name: "Mode",
+        help: "Color, B&W, or Reverse default cell colors",
+        body: MenuBody::Submenu(WYSIWYG_DISPLAY_MODE_MENU),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Options",
+        help: "Grid, frame, page break, cell pointer options",
+        body: MenuBody::Submenu(WYSIWYG_DISPLAY_OPTIONS_MENU),
+    },
+    MenuItem {
+        letter: 'Z',
+        name: "Zoom",
+        help: "Zoom level",
+        body: MenuBody::NotImplemented("wysiwyg-display-zoom"),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Colors",
+        help: "Display palette tweaks",
+        body: MenuBody::NotImplemented("wysiwyg-display-colors"),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Rows",
+        help: "Visible row count",
+        body: MenuBody::NotImplemented("wysiwyg-display-rows"),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Font-Directory",
+        help: "Set or reset font directory",
+        body: MenuBody::NotImplemented("wysiwyg-display-font-directory"),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Default",
+        help: "Update or restore default settings",
+        body: MenuBody::NotImplemented("wysiwyg-display-default"),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
 /// Top-level WYSIWYG colon-menu.  Entered by pressing `:` in READY.
 pub const WYSIWYG_ROOT: &[MenuItem] = &[
     MenuItem {
         letter: 'W',
         name: "Worksheet",
         help: "WYSIWYG worksheet display settings",
-        body: MenuBody::NotImplemented("wysiwyg-worksheet"),
+        body: MenuBody::Submenu(WYSIWYG_WORKSHEET_MENU),
     },
     MenuItem {
         letter: 'F',
@@ -2793,7 +2977,7 @@ pub const WYSIWYG_ROOT: &[MenuItem] = &[
         letter: 'D',
         name: "Display",
         help: "Screen display settings",
-        body: MenuBody::NotImplemented("wysiwyg-display"),
+        body: MenuBody::Submenu(WYSIWYG_DISPLAY_MENU),
     },
     MenuItem {
         letter: 'S',
@@ -3408,6 +3592,87 @@ mod tests {
     fn wysiwyg_quit_maps_to_cancel() {
         let q = resolve_within(WYSIWYG_ROOT, &['Q']).unwrap();
         assert!(matches!(q.body, MenuBody::Action(Action::Cancel)));
+    }
+
+    #[test]
+    fn resolve_wysiwyg_worksheet_column_set_and_reset() {
+        let s = resolve_within(WYSIWYG_ROOT, &['W', 'C', 'S']).unwrap();
+        assert!(matches!(
+            s.body,
+            MenuBody::Action(Action::WorksheetColumnSetWidth)
+        ));
+        let r = resolve_within(WYSIWYG_ROOT, &['W', 'C', 'R']).unwrap();
+        assert!(matches!(
+            r.body,
+            MenuBody::Action(Action::WorksheetColumnResetWidth)
+        ));
+    }
+
+    #[test]
+    fn wysiwyg_worksheet_row_and_page_are_not_implemented() {
+        let row = resolve_within(WYSIWYG_ROOT, &['W', 'R']).unwrap();
+        assert!(matches!(row.body, MenuBody::NotImplemented(_)));
+        let page = resolve_within(WYSIWYG_ROOT, &['W', 'P']).unwrap();
+        assert!(matches!(page.body, MenuBody::NotImplemented(_)));
+    }
+
+    #[test]
+    fn wysiwyg_worksheet_quit_maps_to_cancel() {
+        let q = resolve_within(WYSIWYG_ROOT, &['W', 'Q']).unwrap();
+        assert!(matches!(q.body, MenuBody::Action(Action::Cancel)));
+    }
+
+    #[test]
+    fn resolve_wysiwyg_display_mode_actions() {
+        let c = resolve_within(WYSIWYG_ROOT, &['D', 'M', 'C']).unwrap();
+        assert!(matches!(c.body, MenuBody::Action(Action::DisplayModeColor)));
+        let b = resolve_within(WYSIWYG_ROOT, &['D', 'M', 'B']).unwrap();
+        assert!(matches!(b.body, MenuBody::Action(Action::DisplayModeBW)));
+        let r = resolve_within(WYSIWYG_ROOT, &['D', 'M', 'R']).unwrap();
+        assert!(matches!(
+            r.body,
+            MenuBody::Action(Action::DisplayModeReverse)
+        ));
+    }
+
+    #[test]
+    fn resolve_wysiwyg_display_options_grid_actions() {
+        let y = resolve_within(WYSIWYG_ROOT, &['D', 'O', 'G', 'Y']).unwrap();
+        assert!(matches!(
+            y.body,
+            MenuBody::Action(Action::DisplayOptionsGridYes)
+        ));
+        let n = resolve_within(WYSIWYG_ROOT, &['D', 'O', 'G', 'N']).unwrap();
+        assert!(matches!(
+            n.body,
+            MenuBody::Action(Action::DisplayOptionsGridNo)
+        ));
+    }
+
+    #[test]
+    fn wysiwyg_display_options_siblings_are_not_implemented() {
+        for (path, _label) in [
+            (&['D', 'O', 'F'][..], "frame"),
+            (&['D', 'O', 'P'][..], "page-breaks"),
+            (&['D', 'O', 'C'][..], "cell-pointer"),
+        ] {
+            let n = resolve_within(WYSIWYG_ROOT, path).unwrap();
+            assert!(matches!(n.body, MenuBody::NotImplemented(_)));
+        }
+    }
+
+    #[test]
+    fn wysiwyg_display_top_level_siblings_are_not_implemented() {
+        for path in [
+            &['D', 'Z'][..],
+            &['D', 'C'][..],
+            &['D', 'R'][..],
+            &['D', 'F'][..],
+            &['D', 'D'][..],
+        ] {
+            let n = resolve_within(WYSIWYG_ROOT, path).unwrap();
+            assert!(matches!(n.body, MenuBody::NotImplemented(_)));
+        }
     }
 
     #[test]

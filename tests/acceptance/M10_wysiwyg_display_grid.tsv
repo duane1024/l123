@@ -1,0 +1,26 @@
+# :Display Options Grid Yes/No — toggle worksheet gridlines. Real
+# R3.4a draws magenta dotted lines in the inter-glyph pixels, which a
+# TUI cannot reproduce; our best-effort approximation paints a dim `┊`
+# at each cell's rightmost column whenever that position would
+# otherwise be a space. Pixel-level behavior is covered by
+# app::tests::wysiwyg_display_grid_yes_paints_dotted_right_edges and
+# wysiwyg_display_grid_skips_cells_with_full_width_content; this
+# transcript exercises the keystroke flow.
+
+# :DOGY enables gridlines and returns to READY without a beep.
+KEY :
+KEY D
+KEY O
+KEY G
+KEY Y
+ASSERT_MODE       READY
+ASSERT_BEEP_COUNT 0
+
+# :DOGN turns them back off.
+KEY :
+KEY D
+KEY O
+KEY G
+KEY N
+ASSERT_MODE       READY
+ASSERT_BEEP_COUNT 0
