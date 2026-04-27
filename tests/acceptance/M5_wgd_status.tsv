@@ -1,0 +1,33 @@
+# /Worksheet Global Default Status — full-screen overlay listing every
+# persisted default. Mirrors /Worksheet Status (Mode::STAT) and
+# dismisses on any keypress.
+
+SIZE 80 30
+
+KEY /
+KEY W
+KEY G
+KEY D
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Printer
+ASSERT_PANEL_L2   Dir
+ASSERT_PANEL_L2   Status
+ASSERT_PANEL_L2   Update
+ASSERT_PANEL_L2   Autoexec
+ASSERT_PANEL_L2   Ext
+ASSERT_PANEL_L2   Graph
+ASSERT_PANEL_L2   Temp
+
+KEY S
+ASSERT_MODE       STAT
+ASSERT_SCREEN     Global Default Settings
+ASSERT_SCREEN     Interface:
+ASSERT_SCREEN     Margins:
+ASSERT_SCREEN     Pg-Length:
+ASSERT_SCREEN     Autoexec:
+ASSERT_SCREEN     Graph Grp:
+ASSERT_SCREEN     Graph Save:
+
+# Any key dismisses.
+ESC
+ASSERT_MODE       READY
