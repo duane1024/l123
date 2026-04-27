@@ -957,6 +957,14 @@ enum JournalEntry {
     GlobalInternational { prev: International },
     /// Restore the workbook-wide default label prefix.
     DefaultLabelPrefix { prev: LabelPrefix },
+    /// Restore one sheet's frozen-pane setting after `/Worksheet
+    /// Titles`. `None` = no freeze before the command ran.
+    Frozen {
+        sheet: SheetId,
+        prev: Option<(u32, u16)>,
+    },
+    /// Restore one sheet's visibility after `/Worksheet Hide`.
+    SheetVisibility { sheet: SheetId, prev: SheetState },
     /// Group of entries popped and applied together — used when
     /// GROUP propagated a single command to multiple sheets.
     Batch(Vec<JournalEntry>),
@@ -1101,6 +1109,16 @@ enum PromptNext {
     WgdPrinterPgLength,
     WgdPrinterSetup,
     WgdPrinterName,
+}
+
+/// `/Worksheet Titles` axis selector.  Both freezes the rows above
+/// and the columns left of the cell pointer; Horizontal freezes only
+/// the rows above; Vertical freezes only the columns left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TitlesKind {
+    Both,
+    Horizontal,
+    Vertical,
 }
 
 /// /File Xtract sub-command: does the extracted file keep formulas,
@@ -2763,6 +2781,21 @@ impl App {
             JournalEntry::DefaultLabelPrefix { prev } => {
                 self.default_label_prefix = prev;
             }
+            JournalEntry::Frozen { sheet, prev } => match prev {
+                Some(f) => {
+                    self.wb_mut().frozen.insert(sheet, f);
+                }
+                None => {
+                    self.wb_mut().frozen.remove(&sheet);
+                }
+            },
+            JournalEntry::SheetVisibility { sheet, prev } => {
+                if prev == SheetState::Visible {
+                    self.wb_mut().sheet_states.remove(&sheet);
+                } else {
+                    self.wb_mut().sheet_states.insert(sheet, prev);
+                }
+            }
             JournalEntry::Batch(entries) => {
                 // Apply in reverse order so the "outer" state restores
                 // after the "inner" details.
@@ -3198,6 +3231,13 @@ impl App {
             Action::WorksheetGlobalDefaultOtherIntlNegativeSign => {
                 self.set_negative_style(NegativeStyle::Sign)
             }
+            Action::WorksheetTitlesBoth => self.set_titles(TitlesKind::Both),
+            Action::WorksheetTitlesHorizontal => self.set_titles(TitlesKind::Horizontal),
+            Action::WorksheetTitlesVertical => self.set_titles(TitlesKind::Vertical),
+            Action::WorksheetTitlesClear => self.clear_titles(),
+            Action::WorksheetPage => self.insert_page_break_at_pointer(),
+            Action::WorksheetHideEnable => self.hide_current_sheet(),
+            Action::WorksheetHideDisable => self.unhide_all_sheets(),
             Action::WorksheetGlobalDefaultOtherClockStandard => {
                 self.clock_display = ClockDisplay::Standard;
                 self.close_menu();
@@ -3830,6 +3870,111 @@ impl App {
     /// workspace with a single blank workbook. Session-level prompts,
     /// menus, and modal overlays are also cleared so the user lands in
     /// a predictable READY state on A:A1.
+    fn set_titles(&mut self, kind: TitlesKind) {
+        let sheet = self.wb().pointer.sheet;
+        let row = self.wb().pointer.row;
+        let col = self.wb().pointer.col;
+        let new = match kind {
+            TitlesKind::Both => (row, col),
+            TitlesKind::Horizontal => (row, 0),
+            TitlesKind::Vertical => (0, col),
+        };
+        let prev = self.wb().frozen.get(&sheet).copied();
+        self.wb_mut().frozen.insert(sheet, new);
+        self.push_journal_batch(vec![JournalEntry::Frozen { sheet, prev }]);
+        self.close_menu();
+    }
+
+    fn clear_titles(&mut self) {
+        let sheet = self.wb().pointer.sheet;
+        let prev = self.wb().frozen.get(&sheet).copied();
+        if prev.is_some() {
+            self.wb_mut().frozen.remove(&sheet);
+            self.push_journal_batch(vec![JournalEntry::Frozen { sheet, prev }]);
+        }
+        self.close_menu();
+    }
+
+    fn insert_page_break_at_pointer(&mut self) {
+        let sheet = self.wb().pointer.sheet;
+        let at = self.wb().pointer.row;
+        self.menu = None;
+        let mut batch: Vec<JournalEntry> = Vec::new();
+        if self.wb_mut().engine.insert_rows(sheet, at, 1).is_ok() {
+            shift_cells_rows(&mut self.wb_mut().cells, sheet, at, 1);
+            batch.push(JournalEntry::RowInsert { sheet, at });
+        }
+        let marker = Address::new(sheet, 0, at);
+        let prev_contents = self.wb_mut().cells.remove(&marker);
+        let prev_format = self.wb_mut().cell_formats.remove(&marker);
+        let label = CellContents::Label {
+            prefix: LabelPrefix::Pipe,
+            text: "::".into(),
+        };
+        self.push_to_engine_at(marker, &label);
+        self.wb_mut().cells.insert(marker, label);
+        batch.push(JournalEntry::CellEdit {
+            addr: marker,
+            prev_contents,
+            prev_format,
+        });
+        self.push_journal_batch(batch);
+        self.mode = Mode::Ready;
+    }
+
+    fn hide_current_sheet(&mut self) {
+        let sheet = self.wb().pointer.sheet;
+        let count = self.wb().engine.sheet_count();
+        let visible_other = (0..count).any(|i| {
+            let sid = SheetId(i);
+            sid != sheet
+                && self
+                    .wb()
+                    .sheet_states
+                    .get(&sid)
+                    .copied()
+                    .unwrap_or(SheetState::Visible)
+                    .is_visible()
+        });
+        if !visible_other {
+            self.menu = None;
+            self.set_error("Cannot hide the only visible sheet");
+            return;
+        }
+        let prev = self
+            .wb()
+            .sheet_states
+            .get(&sheet)
+            .copied()
+            .unwrap_or(SheetState::Visible);
+        self.wb_mut().sheet_states.insert(sheet, SheetState::Hidden);
+        self.push_journal_batch(vec![JournalEntry::SheetVisibility { sheet, prev }]);
+        redirect_pointer_off_hidden(self.wb_mut());
+        self.close_menu();
+    }
+
+    fn unhide_all_sheets(&mut self) {
+        let count = self.wb().engine.sheet_count();
+        let mut batch: Vec<JournalEntry> = Vec::new();
+        for i in 0..count {
+            let sid = SheetId(i);
+            let prev = self
+                .wb()
+                .sheet_states
+                .get(&sid)
+                .copied()
+                .unwrap_or(SheetState::Visible);
+            if prev != SheetState::Visible {
+                self.wb_mut().sheet_states.remove(&sid);
+                batch.push(JournalEntry::SheetVisibility { sheet: sid, prev });
+            }
+        }
+        if !batch.is_empty() {
+            self.push_journal_batch(batch);
+        }
+        self.close_menu();
+    }
+
     fn execute_worksheet_erase(&mut self) {
         self.entry = None;
         self.menu = None;

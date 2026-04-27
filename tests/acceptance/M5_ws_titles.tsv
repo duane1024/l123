@@ -1,0 +1,119 @@
+# /Worksheet Titles — freeze rows above and/or columns left of the
+# cell pointer.  Both / Horizontal / Vertical / Clear branches.  The
+# renderer already consults `frozen[sheet]`; this exercises the menu
+# path that populates it.
+
+SIZE 80 25
+
+# Seed two row labels (A1, A2) and one column label (B1) so we can
+# assert what stays pinned after we scroll.
+KEYS Title1
+DOWN
+KEYS Title2
+DOWN
+ASSERT_POINTER   A:A3
+HOME
+RIGHT
+KEYS ColB
+ENTER
+HOME
+ASSERT_POINTER   A:A1
+
+# Move to A3 (row index 2) and freeze rows above with /WTH.
+DOWN
+DOWN
+ASSERT_POINTER   A:A3
+KEY /
+KEY W
+KEY T
+ASSERT_PANEL_L2  Both
+ASSERT_PANEL_L2  Horizontal
+ASSERT_PANEL_L2  Vertical
+ASSERT_PANEL_L2  Clear
+KEY H
+ASSERT_MODE      READY
+
+# Drive the pointer ~30 rows down to force vertical scroll.  The
+# frozen prefix (rows 0 and 1) must still render at the top.
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER   A:A33
+ASSERT_CELL      A:A1   Title1
+ASSERT_CELL      A:A2   Title2
+
+# Alt-F4 undoes the freeze; with no titles the row 1+2 labels scroll
+# off the top once the pointer is past them.
+ALT_F 4
+ASSERT_CELL_HIDDEN A:A1
+ASSERT_CELL_HIDDEN A:A2
+
+# Back to A1 and exercise /WTC on a sheet without titles — the
+# command is a quiet no-op (no journal entry, no error).
+HOME
+KEY /
+KEY W
+KEY T
+KEY C
+ASSERT_MODE      READY
+
+# /WTV at C1 freezes columns A and B left of the pointer.  Scroll
+# right and assert column A keeps painting Title1.
+RIGHT
+RIGHT
+ASSERT_POINTER   A:C1
+KEY /
+KEY W
+KEY T
+KEY V
+ASSERT_MODE      READY
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER   A:W1
+ASSERT_CELL      A:A1   Title1
+ASSERT_CELL      A:B1   ColB

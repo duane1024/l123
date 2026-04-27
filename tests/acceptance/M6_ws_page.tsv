@@ -1,0 +1,53 @@
+# /Worksheet Page — insert a manual page break at the cell pointer.
+# Implemented as a row insert with the literal `|::` label in column
+# A: the print engine recognizes it as a section boundary, dropping
+# the marker row from output and starting the next row on a new page.
+
+RM_FILE $TMPDIR/m6_ws_page.prn
+SIZE 80 25
+
+# A1=Top1, A2=Top2, A3=Bot1.  DOWN commits the entry and advances.
+KEYS Top1
+DOWN
+KEYS Top2
+DOWN
+KEYS Bot1
+DOWN
+HOME
+DOWN
+DOWN
+ASSERT_POINTER   A:A3
+ASSERT_CELL      A:A3   Bot1
+
+# /WP inserts a row above Bot1 with `|::` in column A; Bot1 shifts
+# down to A4.  The marker itself is non-printing.
+KEY /
+KEY W
+KEY P
+ASSERT_MODE      READY
+ASSERT_CELL      A:A4   Bot1
+
+# /WP left the pointer on the marker row (A3) — anchor at A1 before
+# entering the print range.  Default pg_length is 0 (no chunking
+# inside a section), so the only page boundary is the manual break.
+HOME
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_ws_page.prn
+ENTER
+KEY R
+DOWN
+DOWN
+DOWN
+ENTER
+KEY G
+KEY Q
+ASSERT_MODE      READY
+
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_ws_page.prn  Top1
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_ws_page.prn  Top2
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_ws_page.prn  Bot1
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_ws_page.prn  ::
+# Form feed between the two sections — manual break honored.
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_ws_page.prn  Top2\n\fBot1

@@ -92,6 +92,28 @@ pub enum Action {
     WorksheetGlobalProtectionDisable,
     WorksheetGlobalGroupEnable,
     WorksheetGlobalGroupDisable,
+    /// `/Worksheet Titles Both` — freeze rows above and columns left of
+    /// the cell pointer.
+    WorksheetTitlesBoth,
+    /// `/Worksheet Titles Horizontal` — freeze the rows above the cell
+    /// pointer.
+    WorksheetTitlesHorizontal,
+    /// `/Worksheet Titles Vertical` — freeze the columns left of the
+    /// cell pointer.
+    WorksheetTitlesVertical,
+    /// `/Worksheet Titles Clear` — remove any frozen-pane setting on
+    /// the current sheet.
+    WorksheetTitlesClear,
+    /// `/Worksheet Page` — insert a row at the pointer with `|::` in
+    /// column A, marking a manual page break for the print engine.
+    WorksheetPage,
+    /// `/Worksheet Hide Enable` — hide the current worksheet so it
+    /// disappears from `Ctrl-PgUp/PgDn` navigation. Refuses if the
+    /// current sheet is the only visible one.
+    WorksheetHideEnable,
+    /// `/Worksheet Hide Disable` — unhide every hidden sheet on the
+    /// current workbook.
+    WorksheetHideDisable,
     WorksheetGlobalDefaultOtherUndoEnable,
     WorksheetGlobalDefaultOtherUndoDisable,
     /// `/Worksheet Global Default Other Beep Enable` — turn on the
@@ -1233,6 +1255,48 @@ const WS_GLOBAL_MENU: &[MenuItem] = &[
     },
 ];
 
+const WS_TITLES_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Both",
+        help: "Freeze rows above and columns left of the cell pointer",
+        body: MenuBody::Action(Action::WorksheetTitlesBoth),
+    },
+    MenuItem {
+        letter: 'H',
+        name: "Horizontal",
+        help: "Freeze the rows above the cell pointer",
+        body: MenuBody::Action(Action::WorksheetTitlesHorizontal),
+    },
+    MenuItem {
+        letter: 'V',
+        name: "Vertical",
+        help: "Freeze the columns left of the cell pointer",
+        body: MenuBody::Action(Action::WorksheetTitlesVertical),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Clear",
+        help: "Clear frozen titles on the current sheet",
+        body: MenuBody::Action(Action::WorksheetTitlesClear),
+    },
+];
+
+const WS_HIDE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Enable",
+        help: "Hide the current worksheet",
+        body: MenuBody::Action(Action::WorksheetHideEnable),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Disable",
+        help: "Redisplay every hidden worksheet",
+        body: MenuBody::Action(Action::WorksheetHideDisable),
+    },
+];
+
 const WORKSHEET_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'G',
@@ -1268,7 +1332,7 @@ const WORKSHEET_MENU: &[MenuItem] = &[
         letter: 'T',
         name: "Titles",
         help: "Freeze rows and/or columns as titles",
-        body: MenuBody::NotImplemented("ws-titles"),
+        body: MenuBody::Submenu(WS_TITLES_MENU),
     },
     MenuItem {
         letter: 'W',
@@ -1285,14 +1349,14 @@ const WORKSHEET_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'P',
         name: "Page",
-        help: "Insert a page break",
-        body: MenuBody::NotImplemented("ws-page"),
+        help: "Insert a manual page break at the cell pointer",
+        body: MenuBody::Action(Action::WorksheetPage),
     },
     MenuItem {
         letter: 'H',
         name: "Hide",
         help: "Hide/show entire sheets",
-        body: MenuBody::NotImplemented("ws-hide"),
+        body: MenuBody::Submenu(WS_HIDE_MENU),
     },
     MenuItem {
         letter: 'L',
@@ -3224,6 +3288,43 @@ mod tests {
                 other => panic!("expected Action for {path:?}, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn resolve_worksheet_titles_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (&['W', 'T', 'B'], Action::WorksheetTitlesBoth),
+            (&['W', 'T', 'H'], Action::WorksheetTitlesHorizontal),
+            (&['W', 'T', 'V'], Action::WorksheetTitlesVertical),
+            (&['W', 'T', 'C'], Action::WorksheetTitlesClear),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_worksheet_page() {
+        let node = resolve(&['W', 'P']).unwrap();
+        assert!(matches!(node.body, MenuBody::Action(Action::WorksheetPage)));
+    }
+
+    #[test]
+    fn resolve_worksheet_hide_enable_and_disable() {
+        let e = resolve(&['W', 'H', 'E']).unwrap();
+        assert!(matches!(
+            e.body,
+            MenuBody::Action(Action::WorksheetHideEnable)
+        ));
+        let d = resolve(&['W', 'H', 'D']).unwrap();
+        assert!(matches!(
+            d.body,
+            MenuBody::Action(Action::WorksheetHideDisable)
+        ));
     }
 
     #[test]

@@ -37,17 +37,22 @@ pub fn render<V: WorkbookView + ?Sized>(
     let content_mode = settings.content_mode;
     let left_pad: String = " ".repeat(settings.margin_left as usize);
 
-    // Collect content rows (after pipe-row suppression, content-mode
-    // rendering, and right-margin truncation). Each entry already has
-    // `left_pad` prepended and a trailing `\n`.
-    let mut rows: Vec<String> = Vec::new();
+    // Collect content rows into sections — `|::` in column A marks a
+    // manual page break (`/Worksheet Page` inserts that label), so each
+    // such row closes the current section and opens a new one.  Other
+    // pipe-prefix rows still suppress output without breaking pages.
+    // Each entry has `left_pad` prepended and a trailing `\n`.
+    let mut sections: Vec<Vec<String>> = vec![Vec::new()];
     for row in r.start.row..=r.end.row {
         let first = Address::new(r.start.sheet, r.start.col, row);
         if let Some(CellContents::Label {
             prefix: LabelPrefix::Pipe,
-            ..
+            text,
         }) = view.cell(first)
         {
+            if text.starts_with("::") {
+                sections.push(Vec::new());
+            }
             continue;
         }
         let mut line = String::new();
@@ -88,20 +93,33 @@ pub fn render<V: WorkbookView + ?Sized>(
         entry.push_str(&left_pad);
         entry.push_str(&trimmed);
         entry.push('\n');
-        rows.push(entry);
+        sections.last_mut().unwrap().push(entry);
+    }
+    // Trailing `|::` shouldn't yield a blank page on its own.
+    while sections.len() > 1 && sections.last().is_some_and(Vec::is_empty) {
+        sections.pop();
     }
 
-    // Chunk into pages. pg_length == 0 means no pagination — one
-    // page with every row.
-    let per_page = if settings.pg_length == 0 {
-        rows.len().max(1)
-    } else {
-        settings.pg_length as usize
-    };
-    let chunked: Vec<Vec<String>> = if rows.is_empty() {
+    // Chunk each section into pages. pg_length == 0 means no
+    // pagination within a section. Sections still split into separate
+    // pages, since a manual break is itself a page boundary.
+    let chunked: Vec<Vec<String>> = if sections.iter().all(Vec::is_empty) {
         vec![Vec::new()]
     } else {
-        rows.chunks(per_page).map(<[String]>::to_vec).collect()
+        let mut out: Vec<Vec<String>> = Vec::new();
+        for section in sections {
+            if section.is_empty() {
+                out.push(Vec::new());
+                continue;
+            }
+            let per_page = if settings.pg_length == 0 {
+                section.len()
+            } else {
+                settings.pg_length as usize
+            };
+            out.extend(section.chunks(per_page).map(<[String]>::to_vec));
+        }
+        out
     };
 
     let today = today_ddmmmyy();
