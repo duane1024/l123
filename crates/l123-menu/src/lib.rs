@@ -1772,7 +1772,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'A',
         name: "Admin",
         help: "Reservation, seal, link-refresh",
-        body: MenuBody::NotImplemented("f-admin"),
+        body: MenuBody::Submenu(FILE_ADMIN_MENU),
     },
 ];
 
