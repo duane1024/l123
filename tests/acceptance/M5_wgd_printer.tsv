@@ -1,0 +1,104 @@
+# /WGD Printer — full submenu: Interface, AutoLf, four margins,
+# Pg-Length, Wait, Setup, Name, Quit.
+
+SIZE 80 30
+
+# Top-level Printer submenu visible.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY P
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Interface
+ASSERT_PANEL_L2   AutoLf
+ASSERT_PANEL_L2   Left
+ASSERT_PANEL_L2   Right
+ASSERT_PANEL_L2   Top
+ASSERT_PANEL_L2   Bottom
+ASSERT_PANEL_L2   Pg-Length
+ASSERT_PANEL_L2   Wait
+ASSERT_PANEL_L2   Setup
+ASSERT_PANEL_L2   Name
+ASSERT_PANEL_L2   Quit
+
+# Interface — numeric prompt clamped to 1..9.
+KEY I
+ASSERT_PANEL_L3   printer interface
+KEY 3
+ENTER
+ASSERT_MODE       READY
+
+# AutoLf → Yes (toggle).
+KEY /
+KEY W
+KEY G
+KEY D
+KEY P
+KEY A
+ASSERT_PANEL_L2   Yes
+ASSERT_PANEL_L2   No
+KEY Y
+ASSERT_MODE       READY
+
+# Left margin — numeric.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY P
+KEY L
+ASSERT_PANEL_L3   left margin
+KEY 8
+ENTER
+ASSERT_MODE       READY
+
+# Pg-Length.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY P
+KEY P
+ASSERT_PANEL_L3   page length
+KEYS 88
+ENTER
+ASSERT_MODE       READY
+
+# Wait → Yes.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY P
+KEY W
+ASSERT_PANEL_L2   Yes
+ASSERT_PANEL_L2   No
+KEY Y
+ASSERT_MODE       READY
+
+# Name (printer queue).
+KEY /
+KEY W
+KEY G
+KEY D
+KEY P
+KEY N
+ASSERT_PANEL_L3   printer name
+KEYS HP-Office
+ENTER
+ASSERT_MODE       READY
+
+# /WGD Status surfaces every choice.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY S
+ASSERT_SCREEN     Interface: 3
+ASSERT_SCREEN     AutoLf:    Yes
+ASSERT_SCREEN     Pg-Length: 88
+ASSERT_SCREEN     Wait:      Yes
+ASSERT_SCREEN     HP-Office
+ESC
+ASSERT_MODE       READY

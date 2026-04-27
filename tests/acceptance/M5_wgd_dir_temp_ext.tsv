@@ -1,0 +1,67 @@
+# /WGD Dir, /WGD Temp, /WGD Ext Save|List — prompt-driven path settings
+# stored on the in-memory defaults; visible in /WGD Status.
+
+SIZE 80 30
+
+# /WGD Dir — type a path, then commit.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY D
+ASSERT_PANEL_L3   default directory
+KEYS /tmp/sheets
+ENTER
+ASSERT_MODE       READY
+
+# /WGD Temp — second path-style prompt.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY T
+ASSERT_PANEL_L3   temporary file directory
+KEYS /tmp/scratch
+ENTER
+ASSERT_MODE       READY
+
+# /WGD Ext Save — leading dot is stripped; default seeded value
+# (xlsx) replaced by typed text.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY E
+ASSERT_PANEL_L2   Save
+ASSERT_PANEL_L2   List
+KEY S
+ASSERT_PANEL_L3   default save extension
+KEYS wk3
+ENTER
+ASSERT_MODE       READY
+
+# /WGD Ext List — separate value from Save.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY E
+KEY L
+ASSERT_PANEL_L3   default file-list extension
+KEYS xlsx
+ENTER
+ASSERT_MODE       READY
+
+# /WGD Status reflects all four prompts.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY S
+ASSERT_MODE       STAT
+ASSERT_SCREEN     /tmp/sheets
+ASSERT_SCREEN     /tmp/scratch
+ASSERT_SCREEN     wk3
+ASSERT_SCREEN     xlsx
+ESC
+ASSERT_MODE       READY
