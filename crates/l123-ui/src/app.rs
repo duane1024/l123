@@ -2718,6 +2718,8 @@ impl App {
             Action::WorksheetInsertSheetAfter => self.insert_sheet_after_current(),
             Action::WorksheetDeleteRow => self.delete_row_at_pointer(1),
             Action::WorksheetDeleteColumn => self.delete_col_at_pointer(1),
+            Action::WorksheetDeleteSheet => self.delete_sheet_at_pointer(),
+            Action::WorksheetDeleteFile => self.delete_current_file(),
             Action::WorksheetGlobalRecalcAutomatic => {
                 self.recalc_mode = RecalcMode::Automatic;
                 // Switching into Automatic catches up on any pending work.
@@ -4409,6 +4411,55 @@ impl App {
             );
             wb.engine.recalc();
             self.refresh_formula_caches();
+        }
+        self.close_menu();
+    }
+
+    /// /Worksheet Delete Sheet: drop the worksheet at the pointer.
+    /// Sheets after it shift back one slot; the pointer stays at the
+    /// same column/row on whatever sheet now occupies that slot
+    /// (clamped to the last surviving sheet). The engine refuses to
+    /// delete the only remaining sheet — that's silently a no-op
+    /// here, leaving the workbook intact.
+    fn delete_sheet_at_pointer(&mut self) {
+        let at = self.wb().pointer.sheet.0;
+        let (col, row) = (self.wb().pointer.col, self.wb().pointer.row);
+        let wb = self.wb_mut();
+        if wb.engine.delete_sheet_at(at).is_ok() {
+            drop_sheet_from_caches(
+                &mut wb.cells,
+                &mut wb.cell_formats,
+                &mut wb.cell_text_styles,
+                &mut wb.col_widths,
+                at,
+            );
+            let new_count = wb.engine.sheet_count();
+            let new_sheet = if new_count == 0 {
+                0
+            } else {
+                at.min(new_count - 1)
+            };
+            wb.pointer = Address::new(SheetId(new_sheet), col, row);
+            wb.engine.recalc();
+            self.refresh_formula_caches();
+        }
+        self.close_menu();
+    }
+
+    /// /Worksheet Delete File: drop the foreground active file from
+    /// memory. When more than one file is open, the previous file
+    /// (or the first, if we were already on the first) takes focus.
+    /// Deleting the only remaining active file resets the workspace
+    /// to a single blank workbook — same end-state as
+    /// `/Worksheet Erase Yes`.
+    fn delete_current_file(&mut self) {
+        if self.active_files.len() <= 1 {
+            self.execute_worksheet_erase();
+            return;
+        }
+        self.active_files.remove(self.current);
+        if self.current >= self.active_files.len() {
+            self.current = self.active_files.len() - 1;
         }
         self.close_menu();
     }
@@ -7779,6 +7830,66 @@ fn shift_cells_rows(
         let new_row = (addr.row as i64 + delta).max(0) as u32;
         let new_addr = Address::new(addr.sheet, addr.col, new_row);
         cells.insert(new_addr, contents);
+    }
+}
+
+/// After deleting the sheet at index `at`, drop every cache entry on
+/// that sheet and shift entries on later sheets back by one slot. The
+/// inverse of [`shift_sheets_from`]; covers the same caches.
+fn drop_sheet_from_caches(
+    cells: &mut HashMap<Address, CellContents>,
+    cell_formats: &mut HashMap<Address, Format>,
+    cell_text_styles: &mut HashMap<Address, TextStyle>,
+    col_widths: &mut HashMap<(SheetId, u16), u8>,
+    at: u16,
+) {
+    cells.retain(|a, _| a.sheet.0 != at);
+    cell_formats.retain(|a, _| a.sheet.0 != at);
+    cell_text_styles.retain(|a, _| a.sheet.0 != at);
+    col_widths.retain(|(s, _), _| s.0 != at);
+
+    let shift_addr = |a: Address| -> Address {
+        if a.sheet.0 > at {
+            Address::new(SheetId(a.sheet.0 - 1), a.col, a.row)
+        } else {
+            a
+        }
+    };
+    let mut affected: Vec<Address> = cells.keys().filter(|a| a.sheet.0 > at).copied().collect();
+    affected.sort_by_key(|a| a.sheet.0);
+    for addr in affected {
+        let contents = cells.remove(&addr).expect("present");
+        cells.insert(shift_addr(addr), contents);
+    }
+    let mut fmt_affected: Vec<Address> = cell_formats
+        .keys()
+        .filter(|a| a.sheet.0 > at)
+        .copied()
+        .collect();
+    fmt_affected.sort_by_key(|a| a.sheet.0);
+    for addr in fmt_affected {
+        let f = cell_formats.remove(&addr).expect("present");
+        cell_formats.insert(shift_addr(addr), f);
+    }
+    let mut style_affected: Vec<Address> = cell_text_styles
+        .keys()
+        .filter(|a| a.sheet.0 > at)
+        .copied()
+        .collect();
+    style_affected.sort_by_key(|a| a.sheet.0);
+    for addr in style_affected {
+        let s = cell_text_styles.remove(&addr).expect("present");
+        cell_text_styles.insert(shift_addr(addr), s);
+    }
+    let mut cw_affected: Vec<(SheetId, u16)> = col_widths
+        .keys()
+        .filter(|(s, _)| s.0 > at)
+        .copied()
+        .collect();
+    cw_affected.sort_by_key(|(s, _)| s.0);
+    for key in cw_affected {
+        let w = col_widths.remove(&key).expect("present");
+        col_widths.insert((SheetId(key.0 .0 - 1), key.1), w);
     }
 }
 
