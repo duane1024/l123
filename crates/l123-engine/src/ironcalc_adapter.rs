@@ -196,6 +196,18 @@ impl Engine for IronCalcEngine {
             .map_err(EngineError::Backend)
     }
 
+    fn delete_sheet_at(&mut self, at: u16) -> Result<()> {
+        let current = self.model.workbook.worksheets.len();
+        if at as usize >= current {
+            return Err(EngineError::BadAddress(format!(
+                "delete_sheet_at: index {at} >= current count {current}"
+            )));
+        }
+        self.model
+            .delete_sheet(at as u32)
+            .map_err(EngineError::Backend)
+    }
+
     fn sheet_count(&self) -> u16 {
         self.model.workbook.worksheets.len() as u16
     }
@@ -1375,6 +1387,38 @@ mod tests {
     fn insert_sheet_at_out_of_range_fails() {
         let mut e = IronCalcEngine::new().unwrap();
         assert!(e.insert_sheet_at(5).is_err());
+    }
+
+    #[test]
+    fn delete_sheet_at_drops_and_shifts() {
+        let mut e = IronCalcEngine::new().unwrap();
+        e.insert_sheet_at(1).unwrap();
+        e.set_user_input(Address::new(SheetId(1), 0, 0), "42")
+            .unwrap();
+        let to_keep = e.sheet_name(SheetId(1)).unwrap();
+        // Delete sheet 0; the second sheet (and its data) shifts to 0.
+        e.delete_sheet_at(0).unwrap();
+        assert_eq!(e.sheet_count(), 1);
+        assert_eq!(e.sheet_name(SheetId(0)).as_deref(), Some(to_keep.as_str()));
+        assert_eq!(
+            e.get_cell(Address::new(SheetId(0), 0, 0)).unwrap().value,
+            Value::Number(42.0)
+        );
+    }
+
+    #[test]
+    fn delete_sheet_at_refuses_last_sheet() {
+        let mut e = IronCalcEngine::new().unwrap();
+        assert_eq!(e.sheet_count(), 1);
+        assert!(e.delete_sheet_at(0).is_err());
+        assert_eq!(e.sheet_count(), 1);
+    }
+
+    #[test]
+    fn delete_sheet_at_out_of_range_fails() {
+        let mut e = IronCalcEngine::new().unwrap();
+        e.insert_sheet_at(1).unwrap();
+        assert!(e.delete_sheet_at(5).is_err());
     }
 
     #[test]

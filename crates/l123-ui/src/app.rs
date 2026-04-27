@@ -335,6 +335,33 @@ impl ZeroDisplay {
     }
 }
 
+/// `/Worksheet Global Default Other Clock` — what occupies the
+/// status-line clock slot.
+///
+/// Default is [`ClockDisplay::Filename`]: the active workbook's
+/// filename takes the slot when one exists, falling back to the
+/// 24-hour clock so an unsaved session still shows the date. This
+/// keeps prior status-line behavior intact.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClockDisplay {
+    Standard,
+    International,
+    None,
+    #[default]
+    Filename,
+}
+
+impl ClockDisplay {
+    pub fn label(self) -> &'static str {
+        match self {
+            ClockDisplay::Standard => "Standard",
+            ClockDisplay::International => "International",
+            ClockDisplay::None => "None",
+            ClockDisplay::Filename => "Filename",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Entry {
     kind: EntryKind,
@@ -560,6 +587,9 @@ pub struct App {
     /// While true, mutating commands push reverse entries onto the
     /// journal; Alt-F4 pops and applies. L123 defaults this to ON.
     undo_enabled: bool,
+    /// `/Worksheet Global Default Other Clock` — picks what the
+    /// status line's clock slot shows.
+    clock_display: ClockDisplay,
     menu: Option<MenuState>,
     point: Option<PointState>,
     prompt: Option<PromptState>,
@@ -1645,6 +1675,7 @@ impl App {
             global_protection: false,
             group_mode: false,
             undo_enabled: true,
+            clock_display: ClockDisplay::default(),
             menu: None,
             point: None,
             prompt: None,
@@ -3000,6 +3031,8 @@ impl App {
             Action::WorksheetInsertSheetAfter => self.insert_sheet_after_current(),
             Action::WorksheetDeleteRow => self.delete_row_at_pointer(1),
             Action::WorksheetDeleteColumn => self.delete_col_at_pointer(1),
+            Action::WorksheetDeleteSheet => self.delete_sheet_at_pointer(),
+            Action::WorksheetDeleteFile => self.delete_current_file(),
             Action::WorksheetGlobalRecalcAutomatic => {
                 self.recalc_mode = RecalcMode::Automatic;
                 // Switching into Automatic catches up on any pending work.
@@ -3070,6 +3103,22 @@ impl App {
                 // the user just told us to be quiet.
                 self.beep_pending = false;
                 self.beep_enabled = false;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherClockStandard => {
+                self.clock_display = ClockDisplay::Standard;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherClockInternational => {
+                self.clock_display = ClockDisplay::International;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherClockNone => {
+                self.clock_display = ClockDisplay::None;
+                self.close_menu();
+            }
+            Action::WorksheetGlobalDefaultOtherClockFilename => {
+                self.clock_display = ClockDisplay::Filename;
                 self.close_menu();
             }
             Action::WorksheetGlobalDefaultStatus => self.enter_defaults_status(),
@@ -4794,6 +4843,55 @@ impl App {
             );
             wb.engine.recalc();
             self.refresh_formula_caches();
+        }
+        self.close_menu();
+    }
+
+    /// /Worksheet Delete Sheet: drop the worksheet at the pointer.
+    /// Sheets after it shift back one slot; the pointer stays at the
+    /// same column/row on whatever sheet now occupies that slot
+    /// (clamped to the last surviving sheet). The engine refuses to
+    /// delete the only remaining sheet — that's silently a no-op
+    /// here, leaving the workbook intact.
+    fn delete_sheet_at_pointer(&mut self) {
+        let at = self.wb().pointer.sheet.0;
+        let (col, row) = (self.wb().pointer.col, self.wb().pointer.row);
+        let wb = self.wb_mut();
+        if wb.engine.delete_sheet_at(at).is_ok() {
+            drop_sheet_from_caches(
+                &mut wb.cells,
+                &mut wb.cell_formats,
+                &mut wb.cell_text_styles,
+                &mut wb.col_widths,
+                at,
+            );
+            let new_count = wb.engine.sheet_count();
+            let new_sheet = if new_count == 0 {
+                0
+            } else {
+                at.min(new_count - 1)
+            };
+            wb.pointer = Address::new(SheetId(new_sheet), col, row);
+            wb.engine.recalc();
+            self.refresh_formula_caches();
+        }
+        self.close_menu();
+    }
+
+    /// /Worksheet Delete File: drop the foreground active file from
+    /// memory. When more than one file is open, the previous file
+    /// (or the first, if we were already on the first) takes focus.
+    /// Deleting the only remaining active file resets the workspace
+    /// to a single blank workbook — same end-state as
+    /// `/Worksheet Erase Yes`.
+    fn delete_current_file(&mut self) {
+        if self.active_files.len() <= 1 {
+            self.execute_worksheet_erase();
+            return;
+        }
+        self.active_files.remove(self.current);
+        if self.current >= self.active_files.len() {
+            self.current = self.active_files.len() - 1;
         }
         self.close_menu();
     }
@@ -8273,15 +8371,28 @@ impl App {
     }
 
     fn render_status(&self, area: Rect, buf: &mut Buffer) {
-        // Left slot: the active workbook's base filename, or the
-        // current local date/time in 1-2-3 `DD-Mon-YYYY HH:MM` style.
-        let left_text = match self.wb().active_path.as_ref() {
-            Some(p) => p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| p.display().to_string()),
-            None => crate::clock::format_ddmmmyyyy_hhmm(crate::clock::local_now()),
+        // Left slot: filename or clock, per `/Worksheet Global Default
+        // Other Clock`. Filename mode falls back to the International
+        // clock when no file is loaded so the slot isn't blank in a
+        // fresh session.
+        let filename = || {
+            self.wb().active_path.as_ref().map(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| p.display().to_string())
+            })
+        };
+        let left_text = match self.clock_display {
+            ClockDisplay::Standard => {
+                crate::clock::format_ddmmmyy_hhmm_ampm(crate::clock::local_now())
+            }
+            ClockDisplay::International => {
+                crate::clock::format_ddmmmyyyy_hhmm(crate::clock::local_now())
+            }
+            ClockDisplay::None => String::new(),
+            ClockDisplay::Filename => filename()
+                .unwrap_or_else(|| crate::clock::format_ddmmmyyyy_hhmm(crate::clock::local_now())),
         };
         // Multi-sheet workbook → append "[<Letter>: <name>]" so users
         // can see which Excel tab their letter-addressed pointer is on.
@@ -8392,6 +8503,66 @@ fn shift_cells_rows(
         let new_row = (addr.row as i64 + delta).max(0) as u32;
         let new_addr = Address::new(addr.sheet, addr.col, new_row);
         cells.insert(new_addr, contents);
+    }
+}
+
+/// After deleting the sheet at index `at`, drop every cache entry on
+/// that sheet and shift entries on later sheets back by one slot. The
+/// inverse of [`shift_sheets_from`]; covers the same caches.
+fn drop_sheet_from_caches(
+    cells: &mut HashMap<Address, CellContents>,
+    cell_formats: &mut HashMap<Address, Format>,
+    cell_text_styles: &mut HashMap<Address, TextStyle>,
+    col_widths: &mut HashMap<(SheetId, u16), u8>,
+    at: u16,
+) {
+    cells.retain(|a, _| a.sheet.0 != at);
+    cell_formats.retain(|a, _| a.sheet.0 != at);
+    cell_text_styles.retain(|a, _| a.sheet.0 != at);
+    col_widths.retain(|(s, _), _| s.0 != at);
+
+    let shift_addr = |a: Address| -> Address {
+        if a.sheet.0 > at {
+            Address::new(SheetId(a.sheet.0 - 1), a.col, a.row)
+        } else {
+            a
+        }
+    };
+    let mut affected: Vec<Address> = cells.keys().filter(|a| a.sheet.0 > at).copied().collect();
+    affected.sort_by_key(|a| a.sheet.0);
+    for addr in affected {
+        let contents = cells.remove(&addr).expect("present");
+        cells.insert(shift_addr(addr), contents);
+    }
+    let mut fmt_affected: Vec<Address> = cell_formats
+        .keys()
+        .filter(|a| a.sheet.0 > at)
+        .copied()
+        .collect();
+    fmt_affected.sort_by_key(|a| a.sheet.0);
+    for addr in fmt_affected {
+        let f = cell_formats.remove(&addr).expect("present");
+        cell_formats.insert(shift_addr(addr), f);
+    }
+    let mut style_affected: Vec<Address> = cell_text_styles
+        .keys()
+        .filter(|a| a.sheet.0 > at)
+        .copied()
+        .collect();
+    style_affected.sort_by_key(|a| a.sheet.0);
+    for addr in style_affected {
+        let s = cell_text_styles.remove(&addr).expect("present");
+        cell_text_styles.insert(shift_addr(addr), s);
+    }
+    let mut cw_affected: Vec<(SheetId, u16)> = col_widths
+        .keys()
+        .filter(|(s, _)| s.0 > at)
+        .copied()
+        .collect();
+    cw_affected.sort_by_key(|(s, _)| s.0);
+    for key in cw_affected {
+        let w = col_widths.remove(&key).expect("present");
+        col_widths.insert((SheetId(key.0 .0 - 1), key.1), w);
     }
 }
 

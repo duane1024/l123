@@ -51,6 +51,14 @@ pub enum Action {
     WorksheetInsertSheetAfter,
     WorksheetDeleteRow,
     WorksheetDeleteColumn,
+    /// `/Worksheet Delete Sheet` — drop the worksheet at the pointer.
+    /// Sheets after it shift back one slot; refused on the last sheet.
+    WorksheetDeleteSheet,
+    /// `/Worksheet Delete File` — remove the foreground active file
+    /// from memory. When the last active file is deleted, the
+    /// workspace resets to a single blank workbook (mirrors
+    /// `/Worksheet Erase Yes`).
+    WorksheetDeleteFile,
     WorksheetColumnSetWidth,
     WorksheetColumnResetWidth,
     WorksheetColumnRangeSetWidth,
@@ -92,6 +100,21 @@ pub enum Action {
     WorksheetGlobalDefaultOtherBeepEnable,
     /// `/Worksheet Global Default Other Beep Disable`.
     WorksheetGlobalDefaultOtherBeepDisable,
+    /// `/Worksheet Global Default Other Clock Standard` — show the
+    /// date and time in the status line using the 12-hour Standard
+    /// clock format (`DD-MMM-YY HH:MM AM/PM`).
+    WorksheetGlobalDefaultOtherClockStandard,
+    /// `/Worksheet Global Default Other Clock International` — show
+    /// the date and time in the status line using the 24-hour
+    /// International format (`DD-MMM-YYYY HH:MM`).
+    WorksheetGlobalDefaultOtherClockInternational,
+    /// `/Worksheet Global Default Other Clock None` — suppress the
+    /// status-line clock entirely.
+    WorksheetGlobalDefaultOtherClockNone,
+    /// `/Worksheet Global Default Other Clock Filename` — show the
+    /// active workbook's filename in the status-line slot instead of
+    /// the clock.
+    WorksheetGlobalDefaultOtherClockFilename,
     /// `/Worksheet Global Default Status` — full-screen overlay
     /// showing every persisted default (printer, dirs, autoexec, ext,
     /// graph). Read-only; any key dismisses.
@@ -401,13 +424,13 @@ const WS_DELETE_MENU: &[MenuItem] = &[
         letter: 'S',
         name: "Sheet",
         help: "Delete one or more worksheets",
-        body: MenuBody::NotImplemented("ws-delete-sheet"),
+        body: MenuBody::Action(Action::WorksheetDeleteSheet),
     },
     MenuItem {
         letter: 'F',
         name: "File",
         help: "Remove the current file from memory",
-        body: MenuBody::NotImplemented("ws-delete-file"),
+        body: MenuBody::Action(Action::WorksheetDeleteFile),
     },
 ];
 
@@ -573,6 +596,33 @@ const WG_DEFAULT_OTHER_BEEP_MENU: &[MenuItem] = &[
     },
 ];
 
+const WG_DEFAULT_OTHER_CLOCK_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'S',
+        name: "Standard",
+        help: "12-hour clock (DD-MMM-YY HH:MM AM/PM)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockStandard),
+    },
+    MenuItem {
+        letter: 'I',
+        name: "International",
+        help: "24-hour clock (DD-MMM-YYYY HH:MM)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockInternational),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "None",
+        help: "Suppress the status-line clock",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockNone),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Filename",
+        help: "Show the active workbook's filename instead of a clock",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockFilename),
+    },
+];
+
 const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'I',
@@ -590,7 +640,7 @@ const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
         letter: 'C',
         name: "Clock",
         help: "Clock display: Standard / International / None / Filename",
-        body: MenuBody::NotImplemented("wgdo-clock"),
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_CLOCK_MENU),
     },
     MenuItem {
         letter: 'U',
@@ -2402,6 +2452,30 @@ mod tests {
         assert!(matches!(
             d.body,
             MenuBody::Action(Action::WorksheetGlobalDefaultOtherUndoDisable)
+        ));
+    }
+
+    #[test]
+    fn resolve_wgdo_clock_leaves() {
+        let s = resolve(&['W', 'G', 'D', 'O', 'C', 'S']).unwrap();
+        assert!(matches!(
+            s.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockStandard)
+        ));
+        let i = resolve(&['W', 'G', 'D', 'O', 'C', 'I']).unwrap();
+        assert!(matches!(
+            i.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockInternational)
+        ));
+        let n = resolve(&['W', 'G', 'D', 'O', 'C', 'N']).unwrap();
+        assert!(matches!(
+            n.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockNone)
+        ));
+        let f = resolve(&['W', 'G', 'D', 'O', 'C', 'F']).unwrap();
+        assert!(matches!(
+            f.body,
+            MenuBody::Action(Action::WorksheetGlobalDefaultOtherClockFilename)
         ));
     }
 
