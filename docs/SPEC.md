@@ -72,7 +72,7 @@ load-bearing for authenticity.
 ┌──────────────────────────────────────────────────────────────────┐
 │ A:B5: (C2) +B3*1.08                                    READY     │ ← control panel line 1
 │ 12,960.00                                                         │ ← control panel line 2
-│ Worksheet Range Copy Move File Print Graph Data System Add-In Q… │ ← control panel line 3
+│ Worksheet Range Copy Move File Print Graph Data System Quit       │ ← control panel line 3
 ├──┬────────┬────────┬────────┬────────┬────────┬────────┬─────────┤
 │  │   A    │   B    │   C    │   D    │   E    │   F    │   G     │ ← column frame
 ├──┼────────┼────────┼────────┼────────┼────────┼────────┼─────────┤
@@ -279,10 +279,18 @@ This spec lists the **MVP slice** (fully implemented) vs. **Complete** vs.
 ### Top-level (unchanged from 1-2-3): single-letter accepted at all levels
 
 ```
-/ Worksheet Range Copy Move File Print Graph Data System Add-In Quit
+/ Worksheet Range Copy Move File Print Graph Data System Quit
 ```
 
-Quick mnemonic: **W R C M F P G D S A Q**.
+Quick mnemonic: **W R C M F P G D S Q**.
+
+L123 drops 1-2-3 R3.4a's `/Add-In` slot. Add-ins were a DOS-era
+overlay/loader mechanism (`.PLC`/`.ADN` bound to APP1/APP2/APP3 and
+the ADDIN key) and don't translate to a modern Rust binary; any future
+plug-in surface will be designed natively rather than retrofitted onto
+the menu. The R3.4a ADDIN/APP1/APP2/APP3 function-key bindings are
+unbound for the same reason — keep them visible in the keymap as
+historical reference, but don't dispatch them.
 
 ### MVP menu slice
 
@@ -326,11 +334,11 @@ Quick mnemonic: **W R C M F P G D S A Q**.
 /Quit No | Yes
 ```
 
-**Δ:** v0.1's top-level was missing `Print Graph Data System Add-In`. Those
-exist at the menu level from day one (descending into an unimplemented leaf
+**Δ:** v0.1's top-level was missing `Print Graph Data System`. Those exist
+at the menu level from day one (descending into an unimplemented leaf
 shows a "Not yet implemented" message in line 3 rather than hiding the
 menu) — keeping the top-level correct from MVP onward protects muscle
-memory.
+memory. `/Add-In` is intentionally omitted (see top-level note above).
 
 ### Complete menu slice (post-MVP)
 
@@ -345,7 +353,6 @@ memory.
 ### Stretch menu slice
 
 - `/Data Matrix`, `/Data External`
-- `/Add-In` loader
 - `/Data Table 3` (3D), Labeled variants
 - Macros, `{…}` advanced commands
 - Lotus-era print drivers

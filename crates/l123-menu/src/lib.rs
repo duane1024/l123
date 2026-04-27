@@ -905,12 +905,6 @@ const WG_DEFAULT_OTHER_INTL_MENU: &[MenuItem] = &[
         help: "Negative-number display: Parens or Sign",
         body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_NEGATIVE_MENU),
     },
-    MenuItem {
-        letter: 'Q',
-        name: "Quit",
-        help: "Return to the parent menu",
-        body: MenuBody::NotImplemented("wgdo-intl-quit"),
-    },
 ];
 
 const WG_DEFAULT_OTHER_CLOCK_MENU: &[MenuItem] = &[
@@ -970,12 +964,6 @@ const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
         name: "Beep",
         help: "Enable/disable the soft error beep on edge collisions",
         body: MenuBody::Submenu(WG_DEFAULT_OTHER_BEEP_MENU),
-    },
-    MenuItem {
-        letter: 'A',
-        name: "Add-In",
-        help: "Add-in auto-load settings",
-        body: MenuBody::NotImplemented("wgdo-addin"),
     },
     MenuItem {
         letter: 'E',
@@ -1300,12 +1288,6 @@ const WS_GLOBAL_MENU: &[MenuItem] = &[
         name: "Group",
         help: "Enable/disable GROUP mode across sheets",
         body: MenuBody::Submenu(WG_GROUP_MENU),
-    },
-    MenuItem {
-        letter: 'Q',
-        name: "Quit",
-        help: "Return to READY",
-        body: MenuBody::NotImplemented("wg-quit"),
     },
 ];
 
@@ -2540,8 +2522,8 @@ const GRAPH_RESET_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'Q',
         name: "Quit",
-        help: "Return to /Graph menu",
-        body: MenuBody::NotImplemented("gr-quit"),
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
     },
 ];
 
@@ -2662,27 +2644,6 @@ const DATA_MENU: &[MenuItem] = &[
         name: "Query",
         help: "Database query (find, extract, ...)",
         body: MenuBody::NotImplemented("d-query"),
-    },
-];
-
-const ADDIN_MENU: &[MenuItem] = &[
-    MenuItem {
-        letter: 'L',
-        name: "Load",
-        help: "Load an add-in into memory",
-        body: MenuBody::NotImplemented("ai-load"),
-    },
-    MenuItem {
-        letter: 'R',
-        name: "Remove",
-        help: "Unload an add-in",
-        body: MenuBody::NotImplemented("ai-remove"),
-    },
-    MenuItem {
-        letter: 'Q',
-        name: "Quit",
-        help: "Return to READY",
-        body: MenuBody::NotImplemented("ai-quit"),
     },
 ];
 
@@ -2911,12 +2872,6 @@ pub const ROOT: &[MenuItem] = &[
         body: MenuBody::NotImplemented("system"),
     },
     MenuItem {
-        letter: 'A',
-        name: "Add-In",
-        help: "Load and invoke add-in programs",
-        body: MenuBody::Submenu(ADDIN_MENU),
-    },
-    MenuItem {
         letter: 'Q',
         name: "Quit",
         help: "End the l123 session",
@@ -2952,7 +2907,7 @@ mod tests {
     }
 
     #[test]
-    fn all_eleven_top_level_items_present() {
+    fn all_ten_top_level_items_present() {
         let names: Vec<&str> = ROOT.iter().map(|m| m.name).collect();
         assert_eq!(
             names,
@@ -2966,7 +2921,6 @@ mod tests {
                 "Graph",
                 "Data",
                 "System",
-                "Add-In",
                 "Quit"
             ]
         );
@@ -2976,6 +2930,12 @@ mod tests {
     fn resolve_quit_yes_is_action() {
         let node = resolve(&['Q', 'Y']).unwrap();
         assert!(matches!(node.body, MenuBody::Action(Action::QuitConfirm)));
+    }
+
+    #[test]
+    fn resolve_graph_reset_quit_is_cancel() {
+        let node = resolve(&['G', 'R', 'Q']).unwrap();
+        assert!(matches!(node.body, MenuBody::Action(Action::Cancel)));
     }
 
     #[test]

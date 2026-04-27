@@ -13,9 +13,14 @@ non-MVP leaves display "Not implemented yet" in control-panel line 3.
 ## Top level
 
 ```
-/ Worksheet  Range  Copy  Move  File  Print  Graph  Data  System  Add-In  Quit
-  W          R      C     M     F     P      G      D     S       A       Q
+/ Worksheet  Range  Copy  Move  File  Print  Graph  Data  System  Quit
+  W          R      C     M     F     P      G      D     S       Q
 ```
+
+L123 omits 1-2-3 R3.4a's `/Add-In` menu — add-ins are a DOS-era
+mechanism (`.PLC`/`.ADN` overlays bound to APP1/APP2/APP3 and ADDIN
+keys) we don't intend to recreate. Any future plug-in surface will be
+designed natively for L123 rather than retrofitted onto the menu.
 
 Accelerators are the capitalized first letter. Arrow keys highlight; first
 letter descends immediately; `Esc` backs out one level; `Ctrl-Break` aborts
@@ -54,7 +59,7 @@ Printer  Dir  Status  Update  Other  Autoexec  Ext  Graph  Temp  Quit
 - **Dir** (default directory)
 - **Status** (display STAT screen)
 - **Update** (write `123R31.CNF`; L123 writes `~/.config/l123/l123.toml`)
-- **Other** → International (Punctuation A-H, Currency Prefix/Suffix, Date A-D, Time A-D, Negative, Release-2 LICS/LMBCS, File-Translation, Quit) | Help Instant/Removable | Clock Standard/International/None/Filename | **Undo Enable/Disable** **[MVP-critical]** | **Beep Enable/Disable** (soft terminal bell on edge collisions; also `error_beep` in L123.CNF) | Add-In | Expanded-Memory
+- **Other** → International (Punctuation A-H, Currency Prefix/Suffix, Date A-D, Time A-D, Negative, Release-2 LICS/LMBCS, File-Translation, Quit) | Help Instant/Removable | Clock Standard/International/None/Filename | **Undo Enable/Disable** **[MVP-critical]** | **Beep Enable/Disable** (soft terminal bell on edge collisions; also `error_beep` in L123.CNF) | Expanded-Memory
 - **Autoexec** → Yes | No    (run `\0` macro on retrieve)
 - **Ext** → Save (default ext) | List (filter for /File List/Retrieve)
 - **Graph** → Columnwise/Rowwise auto-graph; CGM | PIC default type
@@ -263,22 +268,6 @@ Fill  Table  Sort  Query  Distribution  Matrix  Regression  Parse  External
 
 Suspend 1-2-3, shell out (`$SHELL` or `cmd.exe`); `exit` returns. On
 modern systems this is a proper shell with the alt-screen stashed.
-
----
-
-## /Add-In  (A)  **[STR]**
-
-```
-Load  Remove  Invoke  Clear  Table  Settings  Quit
-```
-
-- **Load** — read `.PLC`/`.ADN` into memory; optional assign to APP1/APP2/APP3/No-Key
-- **Remove** | **Invoke** | **Clear**
-- **Table** → @Functions | Macros | Applications
-- **Settings** → File (Set/Cancel/Quit) | System (Set/Cancel/Directory/Update/Quit)
-
-Open question: L123 can repurpose /Add-In for native Rust plug-ins loaded
-as dylibs, or Wasm components. Stretch-goal decision.
 
 ---
 
