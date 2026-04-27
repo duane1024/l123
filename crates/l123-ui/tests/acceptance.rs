@@ -900,6 +900,14 @@ transcripts! {
     m5_wgd_dir_temp_ext      => "M5_wgd_dir_temp_ext.tsv",
     m5_wgd_autoexec_graph    => "M5_wgd_autoexec_graph.tsv",
     m5_wgd_printer           => "M5_wgd_printer.tsv",
+    m5_wgdo_intl_punct     => "M5_wgdo_intl_punct.tsv",
+    m5_wgdo_intl_currency  => "M5_wgdo_intl_currency.tsv",
+    m5_wgdo_intl_negative  => "M5_wgdo_intl_negative.tsv",
+    m5_wgdo_intl_date      => "M5_wgdo_intl_date.tsv",
+    // Time Intl (D8/D9) rendering is unit-tested in l123-core/format;
+    // exposing D8/D9 via /RF Date Time is a separate menu-wiring task.
+    m5_wgdo_intl_undo      => "M5_wgdo_intl_undo.tsv",
+    m5_wgdo_intl_stat      => "M5_wgdo_intl_stat.tsv",
     m6_print_file      => "M6_print_file.tsv",
     m6_print_multi_range => "m6_print_multi_range.tsv",
     m6_print_options_header => "M6_print_options_header.tsv",

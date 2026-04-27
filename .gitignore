@@ -28,3 +28,7 @@ Cargo.lock.bak
 # Merge conflict leftovers
 *.orig
 *.rej
+
+# Worktrees
+worktrees/
+.claude/worktrees/

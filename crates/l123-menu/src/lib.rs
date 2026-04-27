@@ -122,6 +122,40 @@ pub enum Action {
     WorksheetGlobalDefaultOtherBeepEnable,
     /// `/Worksheet Global Default Other Beep Disable`.
     WorksheetGlobalDefaultOtherBeepDisable,
+    /// `/Worksheet Global Default Other International Punctuation A..H`
+    /// — locale punctuation triple (decimal, argument, thousands).
+    WorksheetGlobalDefaultOtherIntlPunctuationA,
+    WorksheetGlobalDefaultOtherIntlPunctuationB,
+    WorksheetGlobalDefaultOtherIntlPunctuationC,
+    WorksheetGlobalDefaultOtherIntlPunctuationD,
+    WorksheetGlobalDefaultOtherIntlPunctuationE,
+    WorksheetGlobalDefaultOtherIntlPunctuationF,
+    WorksheetGlobalDefaultOtherIntlPunctuationG,
+    WorksheetGlobalDefaultOtherIntlPunctuationH,
+    /// `/Worksheet Global Default Other International Currency Prefix|
+    /// Suffix` — chooses where the currency symbol sits, then prompts
+    /// for the symbol string.
+    WorksheetGlobalDefaultOtherIntlCurrencyPrefix,
+    WorksheetGlobalDefaultOtherIntlCurrencySuffix,
+    /// `/Worksheet Global Default Other International Date A..D` —
+    /// selects the international date style used by D4 (long) and
+    /// D5 (short).
+    WorksheetGlobalDefaultOtherIntlDateA,
+    WorksheetGlobalDefaultOtherIntlDateB,
+    WorksheetGlobalDefaultOtherIntlDateC,
+    WorksheetGlobalDefaultOtherIntlDateD,
+    /// `/Worksheet Global Default Other International Time A..D` —
+    /// selects the international time style used by D8 (long) and
+    /// D9 (short).
+    WorksheetGlobalDefaultOtherIntlTimeA,
+    WorksheetGlobalDefaultOtherIntlTimeB,
+    WorksheetGlobalDefaultOtherIntlTimeC,
+    WorksheetGlobalDefaultOtherIntlTimeD,
+    /// `/Worksheet Global Default Other International Negative
+    /// Parens|Sign` — controls how negative Currency/Comma values
+    /// display.
+    WorksheetGlobalDefaultOtherIntlNegativeParens,
+    WorksheetGlobalDefaultOtherIntlNegativeSign,
     /// `/Worksheet Global Default Other Clock Standard` — show the
     /// date and time in the status line using the 12-hour Standard
     /// clock format (`DD-MMM-YY HH:MM AM/PM`).
@@ -229,6 +263,39 @@ pub enum Action {
     FileXtractFormulas,
     FileXtractValues,
     FileImportNumbers,
+    /// `/File Import Text` — read a plain-text file and store each line
+    /// as a label down a single column starting at the pointer. The
+    /// counterpart to `FileImportNumbers`; no CSV parsing.
+    FileImportText,
+    /// `/File Combine Copy Entire-File` — overwrite cells starting at
+    /// the pointer with the contents of every non-empty cell in the
+    /// source file.
+    FileCombineCopyEntire,
+    /// `/File Combine Copy Named-Or-Specified-Range` — same as
+    /// `FileCombineCopyEntire` but anchored to a user-typed source
+    /// range like `A1..C5`.
+    FileCombineCopyNamed,
+    /// `/File Combine Add Entire-File` — numerically add each source
+    /// cell to the corresponding target cell. Source labels and target
+    /// labels are skipped (no overwrite).
+    FileCombineAddEntire,
+    /// `/File Combine Add Named-Or-Specified-Range`.
+    FileCombineAddNamed,
+    /// `/File Combine Subtract Entire-File` — numerically subtract each
+    /// source cell from the corresponding target cell. Same label rules
+    /// as `FileCombineAddEntire`.
+    FileCombineSubtractEntire,
+    /// `/File Combine Subtract Named-Or-Specified-Range`.
+    FileCombineSubtractNamed,
+    /// `/File Erase Worksheet` — delete a worksheet file from disk after
+    /// a No/Yes confirm.
+    FileEraseWorksheet,
+    /// `/File Erase Print` — delete a print-settings file from disk.
+    FileErasePrint,
+    /// `/File Erase Graph` — delete a graph file from disk.
+    FileEraseGraph,
+    /// `/File Erase Other` — delete any file from disk.
+    FileEraseOther,
     FileNew,
     FileOpenBefore,
     FileOpenAfter,
@@ -618,6 +685,180 @@ const WG_DEFAULT_OTHER_BEEP_MENU: &[MenuItem] = &[
     },
 ];
 
+const WG_DEFAULT_OTHER_INTL_PUNCTUATION_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "A",
+        help: "Decimal . | argument , | thousands , (US default)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationA),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "B",
+        help: "Decimal , | argument . | thousands .",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationB),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "C",
+        help: "Decimal . | argument , | thousands (space)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationC),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "D",
+        help: "Decimal , | argument . | thousands (space)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationD),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "E",
+        help: "Decimal . | argument ; | thousands ,",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationE),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "F",
+        help: "Decimal , | argument ; | thousands .",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationF),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "G",
+        help: "Decimal . | argument ; | thousands (space)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationG),
+    },
+    MenuItem {
+        letter: 'H',
+        name: "H",
+        help: "Decimal , | argument ; | thousands (space)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlPunctuationH),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_CURRENCY_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'P',
+        name: "Prefix",
+        help: "Currency symbol leads the number ($1234)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlCurrencyPrefix),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Suffix",
+        help: "Currency symbol trails the number (1234€)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlCurrencySuffix),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_DATE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "A",
+        help: "MM/DD/YY (long), MM/DD (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlDateA),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "B",
+        help: "DD/MM/YY (long), DD/MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlDateB),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "C",
+        help: "DD.MM.YY (long), DD.MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlDateC),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "D",
+        help: "YY-MM-DD (long), MM-DD (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlDateD),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_TIME_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "A",
+        help: "HH:MM:SS (long), HH:MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlTimeA),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "B",
+        help: "HH.MM.SS (long), HH.MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlTimeB),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "C",
+        help: "HH,MM,SS (long), HH,MM (short)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlTimeC),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "D",
+        help: "HH:MM:SS (long), HH:MM (short) — colon fallback",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlTimeD),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_NEGATIVE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'P',
+        name: "Parens",
+        help: "Show negatives in parentheses: (1234.50)",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlNegativeParens),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Sign",
+        help: "Show negatives with a leading minus: -1234.50",
+        body: MenuBody::Action(Action::WorksheetGlobalDefaultOtherIntlNegativeSign),
+    },
+];
+
+const WG_DEFAULT_OTHER_INTL_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'P',
+        name: "Punctuation",
+        help: "Decimal / argument / thousands character triple (A..H)",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_PUNCTUATION_MENU),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Currency",
+        help: "Currency symbol position (Prefix / Suffix) and string",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_CURRENCY_MENU),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Date",
+        help: "International date style (D4 long, D5 short)",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_DATE_MENU),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Time",
+        help: "International time style (D8 long, D9 short)",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_TIME_MENU),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Negative",
+        help: "Negative-number display: Parens or Sign",
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_NEGATIVE_MENU),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to the parent menu",
+        body: MenuBody::NotImplemented("wgdo-intl-quit"),
+    },
+];
+
 const WG_DEFAULT_OTHER_CLOCK_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'S',
@@ -650,7 +891,7 @@ const WG_DEFAULT_OTHER_MENU: &[MenuItem] = &[
         letter: 'I',
         name: "International",
         help: "Locale-specific punctuation, dates, and currency",
-        body: MenuBody::NotImplemented("wgdo-intl"),
+        body: MenuBody::Submenu(WG_DEFAULT_OTHER_INTL_MENU),
     },
     MenuItem {
         letter: 'H',
@@ -1576,13 +1817,213 @@ const FILE_IMPORT_MENU: &[MenuItem] = &[
         letter: 'T',
         name: "Text",
         help: "Import each line as a label in one column",
-        body: MenuBody::NotImplemented("f-import-text"),
+        body: MenuBody::Action(Action::FileImportText),
     },
     MenuItem {
         letter: 'N',
         name: "Numbers",
         help: "Parse CSV: numeric tokens as values, quoted strings as labels",
         body: MenuBody::Action(Action::FileImportNumbers),
+    },
+];
+
+const FILE_COMBINE_RANGE_KIND_HELP_COPY: &str = "Combine source by overwriting target cells";
+const FILE_COMBINE_RANGE_KIND_HELP_ADD: &str = "Combine source by adding to target cells";
+const FILE_COMBINE_RANGE_KIND_HELP_SUBTRACT: &str =
+    "Combine source by subtracting from target cells";
+
+const FILE_COMBINE_COPY_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Entire-File",
+        help: FILE_COMBINE_RANGE_KIND_HELP_COPY,
+        body: MenuBody::Action(Action::FileCombineCopyEntire),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Named/Specified-Range",
+        help: "Combine a source range like A1..C5 by overwriting target cells",
+        body: MenuBody::Action(Action::FileCombineCopyNamed),
+    },
+];
+
+const FILE_COMBINE_ADD_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Entire-File",
+        help: FILE_COMBINE_RANGE_KIND_HELP_ADD,
+        body: MenuBody::Action(Action::FileCombineAddEntire),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Named/Specified-Range",
+        help: "Combine a source range like A1..C5 by adding to target cells",
+        body: MenuBody::Action(Action::FileCombineAddNamed),
+    },
+];
+
+const FILE_COMBINE_SUBTRACT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'E',
+        name: "Entire-File",
+        help: FILE_COMBINE_RANGE_KIND_HELP_SUBTRACT,
+        body: MenuBody::Action(Action::FileCombineSubtractEntire),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "Named/Specified-Range",
+        help: "Combine a source range like A1..C5 by subtracting from target cells",
+        body: MenuBody::Action(Action::FileCombineSubtractNamed),
+    },
+];
+
+const FILE_COMBINE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Copy",
+        help: "Overwrite the target cells with the source",
+        body: MenuBody::Submenu(FILE_COMBINE_COPY_MENU),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Add",
+        help: "Add the source values to the target cells",
+        body: MenuBody::Submenu(FILE_COMBINE_ADD_MENU),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Subtract",
+        help: "Subtract the source values from the target cells",
+        body: MenuBody::Submenu(FILE_COMBINE_SUBTRACT_MENU),
+    },
+];
+
+const FILE_ERASE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'W',
+        name: "Worksheet",
+        help: "Delete a worksheet file (.xlsx, .wk*) from disk",
+        body: MenuBody::Action(Action::FileEraseWorksheet),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Print",
+        help: "Delete a print-settings file from disk",
+        body: MenuBody::Action(Action::FileErasePrint),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Graph",
+        help: "Delete a graph file from disk",
+        body: MenuBody::Action(Action::FileEraseGraph),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "Delete any file from disk",
+        body: MenuBody::Action(Action::FileEraseOther),
+    },
+];
+
+const FILE_ADMIN_RESERVATION_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'G',
+        name: "Get",
+        help: "Acquire the file's reservation for editing",
+        body: MenuBody::NotImplemented("f-admin-reservation-get"),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Release",
+        help: "Release the file's reservation",
+        body: MenuBody::NotImplemented("f-admin-reservation-release"),
+    },
+];
+
+const FILE_ADMIN_SEAL_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'F',
+        name: "File",
+        help: "Seal the file with a password",
+        body: MenuBody::NotImplemented("f-admin-seal-file"),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reservation-Setting",
+        help: "Seal the reservation behavior of this file",
+        body: MenuBody::NotImplemented("f-admin-seal-reservation-setting"),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Disable",
+        help: "Disable an existing seal (requires the seal password)",
+        body: MenuBody::NotImplemented("f-admin-seal-disable"),
+    },
+];
+
+const FILE_ADMIN_TABLE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'W',
+        name: "Worksheet",
+        help: "Build a table of worksheet files in the session directory",
+        body: MenuBody::NotImplemented("f-admin-table-worksheet"),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Print",
+        help: "Build a table of print-settings files",
+        body: MenuBody::NotImplemented("f-admin-table-print"),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Graph",
+        help: "Build a table of graph files",
+        body: MenuBody::NotImplemented("f-admin-table-graph"),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "Build a table of any file type",
+        body: MenuBody::NotImplemented("f-admin-table-other"),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "Active",
+        help: "Build a table of currently active files",
+        body: MenuBody::NotImplemented("f-admin-table-active"),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Linked",
+        help: "Build a table of files linked via formula references",
+        body: MenuBody::NotImplemented("f-admin-table-linked"),
+    },
+];
+
+const FILE_ADMIN_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'R',
+        name: "Reservation",
+        help: "Get or release the file's edit reservation",
+        body: MenuBody::Submenu(FILE_ADMIN_RESERVATION_MENU),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Seal",
+        help: "Seal the file or its reservation setting with a password",
+        body: MenuBody::Submenu(FILE_ADMIN_SEAL_MENU),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Table",
+        help: "Build a table of files of a given type",
+        body: MenuBody::Submenu(FILE_ADMIN_TABLE_MENU),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Link-Refresh",
+        help: "Refresh formulas that reference linked files",
+        body: MenuBody::NotImplemented("f-admin-link-refresh"),
     },
 ];
 
@@ -1618,7 +2059,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'C',
         name: "Combine",
         help: "Merge a file into the current one",
-        body: MenuBody::NotImplemented("f-combine"),
+        body: MenuBody::Submenu(FILE_COMBINE_MENU),
     },
     MenuItem {
         letter: 'X',
@@ -1630,7 +2071,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'E',
         name: "Erase",
         help: "Delete a file on disk",
-        body: MenuBody::NotImplemented("f-erase"),
+        body: MenuBody::Submenu(FILE_ERASE_MENU),
     },
     MenuItem {
         letter: 'L',
@@ -1666,7 +2107,7 @@ const FILE_MENU: &[MenuItem] = &[
         letter: 'A',
         name: "Admin",
         help: "Reservation, seal, link-refresh",
-        body: MenuBody::NotImplemented("f-admin"),
+        body: MenuBody::Submenu(FILE_ADMIN_MENU),
     },
 ];
 
@@ -2780,6 +3221,76 @@ mod tests {
     }
 
     #[test]
+    fn resolve_wgdo_intl_punctuation_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (
+                &['W', 'G', 'D', 'O', 'I', 'P', 'A'],
+                Action::WorksheetGlobalDefaultOtherIntlPunctuationA,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'P', 'B'],
+                Action::WorksheetGlobalDefaultOtherIntlPunctuationB,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'P', 'H'],
+                Action::WorksheetGlobalDefaultOtherIntlPunctuationH,
+            ),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_wgdo_intl_date_time_negative_currency_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (
+                &['W', 'G', 'D', 'O', 'I', 'D', 'A'],
+                Action::WorksheetGlobalDefaultOtherIntlDateA,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'D', 'D'],
+                Action::WorksheetGlobalDefaultOtherIntlDateD,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'T', 'A'],
+                Action::WorksheetGlobalDefaultOtherIntlTimeA,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'T', 'D'],
+                Action::WorksheetGlobalDefaultOtherIntlTimeD,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'N', 'P'],
+                Action::WorksheetGlobalDefaultOtherIntlNegativeParens,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'N', 'S'],
+                Action::WorksheetGlobalDefaultOtherIntlNegativeSign,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'C', 'P'],
+                Action::WorksheetGlobalDefaultOtherIntlCurrencyPrefix,
+            ),
+            (
+                &['W', 'G', 'D', 'O', 'I', 'C', 'S'],
+                Action::WorksheetGlobalDefaultOtherIntlCurrencySuffix,
+            ),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn resolve_worksheet_titles_leaves() {
         let cases: &[(&[char], Action)] = &[
             (&['W', 'T', 'B'], Action::WorksheetTitlesBoth),
@@ -2883,5 +3394,80 @@ mod tests {
     fn wysiwyg_quit_maps_to_cancel() {
         let q = resolve_within(WYSIWYG_ROOT, &['Q']).unwrap();
         assert!(matches!(q.body, MenuBody::Action(Action::Cancel)));
+    }
+
+    #[test]
+    fn resolve_file_import_text() {
+        let node = resolve(&['F', 'I', 'T']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::FileImportText)
+        ));
+    }
+
+    #[test]
+    fn resolve_file_combine_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (&['F', 'C', 'C', 'E'], Action::FileCombineCopyEntire),
+            (&['F', 'C', 'C', 'N'], Action::FileCombineCopyNamed),
+            (&['F', 'C', 'A', 'E'], Action::FileCombineAddEntire),
+            (&['F', 'C', 'A', 'N'], Action::FileCombineAddNamed),
+            (&['F', 'C', 'S', 'E'], Action::FileCombineSubtractEntire),
+            (&['F', 'C', 'S', 'N'], Action::FileCombineSubtractNamed),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_file_erase_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (&['F', 'E', 'W'], Action::FileEraseWorksheet),
+            (&['F', 'E', 'P'], Action::FileErasePrint),
+            (&['F', 'E', 'G'], Action::FileEraseGraph),
+            (&['F', 'E', 'O'], Action::FileEraseOther),
+        ];
+        for (path, expected) in cases {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn file_admin_subtree_is_navigable_with_unimplemented_leaves() {
+        let admin = resolve(&['F', 'A']).unwrap();
+        assert_eq!(admin.name, "Admin");
+        assert!(matches!(admin.body, MenuBody::Submenu(_)));
+
+        let leaf_paths: &[&[char]] = &[
+            &['F', 'A', 'R', 'G'], // Reservation Get
+            &['F', 'A', 'R', 'R'], // Reservation Release
+            &['F', 'A', 'S', 'F'], // Seal File
+            &['F', 'A', 'S', 'R'], // Seal Reservation-Setting
+            &['F', 'A', 'S', 'D'], // Seal Disable
+            &['F', 'A', 'T', 'W'], // Table Worksheet
+            &['F', 'A', 'T', 'P'], // Table Print
+            &['F', 'A', 'T', 'G'], // Table Graph
+            &['F', 'A', 'T', 'O'], // Table Other
+            &['F', 'A', 'T', 'A'], // Table Active
+            &['F', 'A', 'T', 'L'], // Table Linked
+            &['F', 'A', 'L'],      // Link-Refresh
+        ];
+        for path in leaf_paths {
+            let node = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            assert!(
+                matches!(node.body, MenuBody::NotImplemented(_)),
+                "{path:?} should be NotImplemented, got {:?}",
+                node.body
+            );
+        }
     }
 }

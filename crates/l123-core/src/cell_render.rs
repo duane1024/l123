@@ -191,11 +191,17 @@ fn spill_extent(
 /// check for now since it would normally switch to scientific first.
 /// Text is left-aligned; booleans and errors right-aligned. `Empty`
 /// yields `None` so callers can decide whether to blank or leave the
-/// slot untouched.
-pub fn render_value_in_cell(v: &Value, width: usize, format: Format) -> Option<String> {
+/// slot untouched. `intl` supplies punctuation, currency, and negative
+/// style for `format_number`.
+pub fn render_value_in_cell(
+    v: &Value,
+    width: usize,
+    format: Format,
+    intl: &crate::International,
+) -> Option<String> {
     match v {
         Value::Number(n) => {
-            let s = crate::format_number(*n, format);
+            let s = crate::format_number(*n, format, intl);
             if s.chars().count() > width && !matches!(format.kind, FormatKind::General) {
                 Some("*".repeat(width))
             } else {

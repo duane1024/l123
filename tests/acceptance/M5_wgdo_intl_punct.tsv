@@ -1,0 +1,78 @@
+# /Worksheet Global Default Other International Punctuation A..H —
+# selects the locale's decimal point, function-argument separator, and
+# thousands-grouping character. Today's default is Punctuation A
+# (decimal `.`, argument `,`, thousands `,`).
+
+SIZE 80 30
+
+# Seed a comma-formatted cell (A1) so the display reflects each
+# Punctuation switch.
+KEYS 1234567
+ENTER
+HOME
+KEY /
+KEY R
+KEY F
+KEY ,
+KEY 0
+ENTER
+ENTER
+ASSERT_PANEL_L1   A:A1: (,0) 1234567
+ASSERT_CELL       A:A1  1,234,567
+
+# /WGDOIP A — explicit US default. Display unchanged.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Punctuation
+ASSERT_PANEL_L2   Currency
+ASSERT_PANEL_L2   Date
+ASSERT_PANEL_L2   Time
+ASSERT_PANEL_L2   Negative
+KEY P
+ASSERT_PANEL_L2   A
+ASSERT_PANEL_L2   H
+KEY A
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  1,234,567
+
+# /WGDOIP B — decimal `,`, argument `.`, thousands `.`. The comma cell
+# now displays with `.` thousands.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY P
+KEY B
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  1.234.567
+
+# /WGDOIP C — thousands becomes a space.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY P
+KEY C
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  1 234 567
+
+# /WGDOIP H — last variant in the table; thousands space, decimal `,`.
+KEY /
+KEY W
+KEY G
+KEY D
+KEY O
+KEY I
+KEY P
+KEY H
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  1 234 567

@@ -64,7 +64,8 @@ pub fn render<V: WorkbookView + ?Sized>(
                 Some(CellContents::Label { prefix, text }) => render_label(*prefix, text, w),
                 Some(CellContents::Constant(v)) => {
                     let fmt = view.format_for_cell(addr);
-                    render_value_in_cell(v, w, fmt).unwrap_or_else(|| " ".repeat(w))
+                    render_value_in_cell(v, w, fmt, view.international())
+                        .unwrap_or_else(|| " ".repeat(w))
                 }
                 Some(CellContents::Formula { expr, cached_value }) => match content_mode {
                     PrintContentMode::CellFormulas => {
@@ -77,7 +78,8 @@ pub fn render<V: WorkbookView + ?Sized>(
                     PrintContentMode::AsDisplayed => match cached_value {
                         Some(v) => {
                             let fmt = view.format_for_cell(addr);
-                            render_value_in_cell(v, w, fmt).unwrap_or_else(|| " ".repeat(w))
+                            render_value_in_cell(v, w, fmt, view.international())
+                                .unwrap_or_else(|| " ".repeat(w))
                         }
                         None => " ".repeat(w),
                     },

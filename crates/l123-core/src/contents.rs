@@ -83,8 +83,12 @@ impl CellContents {
     ///
     /// Formulas (leading `+`/`@` that don't parse as numbers) land in M2;
     /// for now they become labels, which is safe and reversible.
-    pub fn from_source(s: &str, default_prefix: LabelPrefix) -> CellContents {
-        Self::from_source_with_format(s, default_prefix).0
+    pub fn from_source(
+        s: &str,
+        default_prefix: LabelPrefix,
+        intl: &crate::International,
+    ) -> CellContents {
+        Self::from_source_with_format(s, default_prefix, intl).0
     }
 
     /// Like [`Self::from_source`] but also returns the inferred display
@@ -95,6 +99,7 @@ impl CellContents {
     pub fn from_source_with_format(
         s: &str,
         default_prefix: LabelPrefix,
+        intl: &crate::International,
     ) -> (CellContents, Option<Format>) {
         let mut chars = s.chars();
         match chars.next() {
@@ -109,7 +114,7 @@ impl CellContents {
                     None,
                 )
             }
-            Some(c) if is_value_starter(c) => match parse_typed_value(s) {
+            Some(c) if is_value_starter(c) => match parse_typed_value(s, intl) {
                 Some(iv) => (CellContents::Constant(Value::Number(iv.number)), iv.format),
                 None => (
                     CellContents::Formula {
@@ -143,16 +148,22 @@ pub struct InferredValue {
 /// percent (`12%`), thousands-separated (`1,234`), parenthesized
 /// negative (`(123)`), or any combination thereof. Returns `None` for
 /// inputs that aren't numeric (formulas, garbage, empty).
-pub fn parse_typed_value(s: &str) -> Option<InferredValue> {
+///
+/// `intl` supplies the punctuation triple — under non-default
+/// punctuations, `1.234,5` (Punct B) and `1 234.5` (Punct C) are valid
+/// numeric input shapes.
+pub fn parse_typed_value(s: &str, intl: &crate::International) -> Option<InferredValue> {
     let s = s.trim();
     if s.is_empty() {
         return None;
     }
+    let dec = intl.punctuation.decimal_char();
+    let thou = intl.punctuation.thousands_sep();
     let mut t = s;
     let mut negate = false;
     let mut is_currency = false;
     let mut is_percent = false;
-    let mut had_commas = false;
+    let mut had_thousands = false;
 
     // Outer parens → negate (handles `(123)` and similar).
     if let Some(inner) = t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
@@ -192,19 +203,20 @@ pub fn parse_typed_value(s: &str) -> Option<InferredValue> {
         return None;
     }
 
-    // Strip thousands `,` separators. Reject if `,` appears in the
-    // fractional part — that's neither a number nor a Lotus shape.
-    let cleaned: String = if t.contains(',') {
-        had_commas = true;
-        let (int_part, frac_part) = match t.find('.') {
+    // Strip thousands separators from the integer part. Reject if the
+    // thousands separator appears in the fractional part — that's
+    // neither a number nor a Lotus shape.
+    let cleaned: String = if t.contains(thou) {
+        had_thousands = true;
+        let (int_part, frac_part) = match t.find(dec) {
             Some(i) => (&t[..i], &t[i..]),
             None => (t, ""),
         };
-        if frac_part.contains(',') {
+        if frac_part.contains(thou) {
             return None;
         }
         let mut s = String::with_capacity(t.len());
-        s.extend(int_part.chars().filter(|c| *c != ','));
+        s.extend(int_part.chars().filter(|c| *c != thou));
         s.push_str(frac_part);
         s
     } else {
@@ -214,7 +226,14 @@ pub fn parse_typed_value(s: &str) -> Option<InferredValue> {
     if cleaned.is_empty() {
         return None;
     }
-    let mut number: f64 = cleaned.parse().ok()?;
+    // Swap the user's decimal char to canonical `.` so f64::from_str
+    // accepts it. No-op when Punct A (decimal already `.`).
+    let canonical = if dec == '.' {
+        cleaned
+    } else {
+        cleaned.replace(dec, ".")
+    };
+    let mut number: f64 = canonical.parse().ok()?;
     if is_percent {
         number /= 100.0;
     }
@@ -222,8 +241,8 @@ pub fn parse_typed_value(s: &str) -> Option<InferredValue> {
         number = -number;
     }
 
-    let decimals = match cleaned.find('.') {
-        Some(i) => (cleaned.len() - i - 1).min(15) as u8,
+    let decimals = match canonical.find('.') {
+        Some(i) => (canonical.len() - i - 1).min(15) as u8,
         None => 0,
     };
 
@@ -231,7 +250,7 @@ pub fn parse_typed_value(s: &str) -> Option<InferredValue> {
         Some(Format::currency(decimals))
     } else if is_percent {
         Some(Format::percent(decimals))
-    } else if had_commas {
+    } else if had_thousands {
         Some(Format::comma(decimals))
     } else {
         None
@@ -282,6 +301,12 @@ pub fn format_number_general(n: f64) -> String {
 mod tests {
     use super::*;
     use crate::format::Format;
+    use crate::international::Punctuation;
+    use crate::International;
+
+    fn intl() -> International {
+        International::default()
+    }
 
     #[test]
     fn empty_readout_is_empty() {
@@ -348,7 +373,7 @@ mod tests {
     #[test]
     fn from_source_empty() {
         assert_eq!(
-            CellContents::from_source("", LabelPrefix::Apostrophe),
+            CellContents::from_source("", LabelPrefix::Apostrophe, &intl()),
             CellContents::Empty
         );
     }
@@ -356,7 +381,7 @@ mod tests {
     #[test]
     fn from_source_default_label() {
         assert_eq!(
-            CellContents::from_source("hello", LabelPrefix::Apostrophe),
+            CellContents::from_source("hello", LabelPrefix::Apostrophe, &intl()),
             CellContents::Label {
                 prefix: LabelPrefix::Apostrophe,
                 text: "hello".into(),
@@ -372,7 +397,7 @@ mod tests {
             ("^center", LabelPrefix::Caret, "center"),
             ("\\-", LabelPrefix::Backslash, "-"),
         ] {
-            let got = CellContents::from_source(src, LabelPrefix::Apostrophe);
+            let got = CellContents::from_source(src, LabelPrefix::Apostrophe, &intl());
             assert_eq!(
                 got,
                 CellContents::Label {
@@ -387,23 +412,23 @@ mod tests {
     #[test]
     fn from_source_number() {
         assert_eq!(
-            CellContents::from_source("42", LabelPrefix::Apostrophe),
+            CellContents::from_source("42", LabelPrefix::Apostrophe, &intl()),
             CellContents::Constant(Value::Number(42.0))
         );
         assert_eq!(
-            CellContents::from_source("-1.25", LabelPrefix::Apostrophe),
+            CellContents::from_source("-1.25", LabelPrefix::Apostrophe, &intl()),
             CellContents::Constant(Value::Number(-1.25))
         );
     }
 
     #[test]
     fn from_source_non_number_value_starter_is_formula() {
-        let got = CellContents::from_source("+A1", LabelPrefix::Apostrophe);
+        let got = CellContents::from_source("+A1", LabelPrefix::Apostrophe, &intl());
         assert!(matches!(
             got,
             CellContents::Formula { expr, cached_value: None } if expr == "+A1"
         ));
-        let got = CellContents::from_source("@SUM(A1..A5)", LabelPrefix::Apostrophe);
+        let got = CellContents::from_source("@SUM(A1..A5)", LabelPrefix::Apostrophe, &intl());
         assert!(matches!(
             got,
             CellContents::Formula { expr, cached_value: None }
@@ -434,86 +459,86 @@ mod tests {
 
     #[test]
     fn parse_typed_value_plain_number() {
-        let iv = parse_typed_value("1234").unwrap();
+        let iv = parse_typed_value("1234", &intl()).unwrap();
         assert_eq!(iv.number, 1234.0);
         assert_eq!(iv.format, None);
 
-        let iv = parse_typed_value("1234.5").unwrap();
+        let iv = parse_typed_value("1234.5", &intl()).unwrap();
         assert_eq!(iv.number, 1234.5);
         assert_eq!(iv.format, None);
 
-        let iv = parse_typed_value("-1234").unwrap();
+        let iv = parse_typed_value("-1234", &intl()).unwrap();
         assert_eq!(iv.number, -1234.0);
         assert_eq!(iv.format, None);
     }
 
     #[test]
     fn parse_typed_value_currency() {
-        let iv = parse_typed_value("$1234").unwrap();
+        let iv = parse_typed_value("$1234", &intl()).unwrap();
         assert_eq!(iv.number, 1234.0);
         assert_eq!(iv.format, Some(Format::currency(0)));
 
-        let iv = parse_typed_value("$1234.56").unwrap();
+        let iv = parse_typed_value("$1234.56", &intl()).unwrap();
         assert_eq!(iv.number, 1234.56);
         assert_eq!(iv.format, Some(Format::currency(2)));
 
-        let iv = parse_typed_value("$1,234.50").unwrap();
+        let iv = parse_typed_value("$1,234.50", &intl()).unwrap();
         assert_eq!(iv.number, 1234.5);
         assert_eq!(iv.format, Some(Format::currency(2)));
     }
 
     #[test]
     fn parse_typed_value_percent() {
-        let iv = parse_typed_value("12%").unwrap();
+        let iv = parse_typed_value("12%", &intl()).unwrap();
         assert!((iv.number - 0.12).abs() < 1e-9);
         assert_eq!(iv.format, Some(Format::percent(0)));
 
-        let iv = parse_typed_value("12.5%").unwrap();
+        let iv = parse_typed_value("12.5%", &intl()).unwrap();
         assert!((iv.number - 0.125).abs() < 1e-9);
         assert_eq!(iv.format, Some(Format::percent(1)));
     }
 
     #[test]
     fn parse_typed_value_comma() {
-        let iv = parse_typed_value("1,234").unwrap();
+        let iv = parse_typed_value("1,234", &intl()).unwrap();
         assert_eq!(iv.number, 1234.0);
         assert_eq!(iv.format, Some(Format::comma(0)));
 
-        let iv = parse_typed_value("1,234.567").unwrap();
+        let iv = parse_typed_value("1,234.567", &intl()).unwrap();
         assert!((iv.number - 1234.567).abs() < 1e-9);
         assert_eq!(iv.format, Some(Format::comma(3)));
     }
 
     #[test]
     fn parse_typed_value_paren_negate() {
-        let iv = parse_typed_value("(123)").unwrap();
+        let iv = parse_typed_value("(123)", &intl()).unwrap();
         assert_eq!(iv.number, -123.0);
         assert_eq!(iv.format, None);
     }
 
     #[test]
     fn parse_typed_value_dollar_paren_negate() {
-        let iv = parse_typed_value("$(50.00)").unwrap();
+        let iv = parse_typed_value("$(50.00)", &intl()).unwrap();
         assert_eq!(iv.number, -50.0);
         assert_eq!(iv.format, Some(Format::currency(2)));
     }
 
     #[test]
     fn parse_typed_value_neg_dollar() {
-        let iv = parse_typed_value("-$50").unwrap();
+        let iv = parse_typed_value("-$50", &intl()).unwrap();
         assert_eq!(iv.number, -50.0);
         assert_eq!(iv.format, Some(Format::currency(0)));
     }
 
     #[test]
     fn parse_typed_value_rejects_formulas_and_garbage() {
-        assert!(parse_typed_value("+A1").is_none());
-        assert!(parse_typed_value("=A1+B1").is_none());
-        assert!(parse_typed_value("$$5").is_none());
-        assert!(parse_typed_value("1.2.3").is_none());
-        assert!(parse_typed_value("(123").is_none());
-        assert!(parse_typed_value("hello").is_none());
-        assert!(parse_typed_value("").is_none());
+        assert!(parse_typed_value("+A1", &intl()).is_none());
+        assert!(parse_typed_value("=A1+B1", &intl()).is_none());
+        assert!(parse_typed_value("$$5", &intl()).is_none());
+        assert!(parse_typed_value("1.2.3", &intl()).is_none());
+        assert!(parse_typed_value("(123", &intl()).is_none());
+        assert!(parse_typed_value("hello", &intl()).is_none());
+        assert!(parse_typed_value("", &intl()).is_none());
     }
 
     #[test]
@@ -531,8 +556,52 @@ mod tests {
             CellContents::Constant(Value::Number(1.25)),
         ] {
             let s = c.source_form();
-            let back = CellContents::from_source(&s, LabelPrefix::Apostrophe);
+            let back = CellContents::from_source(&s, LabelPrefix::Apostrophe, &intl());
             assert_eq!(back, c, "roundtrip via {s:?}");
         }
+    }
+
+    fn intl_with(p: Punctuation) -> International {
+        International {
+            punctuation: p,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn parse_typed_value_under_punct_b_uses_comma_as_decimal() {
+        let i = intl_with(Punctuation::B);
+        let iv = parse_typed_value("1234,5", &i).unwrap();
+        assert_eq!(iv.number, 1234.5);
+        assert_eq!(iv.format, None);
+
+        let iv = parse_typed_value("1.234,50", &i).unwrap();
+        assert_eq!(iv.number, 1234.5);
+        assert_eq!(iv.format, Some(Format::comma(2)));
+    }
+
+    #[test]
+    fn parse_typed_value_under_punct_b_rejects_dot_in_fractional() {
+        // Under Punct B, `.` is the thousands separator. `1,2.3` puts
+        // the thousands sep in the fractional part — not a Lotus shape.
+        let i = intl_with(Punctuation::B);
+        assert!(parse_typed_value("1,2.3", &i).is_none());
+    }
+
+    #[test]
+    fn parse_typed_value_under_punct_c_accepts_space_thousands() {
+        // Punct C: thousands ' ', decimal `.`.
+        let i = intl_with(Punctuation::C);
+        let iv = parse_typed_value("1 234.50", &i).unwrap();
+        assert_eq!(iv.number, 1234.5);
+        assert_eq!(iv.format, Some(Format::comma(2)));
+    }
+
+    #[test]
+    fn parse_typed_value_under_punct_b_currency_with_thousands() {
+        let i = intl_with(Punctuation::B);
+        let iv = parse_typed_value("$1.234,50", &i).unwrap();
+        assert_eq!(iv.number, 1234.5);
+        assert_eq!(iv.format, Some(Format::currency(2)));
     }
 }
