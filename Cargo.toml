@@ -16,11 +16,11 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/duane1024/l123"
-rust-version = "1.95"
+rust-version = "1.92"
 
 [workspace.dependencies]
 # internal
