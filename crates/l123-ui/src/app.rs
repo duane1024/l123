@@ -3891,7 +3891,9 @@ impl App {
             Action::FormatColorBgRed => self.begin_color(ColorTarget::Background, PALETTE_RED),
             Action::FormatColorBgGreen => self.begin_color(ColorTarget::Background, PALETTE_GREEN),
             Action::FormatColorBgBlue => self.begin_color(ColorTarget::Background, PALETTE_BLUE),
-            Action::FormatColorBgYellow => self.begin_color(ColorTarget::Background, PALETTE_YELLOW),
+            Action::FormatColorBgYellow => {
+                self.begin_color(ColorTarget::Background, PALETTE_YELLOW)
+            }
             Action::FormatColorBgCyan => self.begin_color(ColorTarget::Background, PALETTE_CYAN),
             Action::FormatColorBgMagenta => {
                 self.begin_color(ColorTarget::Background, PALETTE_MAGENTA)
@@ -7239,12 +7241,7 @@ impl App {
         // No recalc needed — format is presentation only.
     }
 
-    fn execute_range_color(
-        &mut self,
-        range: Range,
-        target: ColorTarget,
-        color: Option<RgbColor>,
-    ) {
+    fn execute_range_color(&mut self, range: Range, target: ColorTarget, color: Option<RgbColor>) {
         let r = range.normalized();
         let sheets: Vec<SheetId> = if self.group_mode {
             (0..self.wb().engine.sheet_count()).map(SheetId).collect()
@@ -9546,19 +9543,33 @@ impl App {
                 // inverted selection stays visually loud; the fill
                 // returns the moment the pointer leaves.
                 if !highlighted {
-                    if let Some(fill) = self.wb().cell_fills.get(&style_addr) {
-                        if let Some(rgb) = fill.bg {
-                            cell_style = cell_style.bg(Color::Rgb(rgb.r, rgb.g, rgb.b));
-                        }
+                    let fill_bg = self
+                        .wb()
+                        .cell_fills
+                        .get(&style_addr)
+                        .and_then(|fill| fill.bg);
+                    if let Some(rgb) = fill_bg {
+                        cell_style = cell_style.bg(Color::Rgb(rgb.r, rgb.g, rgb.b));
                     }
-                    // xlsx-imported font color tints the text. Same
-                    // rule as fill: skip when highlighted so the
-                    // inverted pointer cell reads the terminal's
-                    // default swap, not a custom color inside it.
-                    if let Some(fs) = self.wb().cell_font_styles.get(&style_addr) {
-                        if let Some(rgb) = fs.color {
-                            cell_style = cell_style.fg(Color::Rgb(rgb.r, rgb.g, rgb.b));
-                        }
+                    // xlsx-imported font color tints the text.  Same
+                    // pointer-suppression rule as fill.  Order of
+                    // precedence: an explicit font color from the
+                    // workbook always wins; otherwise the cell defers
+                    // to the terminal's own foreground so unfilled
+                    // and filled cells share one aesthetic — except
+                    // when the fill is light enough to wash out the
+                    // typical light terminal fg.  That last case
+                    // mirrors Excel's "automatic" font color flipping
+                    // to black on light fills in dark themes.
+                    let explicit_fg = self
+                        .wb()
+                        .cell_font_styles
+                        .get(&style_addr)
+                        .and_then(|fs| fs.color);
+                    let resolved_fg = explicit_fg
+                        .or_else(|| fill_bg.and_then(|bg| bg.auto_contrast_for_dark_terminal()));
+                    if let Some(rgb) = resolved_fg {
+                        cell_style = cell_style.fg(Color::Rgb(rgb.r, rgb.g, rgb.b));
                     }
                 }
                 // Strikethrough applies whether highlighted or not —
