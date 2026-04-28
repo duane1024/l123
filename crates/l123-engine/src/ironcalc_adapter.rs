@@ -391,8 +391,9 @@ impl Engine for IronCalcEngine {
             s.font.sz = sz as i32;
         }
         // Font color: IronCalc expects a `#RRGGBB` hex string (no
-        // alpha).  `None` clears the override by dropping back to
-        // IronCalc's own default color string.
+        // alpha).  `None` writes the OOXML "automatic" sentinel —
+        // the saved xlsx will omit `<color>` on this cell's font, and
+        // the renderer will pick a contrasting fg if a fill is set.
         s.font.color = style.color.map(|c| format!("#{}", c.to_rgb_hex()));
         s.font.strike = style.strike;
         self.model
@@ -1177,17 +1178,27 @@ impl IronCalcEngine {
                     else {
                         continue;
                     };
+                    // OOXML's "automatic" font color reaches us in three
+                    // shapes that IronCalc collapses to either `None` or
+                    // `Some("#000000")`:
+                    //   - `<font>` with no `<color>` child → `None`
+                    //   - `<color auto="1"/>`              → `None`
+                    //   - `<color theme="1"/>`             → `Some("#000000")`
+                    //     (resolved via the theme palette)
+                    //   - IronCalc's in-memory `Font::default()` has
+                    //     `Some("#000000")` and that leaks into any cell
+                    //     touched by `set_cell_style`.
+                    // Treat all of those as "no override" so the renderer
+                    // can decide between terminal-default fg and
+                    // auto-contrast.  The corner case (a user explicitly
+                    // picked rgb black) loses round-trip fidelity in the
+                    // adapter view; the alternative would be painting
+                    // black on every Excel-authored cell.
                     let color = style
                         .font
                         .color
                         .as_deref()
                         .and_then(RgbColor::from_hex)
-                        // IronCalc fills in "#000000" as the default;
-                        // treat pure black as "no override" so we don't
-                        // tint cells the user never touched.  A user who
-                        // genuinely wants black text can still set it,
-                        // and the xlsx will carry it, just won't round
-                        // back into the `used_cell_font_styles` view.
                         .filter(|c| *c != RgbColor::BLACK);
                     let size = if style.font.sz != DEFAULT_SIZE {
                         Some((style.font.sz as u8).max(1))
