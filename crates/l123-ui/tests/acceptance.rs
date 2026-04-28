@@ -975,6 +975,7 @@ transcripts! {
     xlsx_fill                    => "xlsx_fill.tsv",
     xlsx_sheet_color             => "xlsx_sheet_color.tsv",
     xlsx_font                    => "xlsx_font.tsv",
+    xlsx_auto_contrast           => "auto_contrast.tsv",
     xlsx_borders                 => "xlsx_borders.tsv",
     xlsx_comments                => "xlsx_comments.tsv",
     xlsx_merges                  => "xlsx_merges.tsv",

@@ -1,0 +1,55 @@
+# When an imported xlsx cell has a fill but no explicit font color we
+# default to the terminal's own foreground (typically a light color on
+# a dark background) so filled and unfilled cells share one aesthetic.
+# The exception: light fills like yellow would wash out a light fg, so
+# we override to black there.  Mirrors Excel's "automatic" font color
+# flipping to black on light fills in a dark theme.
+#
+# Fixture: tests/acceptance/fixtures/xlsx/auto_contrast.xlsx
+#   A1 'auto-light'    fill = #FFFF00 (yellow)   no font color
+#   B1 'auto-dark'     fill = #C00000 (dark red) no font color
+#   C1 'explicit-red'  fill = #FFFF00 (yellow)   font = #FF0000
+#   D1 'explicit-blk'  no fill                   font = #000000
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter file to retrieve
+KEYS tests/acceptance/fixtures/xlsx/auto_contrast.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Pointer starts on A1 — its fill+fg are suppressed under the REVERSED
+# highlight, same rule as xlsx_fill / xlsx_font.  Drive past every
+# cell under test so the renderer paints them normally.
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER   A:E1
+
+# Light fill (yellow) — terminal default fg would wash out, override to
+# black.
+ASSERT_CELL_BG   A:A1  FFFF00
+ASSERT_CELL_FG   A:A1  000000
+
+# Dark fill (deep red) — terminal default fg reads fine, leave fg unset
+# so the cell looks consistent with the surrounding non-filled rows.
+ASSERT_CELL_BG   A:B1  C00000
+ASSERT_CELL_FG   A:B1  none
+
+# Explicit font color wins even when fill is set.
+ASSERT_CELL_BG   A:C1  FFFF00
+ASSERT_CELL_FG   A:C1  FF0000
+
+# Explicit black is collapsed into the "automatic" path (pure black is
+# the OOXML automatic-color sentinel — Excel emits `<color theme="1"/>`
+# for cells the user never colored, and IronCalc resolves that to
+# `Some("#000000")`, indistinguishable from a literal black choice).
+# With no fill there's nothing to auto-contrast against, so the cell
+# falls back to the terminal's own foreground.
+ASSERT_CELL_BG   A:D1  none
+ASSERT_CELL_FG   A:D1  none

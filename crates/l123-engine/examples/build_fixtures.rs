@@ -34,6 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     regen(&out_dir.join("fill.xlsx"), build_fill)?;
     regen(&out_dir.join("sheet_color.xlsx"), build_sheet_color)?;
     regen(&out_dir.join("font.xlsx"), build_font)?;
+    regen(&out_dir.join("auto_contrast.xlsx"), build_auto_contrast)?;
     regen(&out_dir.join("borders.xlsx"), build_borders)?;
     regen(&out_dir.join("comments.xlsx"), build_comments)?;
     regen(&out_dir.join("merges.xlsx"), build_merges)?;
@@ -227,6 +228,39 @@ fn build_font(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     write_cell_with_font(&mut model, 1, 3, "'struck", None, true)?;
     // D1 plain — no font override.
     model.set_user_input(0, 1, 4, "'plain".to_string())?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF8 path: {}", path.display()))?;
+    save_to_xlsx(&model, path_str)?;
+    println!("  {}", path.display());
+    Ok(())
+}
+
+/// `auto_contrast.xlsx` — exercises automatic foreground colors on
+/// cells with explicit fills.  Excel's "automatic" font color flips
+/// with fill luminance (black on light, white on dark); when the
+/// imported workbook lands in a TUI on a dark terminal the same rule
+/// must apply or the text is illegible.
+///
+///   A1 'auto-light'    fill = #FFFF00 (yellow)   no font color
+///   B1 'auto-dark'     fill = #C00000 (dark red) no font color
+///   C1 'explicit-red'  fill = #FFFF00 (yellow)   font = #FF0000
+///   D1 'explicit-blk'  no fill                   font = #000000
+fn build_auto_contrast(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = Model::new_empty("auto_contrast", "en", "UTC", "en")?;
+    write_cell_with_fill(&mut model, 1, 1, "'auto-light", "FFFF00")?;
+    write_cell_with_fill(&mut model, 1, 2, "'auto-dark", "C00000")?;
+    // C1 — fill + explicit font color (red).  Combined writer: set
+    // fill first, then set the font color on the same style read back.
+    write_cell_with_fill(&mut model, 1, 3, "'explicit-red", "FFFF00")?;
+    {
+        let mut style = model.get_style_for_cell(0, 1, 3)?;
+        style.font.color = Some("#FF0000".to_string());
+        model.set_cell_style(0, 1, 3, &style)?;
+    }
+    // D1 — explicit black font, no fill.  Round-trips as Some(BLACK)
+    // once the IronCalc fork preserves explicit `<color rgb="..."/>`.
+    write_cell_with_font(&mut model, 1, 4, "'explicit-blk", Some("#000000"), false)?;
     let path_str = path
         .to_str()
         .ok_or_else(|| format!("non-UTF8 path: {}", path.display()))?;
