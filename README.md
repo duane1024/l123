@@ -39,6 +39,23 @@ API, keybindings, and file paths may still change before v1.0.
 
 ## ✦ Install
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install duane1024/l123/l123
+```
+
+Or tap once and install by name:
+
+```bash
+brew tap duane1024/l123
+brew install l123
+```
+
+Upgrade later with `brew upgrade l123`.
+
+### From source
+
 Requires Rust stable (pinned via `rust-toolchain.toml`).
 
 ```bash
