@@ -40,6 +40,16 @@ pub enum SpillSlot<'a> {
 pub struct PaintedSlot {
     pub text: String,
     pub owner: usize,
+    /// Local index in `text` (inclusive) where the slot's underlying
+    /// content begins, vs alignment / spill padding.  When the slot
+    /// is all padding (or empty), `text_start == text_end == 0`.
+    pub text_start: usize,
+    /// Local index in `text` (exclusive) where the underlying content
+    /// ends.  Renderers use `[text_start, text_end)` to scope
+    /// glyph-anchored attributes (underline, strikethrough) so they
+    /// don't paint over leading/trailing padding — including the
+    /// padding past a spilled label's last character.
+    pub text_end: usize,
 }
 
 /// `PaintedSlot == "literal"` compares just the text.  Lets existing
@@ -69,6 +79,8 @@ pub fn plan_row_spill(slots: &[SpillSlot<'_>], widths: &[usize]) -> Vec<PaintedS
         .map(|(i, w)| PaintedSlot {
             text: " ".repeat(*w),
             owner: i,
+            text_start: 0,
+            text_end: 0,
         })
         .collect();
     let mut claimed: Vec<bool> = vec![false; slots.len()];
@@ -76,9 +88,12 @@ pub fn plan_row_spill(slots: &[SpillSlot<'_>], widths: &[usize]) -> Vec<PaintedS
     for i in 0..slots.len() {
         match &slots[i] {
             SpillSlot::Rendered(s) => {
+                let (text_start, text_end) = trim_text_bounds(s);
                 out[i] = PaintedSlot {
                     text: s.clone(),
                     owner: i,
+                    text_start,
+                    text_end,
                 };
                 claimed[i] = true;
             }
@@ -87,9 +102,12 @@ pub fn plan_row_spill(slots: &[SpillSlot<'_>], widths: &[usize]) -> Vec<PaintedS
                 let own_w = widths[i];
                 let text_len = text.chars().count();
                 if *prefix == LabelPrefix::Backslash || text_len <= own_w {
+                    let (text_start, text_end) = label_text_bounds(*prefix, text_len, own_w);
                     out[i] = PaintedSlot {
                         text: render_label(*prefix, text, own_w),
                         owner: i,
+                        text_start,
+                        text_end,
                     };
                     claimed[i] = true;
                     continue;
@@ -102,15 +120,19 @@ pub fn plan_row_spill(slots: &[SpillSlot<'_>], widths: &[usize]) -> Vec<PaintedS
                     LabelPrefix::Caret => center_pad(text, span_w),
                     LabelPrefix::Backslash => unreachable!("handled above"),
                 };
+                let (g_start, g_end) = label_text_bounds(*prefix, text_len, span_w);
                 let chars: Vec<char> = full.chars().collect();
                 let mut idx = 0;
                 for k in start..=end {
                     let w = widths[k];
                     let slice: String = chars.iter().skip(idx).take(w).collect();
+                    let (text_start, text_end) = clamp_to_local(g_start, g_end, idx, w);
                     idx += w;
                     out[k] = PaintedSlot {
                         text: slice,
                         owner: i,
+                        text_start,
+                        text_end,
                     };
                     claimed[k] = true;
                 }
@@ -118,6 +140,53 @@ pub fn plan_row_spill(slots: &[SpillSlot<'_>], widths: &[usize]) -> Vec<PaintedS
         }
     }
     out
+}
+
+/// Local indices `[start, end)` in `text` covered by the actual
+/// content of a label rendered into `width` chars under `prefix`'s
+/// alignment.  Used for both single-cell labels and per-slot bounds
+/// of a spilled label (in which case `width` is the spill span).
+pub fn label_text_bounds(prefix: LabelPrefix, text_len: usize, width: usize) -> (usize, usize) {
+    let text_len = text_len.min(width);
+    if text_len == 0 {
+        return (0, 0);
+    }
+    match prefix {
+        LabelPrefix::Apostrophe | LabelPrefix::Pipe => (0, text_len),
+        LabelPrefix::Quote => (width - text_len, width),
+        LabelPrefix::Caret => {
+            let left = (width - text_len) / 2;
+            (left, left + text_len)
+        }
+        LabelPrefix::Backslash => (0, width),
+    }
+}
+
+/// Intersect the global text range `[g_start, g_end)` against a slot
+/// occupying `[slot_off, slot_off + slot_w)` and return the result in
+/// slot-local coordinates.  An empty intersection collapses to
+/// `(0, 0)` so callers can treat the slot as all-padding.
+fn clamp_to_local(g_start: usize, g_end: usize, slot_off: usize, slot_w: usize) -> (usize, usize) {
+    let slot_end = slot_off + slot_w;
+    if g_end <= slot_off || g_start >= slot_end {
+        return (0, 0);
+    }
+    let s = g_start.saturating_sub(slot_off);
+    let e = g_end.min(slot_end) - slot_off;
+    (s, e)
+}
+
+/// Trim leading and trailing ASCII spaces and return the resulting
+/// `[start, end)` range.  Used for opaque pre-rendered slot strings
+/// (numbers, formulas) where the alignment origin isn't known here.
+fn trim_text_bounds(s: &str) -> (usize, usize) {
+    let chars: Vec<char> = s.chars().collect();
+    let first = chars.iter().position(|c| *c != ' ');
+    let last = chars.iter().rposition(|c| *c != ' ');
+    match (first, last) {
+        (Some(s), Some(e)) => (s, e + 1),
+        _ => (0, 0),
+    }
 }
 
 fn is_available(slots: &[SpillSlot<'_>], claimed: &[bool], idx: usize) -> bool {
@@ -584,6 +653,113 @@ mod tests {
             apply_halign_to_rendered("x        ", HAlign::Fill, 9),
             "xxxxxxxxx"
         );
+    }
+
+    #[test]
+    fn apostrophe_spill_marks_internal_boundary_space_as_text() {
+        // Regression: when a label spills, an internal whitespace
+        // that happens to land at a cell boundary must be reported
+        // as text, not as leading/trailing padding of the slot.
+        // Otherwise glyph-anchored attributes (underline) drop out
+        // at column seams.
+        let slots = [
+            label(LabelPrefix::Apostrophe, "INCOME SUMMARY 1991: Sloane Camera and Video"),
+            SpillSlot::Empty,
+            SpillSlot::Empty,
+            SpillSlot::Empty,
+            SpillSlot::Empty,
+            SpillSlot::Empty,
+        ];
+        let got = plan_row_spill(&slots, &[20, 9, 9, 9, 9, 9]);
+        // Slot 0 holds "INCOME SUMMARY 1991:" (20 chars, all text).
+        assert_eq!(got[0].text, "INCOME SUMMARY 1991:");
+        assert_eq!((got[0].text_start, got[0].text_end), (0, 20));
+        // Slot 1 starts with the space between "1991:" and "Sloane" —
+        // that space is part of the original text, so the whole slot
+        // is text (text_start = 0).
+        assert_eq!(got[1].text, " Sloane C");
+        assert_eq!((got[1].text_start, got[1].text_end), (0, 9));
+        // Slot 3 is the tail "_Video" plus trailing pad spaces.
+        // Its text portion ends after 'o' (6 chars), padding follows.
+        assert_eq!(got[3].text, " Video   ");
+        assert_eq!((got[3].text_start, got[3].text_end), (0, 6));
+        // Slot 4 and 5 are entirely past the label — no text at all.
+        assert_eq!((got[4].text_start, got[4].text_end), (0, 0));
+        assert_eq!((got[5].text_start, got[5].text_end), (0, 0));
+    }
+
+    #[test]
+    fn quote_spill_text_bounds_cover_internal_spaces() {
+        // Right-aligned spill: leading " " on slot 0 is padding,
+        // the internal space inside "hello world" is text.
+        let slots = [
+            SpillSlot::Empty,
+            label(LabelPrefix::Quote, "hello world"),
+        ];
+        let got = plan_row_spill(&slots, &[9, 9]);
+        // Span = 18, text_len = 11, leading pad = 7.
+        // Slot 0: "       he" → text at [7, 9).
+        assert_eq!(got[0].text, "       he");
+        assert_eq!((got[0].text_start, got[0].text_end), (7, 9));
+        // Slot 1: "llo world" → all text (the internal space
+        // between "llo" and "world" stays in the run).
+        assert_eq!(got[1].text, "llo world");
+        assert_eq!((got[1].text_start, got[1].text_end), (0, 9));
+    }
+
+    #[test]
+    fn caret_spill_text_bounds_cover_internal_spaces() {
+        let slots = [
+            SpillSlot::Empty,
+            label(LabelPrefix::Caret, "centered text"),
+            SpillSlot::Empty,
+        ];
+        let got = plan_row_spill(&slots, &[9, 9, 9]);
+        // span=27, text_len=13, left pad = 7.  text at [7, 20).
+        // Slot 0: "       ce" → [7, 9).
+        assert_eq!((got[0].text_start, got[0].text_end), (7, 9));
+        // Slot 1: "ntered te" → [0, 9) (entirely inside text run).
+        assert_eq!((got[1].text_start, got[1].text_end), (0, 9));
+        // Slot 2: "xt       " → [0, 2).
+        assert_eq!((got[2].text_start, got[2].text_end), (0, 2));
+    }
+
+    #[test]
+    fn non_spilled_label_text_bounds_match_alignment() {
+        // Apostrophe (left): text first.
+        let got = plan_row_spill(&[label(LabelPrefix::Apostrophe, "hi")], &[9]);
+        assert_eq!((got[0].text_start, got[0].text_end), (0, 2));
+        // Quote (right): text last.
+        let got = plan_row_spill(&[label(LabelPrefix::Quote, "hi")], &[9]);
+        assert_eq!((got[0].text_start, got[0].text_end), (7, 9));
+        // Caret (center): symmetric.
+        let got = plan_row_spill(&[label(LabelPrefix::Caret, "hi")], &[9]);
+        assert_eq!((got[0].text_start, got[0].text_end), (3, 5));
+        // Backslash (fill): every char is text.
+        let got = plan_row_spill(&[label(LabelPrefix::Backslash, "-")], &[9]);
+        assert_eq!((got[0].text_start, got[0].text_end), (0, 9));
+    }
+
+    #[test]
+    fn rendered_slot_text_bounds_strip_leading_and_trailing_pad() {
+        // Right-aligned number: "       42" — text at [7, 9).
+        let got = plan_row_spill(&[rendered("       42")], &[9]);
+        assert_eq!((got[0].text_start, got[0].text_end), (7, 9));
+        // Left-aligned text: "hi       " — text at [0, 2).
+        let got = plan_row_spill(&[rendered("hi       ")], &[9]);
+        assert_eq!((got[0].text_start, got[0].text_end), (0, 2));
+        // Asterisk overflow: no padding.
+        let got = plan_row_spill(&[rendered("*********")], &[9]);
+        assert_eq!((got[0].text_start, got[0].text_end), (0, 9));
+        // All-space slot: no text.
+        let got = plan_row_spill(&[rendered("         ")], &[9]);
+        assert_eq!((got[0].text_start, got[0].text_end), (0, 0));
+    }
+
+    #[test]
+    fn empty_slot_has_no_text_bounds() {
+        let got = plan_row_spill(&[SpillSlot::Empty], &[9]);
+        assert_eq!((got[0].text_start, got[0].text_end), (0, 0));
     }
 
     #[test]

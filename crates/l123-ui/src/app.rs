@@ -20,7 +20,9 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use l123_core::cell_render::{apply_halign_to_rendered, halign_to_label_prefix};
+use l123_core::cell_render::{
+    apply_halign_to_rendered, halign_to_label_prefix, label_text_bounds,
+};
 use l123_core::{
     address::col_to_letters, label::is_value_starter, plan_row_spill, render_label,
     render_value_in_cell, Address, Alignment, Border, CellContents, Comment, CurrencyPosition,
@@ -9583,15 +9585,23 @@ impl App {
                 if let Some(style) = self.wb().cell_text_styles.get(&style_addr).copied() {
                     cell_style = cell_style.add_modifier(text_style_modifier(style));
                 }
+                // Underline applies to glyphs, not to padding spaces
+                // before/after them.  The spill planner reports the
+                // exact text range per slot — including internal
+                // whitespace at cell seams of a spilled label, which
+                // a per-slot trim heuristic would mistakenly clip.
+                let pad_style = cell_style.remove_modifier(Modifier::UNDERLINED);
                 let mut printed = 0u16;
-                for ch in slot.text.chars().take(w as usize) {
-                    buf[(x + printed, y)].set_char(ch).set_style(cell_style);
+                for (idx, ch) in slot.text.chars().take(w as usize).enumerate() {
+                    let in_text = idx >= slot.text_start && idx < slot.text_end;
+                    let style = if in_text { cell_style } else { pad_style };
+                    buf[(x + printed, y)].set_char(ch).set_style(style);
                     printed += 1;
                 }
                 // Pad any shortfall with blank cells so highlight still
                 // fills the whole column.
                 while printed < w {
-                    buf[(x + printed, y)].set_char(' ').set_style(cell_style);
+                    buf[(x + printed, y)].set_char(' ').set_style(pad_style);
                     printed += 1;
                 }
                 // `:Display Options Grid Yes` — paint a dim dashed glyph at the
@@ -9607,7 +9617,7 @@ impl App {
                 if self.show_gridlines && !highlighted && w > 0 {
                     let gx = x + w - 1;
                     if buf[(gx, y)].symbol() == " " {
-                        let mut g_style = cell_style;
+                        let mut g_style = pad_style;
                         g_style = g_style.fg(Color::DarkGray);
                         buf[(gx, y)].set_char('┊').set_style(g_style);
                     }
@@ -9723,11 +9733,23 @@ impl App {
                         .get(&m.anchor)
                         .map(|a| a.horizontal)
                         .unwrap_or(HAlign::General);
-                    let painted_text = match self.wb().cells.get(&m.anchor) {
-                        None | Some(CellContents::Empty) => " ".repeat(span_w as usize),
+                    let (painted_text, anchor_text_start, anchor_text_end) = match self
+                        .wb()
+                        .cells
+                        .get(&m.anchor)
+                    {
+                        None | Some(CellContents::Empty) => {
+                            (" ".repeat(span_w as usize), 0usize, 0usize)
+                        }
                         Some(CellContents::Label { prefix, text }) => {
                             let eff_prefix = effective_label_prefix(*prefix, halign);
-                            render_label(eff_prefix, text, span_w as usize)
+                            let painted = render_label(eff_prefix, text, span_w as usize);
+                            let (s, e) = label_text_bounds(
+                                eff_prefix,
+                                text.chars().count(),
+                                span_w as usize,
+                            );
+                            (painted, s, e)
                         }
                         Some(other) => {
                             let fmt = self.format_for_cell(m.anchor);
@@ -9737,7 +9759,18 @@ impl App {
                                 fmt,
                                 &self.wb().international,
                             );
-                            apply_halign_to_rendered(&s, halign, span_w as usize)
+                            let painted = apply_halign_to_rendered(&s, halign, span_w as usize);
+                            // Rendered values (numbers, formulas) have
+                            // no internal whitespace runs, so trimming
+                            // captures the text region exactly.
+                            let chars: Vec<char> = painted.chars().collect();
+                            let first = chars.iter().position(|c| *c != ' ');
+                            let last = chars.iter().rposition(|c| *c != ' ');
+                            let (ts, te) = match (first, last) {
+                                (Some(a), Some(b)) => (a, b + 1),
+                                _ => (0, 0),
+                            };
+                            (painted, ts, te)
                         }
                     };
                     // Build the anchor's full visual style — same
@@ -9771,14 +9804,17 @@ impl App {
                     if let Some(ts) = self.wb().cell_text_styles.get(&m.anchor).copied() {
                         astyle = astyle.add_modifier(text_style_modifier(ts));
                     }
+                    let pad_astyle = astyle.remove_modifier(Modifier::UNDERLINED);
                     let x = area.x + ROW_GUTTER + anchor_x_off;
                     let mut printed = 0u16;
-                    for ch in painted_text.chars().take(span_w as usize) {
-                        buf[(x + printed, y)].set_char(ch).set_style(astyle);
+                    for (idx, ch) in painted_text.chars().take(span_w as usize).enumerate() {
+                        let in_text = idx >= anchor_text_start && idx < anchor_text_end;
+                        let style = if in_text { astyle } else { pad_astyle };
+                        buf[(x + printed, y)].set_char(ch).set_style(style);
                         printed += 1;
                     }
                     while printed < span_w {
-                        buf[(x + printed, y)].set_char(' ').set_style(astyle);
+                        buf[(x + printed, y)].set_char(' ').set_style(pad_astyle);
                         printed += 1;
                     }
                 }
@@ -13160,7 +13196,14 @@ mod tests {
 
     #[test]
     fn compound_style_renders_with_all_three_modifiers() {
+        // UNDERLINED applies only over actual glyphs, so the cell
+        // needs visible text — an empty cell carries no underline
+        // even when one is set on its style.
         let mut app = App::new();
+        for c in "x".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let target = Address::A1;
         let all = TextStyle {
             bold: true,
@@ -13305,6 +13348,179 @@ mod tests {
             app.wb().cell_text_styles.get(&Address::A1).copied(),
             Some(TextStyle::UNDERLINE),
         );
+    }
+
+    /// Read the buffer cell at `addr.col`'s base x-position plus
+    /// `col_off` columns, on the row of `addr`.  Lets a test inspect
+    /// the trailing padding columns inside a wider cell.
+    fn buf_cell_at<'a>(
+        app: &App,
+        buf: &'a Buffer,
+        addr: Address,
+        col_off: u16,
+    ) -> &'a ratatui::buffer::Cell {
+        let dr = (addr.row - app.wb().viewport_row_offset) as u16;
+        let y = PANEL_HEIGHT + 1 + dr;
+        let content_width = buf.area.width.saturating_sub(ROW_GUTTER);
+        let layout = app.visible_column_layout(content_width);
+        let (_, x_off, _) = *layout.iter().find(|(c, _, _)| *c == addr.col).unwrap();
+        let x = ROW_GUTTER + x_off + col_off;
+        &buf[(x, y)]
+    }
+
+    #[test]
+    fn underline_does_not_extend_into_trailing_padding() {
+        // Short underlined label "hi" in a width-9 cell: 'h' and 'i'
+        // carry UNDERLINED; the seven trailing padding spaces do not.
+        let mut app = App::new();
+        // Move pointer off A1 so the test cell isn't REVERSED.
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        for c in "hi".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let target = Address::new(SheetId::A, 0, 2); // A3
+        app.execute_range_text_style(one_cell_range(target), TextStyle::UNDERLINE, true);
+
+        let buf = app.render_to_buffer(80, 25);
+        let h = buf_cell_at(&app, &buf, target, 0);
+        assert_eq!(h.symbol(), "h");
+        assert!(h.style().add_modifier.contains(Modifier::UNDERLINED));
+        let i = buf_cell_at(&app, &buf, target, 1);
+        assert_eq!(i.symbol(), "i");
+        assert!(i.style().add_modifier.contains(Modifier::UNDERLINED));
+        for off in 2..9u16 {
+            let cell = buf_cell_at(&app, &buf, target, off);
+            assert_eq!(cell.symbol(), " ", "padding at +{off} should be a space");
+            assert!(
+                !cell.style().add_modifier.contains(Modifier::UNDERLINED),
+                "padding at +{off} should NOT carry UNDERLINED, got {:?}",
+                cell.style().add_modifier,
+            );
+        }
+    }
+
+    #[test]
+    fn underline_does_not_extend_past_spilled_label_text() {
+        // Underlined label long enough to spill A→B→C; the tail of
+        // the spill (padding past the last glyph) must not carry
+        // UNDERLINED, even though the spill cells inherit the
+        // owner's text style.
+        let mut app = App::new();
+        // Move pointer off A1.
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        // 11 chars at width 9 → spills one column into B3, leaving
+        // 7 trailing pad columns inside B3.
+        for c in "hello world".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let target = Address::new(SheetId::A, 0, 2); // A3
+        app.execute_range_text_style(one_cell_range(target), TextStyle::UNDERLINE, true);
+
+        let buf = app.render_to_buffer(80, 25);
+        let neighbor = Address::new(SheetId::A, 1, 2); // B3
+        // First two B3 columns hold the spilled "ld" tail — underlined.
+        let l = buf_cell_at(&app, &buf, neighbor, 0);
+        assert_eq!(l.symbol(), "l");
+        assert!(l.style().add_modifier.contains(Modifier::UNDERLINED));
+        let d = buf_cell_at(&app, &buf, neighbor, 1);
+        assert_eq!(d.symbol(), "d");
+        assert!(d.style().add_modifier.contains(Modifier::UNDERLINED));
+        // Remaining padding columns of B3 are space and unstyled.
+        for off in 2..9u16 {
+            let cell = buf_cell_at(&app, &buf, neighbor, off);
+            assert_eq!(
+                cell.symbol(),
+                " ",
+                "spill-tail padding at B3+{off} should be a space",
+            );
+            assert!(
+                !cell.style().add_modifier.contains(Modifier::UNDERLINED),
+                "spill-tail padding at B3+{off} should NOT carry UNDERLINED",
+            );
+        }
+    }
+
+    #[test]
+    fn underline_continues_through_internal_space_at_cell_boundary() {
+        // Long underlined label spills across A→B; the space between
+        // "1991:" and "Sloane" lands at the A/B column boundary.
+        // That space is internal to the original text, so the leading
+        // column of B must still carry UNDERLINED — earlier per-slot
+        // trim heuristics dropped it as if it were B's leading
+        // padding.
+        let mut app = App::new();
+        // Set A's width to 20 so "INCOME SUMMARY 1991:" exactly fills
+        // it and the spill boundary lands on the space character.
+        // Pointer starts at A1 — /WCS 20 widens column A.
+        for c in ['/', 'W', 'C', 'S'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        for c in "20".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.col_width_of(SheetId::A, 0), 20);
+        // Move pointer to A3 so it's not REVERSED-highlighting our
+        // test cells.
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        for c in "INCOME SUMMARY 1991: Sloane Camera and Video".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let target = Address::new(SheetId::A, 0, 2); // A3
+        app.execute_range_text_style(one_cell_range(target), TextStyle::UNDERLINE, true);
+
+        let buf = app.render_to_buffer(120, 25);
+        let neighbor = Address::new(SheetId::A, 1, 2); // B3
+        // First column of B3 is the boundary space — it's the
+        // internal " " of "...1991: Sloane..." and must stay
+        // underlined for the run to read continuously.
+        let boundary = buf_cell_at(&app, &buf, neighbor, 0);
+        assert_eq!(boundary.symbol(), " ");
+        assert!(
+            boundary.style().add_modifier.contains(Modifier::UNDERLINED),
+            "internal-text space at A/B cell seam should keep UNDERLINED",
+        );
+        // Second column of B3 is 'S' — clearly part of text.
+        let s_glyph = buf_cell_at(&app, &buf, neighbor, 1);
+        assert_eq!(s_glyph.symbol(), "S");
+        assert!(s_glyph.style().add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn underline_covers_internal_whitespace_between_glyphs() {
+        // An internal space between two glyphs in a label is part of
+        // the text run and should keep its underline so the line
+        // reads as continuous under "a b".
+        let mut app = App::new();
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        for c in "a b".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let target = Address::new(SheetId::A, 0, 2); // A3
+        app.execute_range_text_style(one_cell_range(target), TextStyle::UNDERLINE, true);
+
+        let buf = app.render_to_buffer(80, 25);
+        // "a", " " (internal), "b" all carry UNDERLINED.
+        let a = buf_cell_at(&app, &buf, target, 0);
+        assert_eq!(a.symbol(), "a");
+        assert!(a.style().add_modifier.contains(Modifier::UNDERLINED));
+        let mid = buf_cell_at(&app, &buf, target, 1);
+        assert_eq!(mid.symbol(), " ");
+        assert!(
+            mid.style().add_modifier.contains(Modifier::UNDERLINED),
+            "internal space between 'a' and 'b' should remain underlined",
+        );
+        let b = buf_cell_at(&app, &buf, target, 2);
+        assert_eq!(b.symbol(), "b");
+        assert!(b.style().add_modifier.contains(Modifier::UNDERLINED));
     }
 
     #[test]
