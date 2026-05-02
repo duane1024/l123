@@ -1,0 +1,63 @@
+# Phase 4 — subroutine call `{loc}` and `{RETURN}`.
+#
+# Layout:
+#   A1: '{stamp}                     (line 1: call sub `stamp`)
+#   A2: '{GOTO}B9~back~              (line 2: continues after sub returns)
+#   D1: '{GOTO}B7~hello~              (sub line 1)
+#   D2: '{RETURN}                     (sub line 2: pop frame)
+
+ASSERT_POINTER  A:A1
+
+KEY '
+KEYS {stamp}
+ENTER
+DOWN
+KEY '
+KEYS {GOTO}B9~back~
+ENTER
+
+# Subroutine body at D1, D2.
+F 5
+KEYS D1
+ENTER
+KEY '
+KEYS {GOTO}B7~hello~
+ENTER
+DOWN
+KEY '
+KEYS {RETURN}
+ENTER
+
+# Names \M → A1, stamp → D1.
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+
+F 5
+KEYS D1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS stamp
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+ALT m
+# After macro: B7='hello' (from sub), B9='back' (from caller line 2).
+ASSERT_POINTER  A:B9
+ASSERT_PANEL_L1 A:B9: 'back
+
+F 5
+KEYS B7
+ENTER
+ASSERT_PANEL_L1 A:B7: 'hello

@@ -1,0 +1,24 @@
+# Phase 1 — macro foundation. A queued macro of literal chars +
+# `~` (Enter) drives the existing handle_key dispatcher exactly as
+# if the user had typed the same sequence.
+
+ASSERT_MODE     READY
+ASSERT_POINTER  A:A1
+
+# Run a simple macro that types `hello` and commits with `~`.
+MACRO   hello~
+
+# After commit: A1 holds the label, pointer stays at A1 (Enter
+# does not move per Lotus), mode returns to READY.
+ASSERT_MODE     READY
+ASSERT_POINTER  A:A1
+ASSERT_PANEL_L1 A:A1: 'hello
+
+# Sanity: a second macro fed in fresh re-enters LABEL/VALUE per
+# the first-char rule. 123~ enters VALUE and commits a number.
+DOWN
+ASSERT_POINTER  A:A2
+MACRO   123~
+ASSERT_POINTER  A:A2
+ASSERT_PANEL_L1 A:A2: (G) 123
+ASSERT_MODE     READY

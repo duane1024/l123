@@ -7,7 +7,7 @@
 //! - Three-line control panel, mode indicator, cell readout.
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -32,6 +32,7 @@ use l123_core::{
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
+use l123_macro::{lex as lex_macro, lex_actions as lex_macro_actions, MacroAction, MacroKey};
 use l123_menu::{self as menu, Action, MenuBody, MenuItem};
 use l123_print::{
     encode::lp::LpOptions, PrintContentMode, PrintFormatMode, PrintSettings, WorkbookView,
@@ -827,6 +828,38 @@ pub struct App {
     /// instead of being executed inline because the dispatcher doesn't
     /// own the `Terminal`; the event loop does.
     pending_system_suspend: bool,
+    /// Active macro execution state. `Some` while a macro is
+    /// running (possibly suspended for user input); `None` when
+    /// idle. Constructed by [`run_macro_at`] / [`run_named_macro`]
+    /// and torn down when the frame stack empties or `{QUIT}` fires.
+    macro_state: Option<MacroState>,
+    /// Re-entrancy guard for the macro pump. Synthetic key events
+    /// from the macro flow back through [`handle_key`]; without
+    /// this flag they would recursively pump and overflow.
+    macro_pumping: bool,
+    /// Destination cell for the active `{GETLABEL}`/`{GETNUMBER}`
+    /// prompt. Side-cursor because [`PromptNext`] is `Copy` and
+    /// can't carry an owned `String`.
+    pending_macro_input_loc: Option<String>,
+    /// Active `{MENUBRANCH}`/`{MENUCALL}` overlay. While `Some`,
+    /// keystrokes are intercepted for menu navigation (similar to
+    /// `save_confirm` / `name_list`).
+    custom_menu: Option<CustomMenuState>,
+    /// Destination range for Alt-F5 LEARN recordings. Set via
+    /// `/Worksheet Learn Range`; cleared by `/WLC`.
+    learn_range: Option<Range>,
+    /// True while Alt-F5 has armed recording. Each user keystroke
+    /// flowing through `handle_key` appends a macro-source token to
+    /// `learn_buffer`.
+    learn_recording: bool,
+    /// Buffered macro source for the current learn session. Flushed
+    /// to `learn_range` cells when the user toggles recording off.
+    learn_buffer: String,
+    /// Macro STEP mode (Alt-F2). When true, every macro action
+    /// pauses for the user to advance with Space. Lights the STEP
+    /// indicator on the status line; the running macro additionally
+    /// shows SST while parked at a step.
+    step_mode: bool,
 }
 
 /// User-visible identity shown on the startup splash. The renderer
@@ -1262,6 +1295,12 @@ enum PromptNext {
     WgdPrinterPgLength,
     WgdPrinterSetup,
     WgdPrinterName,
+    /// Active macro is in `{GETLABEL}` / `{GETNUMBER}`. The dest
+    /// cell lives on `App::pending_macro_input_loc` (PromptNext is
+    /// `Copy` so it can't carry a `String`).
+    MacroGetInput {
+        numeric: bool,
+    },
 }
 
 /// `/Worksheet Titles` axis selector.  Both freezes the rows above
@@ -1335,6 +1374,9 @@ pub(crate) enum NameListOrigin {
     /// fills the prompt buffer with the chosen name and returns to the
     /// underlying prompt.
     PromptName,
+    /// Alt-F3 RUN from READY: Enter executes the macro stored at
+    /// the picked range's start cell.
+    RunMacro,
 }
 
 #[derive(Debug, Clone)]
@@ -1357,8 +1399,11 @@ impl PromptNext {
             | PromptNext::WorksheetColumnRangeSetWidth
             | PromptNext::WorksheetGlobalColWidth
             | PromptNext::WorksheetGlobalRecalcIteration => c.is_ascii_digit(),
+            // 1-2-3 names accept letters, digits, `_`, `.`, and the
+            // backslash that prefixes macro autonames (`\A`..`\Z`,
+            // `\0`). 15-char max is enforced at commit time.
             PromptNext::RangeNameCreate | PromptNext::RangeNameDelete => {
-                c.is_ascii_alphanumeric() || c == '_'
+                c.is_ascii_alphanumeric() || c == '_' || c == '\\' || c == '.'
             }
             // GOTO accepts cell-address chars: letters (col), digits
             // (row), and `:` for the optional sheet prefix (`A:B5`).
@@ -1398,6 +1443,12 @@ impl PromptNext {
             | PromptNext::PrintFileMarginTop
             | PromptNext::PrintFileMarginBottom
             | PromptNext::PrintFilePgLength => c.is_ascii_digit(),
+            // Macro input is free-form — labels accept anything;
+            // numbers accept what `parse_typed_value` would (digits,
+            // dot, comma, sign, etc.). For simplicity we accept all
+            // non-control chars and let the commit handler reject a
+            // bad number value.
+            PromptNext::MacroGetInput { .. } => c != '\n' && c != '\t',
             // Currency symbols are short printable strings — accept
             // any printable graphic plus space. No tab/newline.
             PromptNext::WorksheetGlobalDefaultOtherIntlCurrencySymbol { .. } => {
@@ -2013,6 +2064,10 @@ enum PendingCommand {
     /// the highlight available for follow-up actions (e.g. SmartIcons
     /// Bold) before they happen.
     MouseSelect,
+    /// POINT step of `/Worksheet Learn Range`. On commit, store the
+    /// selected range as the destination for Alt-F5 LEARN
+    /// recordings.
+    WorksheetLearnRange,
 }
 
 impl PendingCommand {
@@ -2040,6 +2095,7 @@ impl PendingCommand {
             // Free mouse-drag selection has no prompt — line 3 keeps
             // showing the live range, but no command label is shown.
             PendingCommand::MouseSelect => "",
+            PendingCommand::WorksheetLearnRange => "Enter range to record into:",
         }
     }
 }
@@ -2144,6 +2200,14 @@ impl App {
             show_gridlines: false,
             stat_view: StatView::Worksheet,
             pending_system_suspend: false,
+            macro_state: None,
+            macro_pumping: false,
+            pending_macro_input_loc: None,
+            custom_menu: None,
+            learn_range: None,
+            learn_recording: false,
+            learn_buffer: String::new(),
+            step_mode: false,
         }
     }
 
@@ -2178,6 +2242,23 @@ impl App {
             Some("csv") => self.load_csv_workbook_from(path),
             _ => self.load_workbook_from(path),
         }
+        self.try_autoexec();
+    }
+
+    /// Hook fired after a successful /File Retrieve. When the
+    /// loaded workbook defines `\0` and `/WGD Default Other Autoexec`
+    /// is enabled (the default), the macro at `\0` runs once before
+    /// control returns to READY.
+    fn try_autoexec(&mut self) {
+        if !self.defaults.autoexec {
+            return;
+        }
+        // Skip when the load itself put us in ERROR mode — the user
+        // needs to see and dismiss the error first.
+        if matches!(self.mode, Mode::Error) {
+            return;
+        }
+        self.run_named_macro("\\0");
     }
 
     /// Flip the startup splash on with the given identity strings.
@@ -2583,6 +2664,40 @@ impl App {
             self.handle_key_save_confirm(k);
             return;
         }
+        // `{MENUBRANCH}` / `{MENUCALL}` overlay sits above the
+        // built-in menu dispatcher: it owns the keyboard until the
+        // user picks an item or cancels.
+        if self.custom_menu.is_some() {
+            self.handle_key_custom_menu(k);
+            return;
+        }
+        // STEP-mode pause owns Space and Esc directly so they don't
+        // leak into the underlying mode (e.g. a Space in READY would
+        // otherwise start a label entry). Other keys flow through
+        // normally — the user can navigate / inspect the workbook
+        // between steps.
+        if !self.macro_pumping
+            && matches!(
+                self.macro_state.as_ref().and_then(|s| s.suspend.as_ref()),
+                Some(MacroSuspend::StepPause)
+            )
+        {
+            match k.code {
+                KeyCode::Char(' ') => {
+                    if let Some(s) = self.macro_state.as_mut() {
+                        s.suspend = None;
+                        s.step_advance = true;
+                    }
+                    self.pump_macro();
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.macro_state = None;
+                    return;
+                }
+                _ => {}
+            }
+        }
         // Erase-confirm submenu has the same precedence: shown after
         // the `/File Erase` filename prompt commits, owns the keyboard
         // until the user picks No or Yes.
@@ -2608,6 +2723,692 @@ impl App {
             Mode::Error => self.handle_key_error(k),
             _ => {}
         }
+        // Record into the learn buffer if Alt-F5 is armed. Skip
+        // synthetic keystrokes the macro pump generates (we don't
+        // want a macro running under Learn to log itself), and skip
+        // the Alt-F5 toggle itself so it doesn't end up in the
+        // recorded source.
+        if self.learn_recording
+            && !self.macro_pumping
+            && !(matches!(k.code, KeyCode::F(5)) && k.modifiers.contains(KeyModifiers::ALT))
+        {
+            self.record_keystroke(&k);
+        }
+        // Macro-pause resume hook: a `{?}` directive parks the
+        // interpreter in `WaitEnter`. The user's next Enter is the
+        // signal to resume — it still flows through the dispatcher
+        // first (so an in-progress entry/prompt commits normally),
+        // and afterwards we kick the pump.
+        if !self.macro_pumping
+            && matches!(k.code, KeyCode::Enter)
+            && matches!(
+                self.macro_state.as_ref().and_then(|s| s.suspend.as_ref()),
+                Some(MacroSuspend::WaitEnter)
+            )
+        {
+            if let Some(s) = self.macro_state.as_mut() {
+                s.suspend = None;
+            }
+            self.pump_macro();
+        }
+    }
+
+    /// Lex `text` as L123 macro source and feed each resulting key
+    /// through [`Self::handle_key`] in order, exactly as if the user
+    /// had typed the same sequence at the keyboard. This is the
+    /// foundation that all later macro features build on (named-range
+    /// invocation, `\A..\Z`, `{BRANCH}`, Learn replay, ...).
+    ///
+    /// On a malformed source string the macro halts at the bad token
+    /// and the error surfaces in the standard ERROR-mode panel.
+    pub fn run_macro_text(&mut self, text: &str) {
+        let keys = match lex_macro(text) {
+            Ok(k) => k,
+            Err(e) => {
+                self.set_error(format!("{e}"));
+                return;
+            }
+        };
+        for key in keys {
+            self.handle_key(macro_key_to_event(key));
+        }
+    }
+
+    /// Look up a named range (case-insensitive) and run the macro
+    /// stored at its start cell. Returns `false` when the name is
+    /// undefined — Lotus would beep here, we silently no-op.
+    fn run_named_macro(&mut self, name: &str) -> bool {
+        let key = name.to_ascii_lowercase();
+        let Some(range) = self.wb().named_ranges.get(&key).copied() else {
+            return false;
+        };
+        self.run_macro_at(range.start);
+        true
+    }
+
+    /// Read the source of one macro line at `addr`. Label cells
+    /// return their `text`; constant/formula cells return
+    /// `source_form()` so a stray number in the macro range types as
+    /// digits rather than aborting the read. Empty / off-sheet cells
+    /// return `None`, which the interpreter treats as end-of-frame.
+    fn read_macro_line(&self, addr: Address) -> Option<String> {
+        match self.wb().cells.get(&addr)? {
+            CellContents::Label { text, .. } => Some(text.clone()),
+            other if !other.is_empty() => Some(other.source_form()),
+            _ => None,
+        }
+    }
+
+    /// Resolve a macro `loc` argument to an absolute [`Address`].
+    /// Names take precedence over raw cell addresses (matches Lotus).
+    /// Returns `None` if the loc is neither a known name nor a
+    /// parseable address.
+    fn resolve_macro_loc(&self, loc: &str) -> Option<Address> {
+        let trimmed = loc.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let key = trimmed.to_ascii_lowercase();
+        if let Some(range) = self.wb().named_ranges.get(&key) {
+            return Some(range.start);
+        }
+        Address::parse(trimmed).ok()
+    }
+
+    /// Evaluate `expr` as an `{IF}` condition. Returns `true` for
+    /// non-zero numbers, `true` for booleans/text, `false` for
+    /// zero/empty/error. Implementation: stash the formula in a
+    /// scratch cell at the bottom-right of the current sheet, recalc,
+    /// read the value, then clear the scratch cell.
+    fn eval_macro_condition(&mut self, expr: &str) -> bool {
+        let sheet = self.wb().pointer.sheet;
+        let scratch = Address::new(sheet, 255, 8190);
+        let formula = format!("={}", expr.trim());
+        let truthy = if self
+            .wb_mut()
+            .engine
+            .set_user_input(scratch, &formula)
+            .is_ok()
+        {
+            self.wb_mut().engine.recalc();
+            match self.wb().engine.get_cell(scratch) {
+                Ok(view) => match view.value {
+                    Value::Number(n) => n != 0.0,
+                    Value::Bool(b) => b,
+                    Value::Text(_) => true,
+                    _ => false,
+                },
+                Err(_) => false,
+            }
+        } else {
+            false
+        };
+        let _ = self.wb_mut().engine.clear_cell(scratch);
+        self.wb_mut().engine.recalc();
+        truthy
+    }
+
+    /// Run a macro starting at `start`. Each cell is one logical
+    /// line; the interpreter walks down the column, lexing and
+    /// executing per-line actions. Sets up [`MacroState`] then
+    /// calls [`pump_macro`] which runs to completion or to the
+    /// first suspension point.
+    fn run_macro_at(&mut self, start: Address) {
+        self.macro_state = Some(MacroState {
+            frames: vec![MacroFrame::starting_at(start)],
+            steps: 0,
+            suspend: None,
+            step_advance: false,
+        });
+        self.pump_macro();
+    }
+
+    /// Drive the active macro forward until it suspends or finishes.
+    /// Synthetic keystrokes flow back through [`handle_key`]; the
+    /// `macro_pumping` re-entrancy guard keeps that from re-entering
+    /// the pump.
+    fn pump_macro(&mut self) {
+        if self.macro_pumping {
+            return;
+        }
+        self.macro_pumping = true;
+        loop {
+            // Suspended? Idle until handle_key clears the suspend
+            // and re-pumps.
+            let suspended = self
+                .macro_state
+                .as_ref()
+                .map(|s| s.suspend.is_some())
+                .unwrap_or(true);
+            if suspended {
+                break;
+            }
+            // Frame stack empty → macro done.
+            let empty = self
+                .macro_state
+                .as_ref()
+                .map(|s| s.frames.is_empty())
+                .unwrap_or(true);
+            if empty {
+                self.macro_state = None;
+                break;
+            }
+            if !self.step_macro() {
+                break;
+            }
+        }
+        self.macro_pumping = false;
+    }
+
+    /// Execute a single macro action. Returns `false` to stop the
+    /// pump (e.g. on error / `{QUIT}` / suspend). Helper so the
+    /// outer loop in [`pump_macro`] stays small.
+    fn step_macro(&mut self) -> bool {
+        // Bump step counter and runaway guard.
+        let steps = match self.macro_state.as_mut() {
+            Some(s) => {
+                s.steps += 1;
+                s.steps
+            }
+            None => return false,
+        };
+        if steps > MAX_MACRO_STEPS {
+            self.set_error("macro: step limit exceeded".to_string());
+            self.macro_state = None;
+            return false;
+        }
+
+        // Re-fill `remaining` from the next cell whenever empty.
+        let needs_fill = self
+            .macro_state
+            .as_ref()
+            .and_then(|s| s.frames.last())
+            .map(|f| f.remaining.is_empty())
+            .unwrap_or(false);
+        if needs_fill {
+            let pc = self.macro_state.as_ref().unwrap().frames.last().unwrap().pc;
+            let line = self.read_macro_line(pc);
+            let Some(line) = line else {
+                self.macro_state.as_mut().unwrap().frames.pop();
+                return true;
+            };
+            let actions = match lex_macro_actions(&line) {
+                Ok(a) => a,
+                Err(e) => {
+                    self.set_error(format!("{e}"));
+                    self.macro_state = None;
+                    return false;
+                }
+            };
+            let frame = self.macro_state.as_mut().unwrap().frames.last_mut().unwrap();
+            frame.remaining = actions.into_iter().collect();
+            frame.pc = next_macro_pc(pc).unwrap_or(pc);
+        }
+
+        // STEP gate: pause before each action when single-step mode
+        // is on, unless `step_advance` was set by the user pressing
+        // Space (which fires exactly one action then re-pauses).
+        if self.step_mode {
+            let advance = self
+                .macro_state
+                .as_ref()
+                .map(|s| s.step_advance)
+                .unwrap_or(false);
+            if !advance {
+                if let Some(s) = self.macro_state.as_mut() {
+                    s.suspend = Some(MacroSuspend::StepPause);
+                }
+                return false;
+            }
+            if let Some(s) = self.macro_state.as_mut() {
+                s.step_advance = false;
+            }
+        }
+
+        // Pop the next action from the top frame.
+        let action = match self
+            .macro_state
+            .as_mut()
+            .and_then(|s| s.frames.last_mut())
+            .and_then(|f| f.remaining.pop_front())
+        {
+            Some(a) => a,
+            None => return true,
+        };
+
+        match action {
+            MacroAction::Key(k) => {
+                self.handle_key(macro_key_to_event(k));
+            }
+            MacroAction::Branch(loc) => {
+                let Some(addr) = self.resolve_macro_loc(&loc) else {
+                    self.set_error(format!("macro: bad branch loc `{loc}`"));
+                    self.macro_state = None;
+                    return false;
+                };
+                if let Some(top) = self
+                    .macro_state
+                    .as_mut()
+                    .and_then(|s| s.frames.last_mut())
+                {
+                    top.pc = addr;
+                    top.remaining.clear();
+                }
+            }
+            MacroAction::Quit => {
+                self.macro_state = None;
+                return false;
+            }
+            MacroAction::Return => {
+                if let Some(s) = self.macro_state.as_mut() {
+                    s.frames.pop();
+                }
+            }
+            MacroAction::If(expr) => {
+                let truthy = self.eval_macro_condition(&expr);
+                if !truthy {
+                    if let Some(top) = self
+                        .macro_state
+                        .as_mut()
+                        .and_then(|s| s.frames.last_mut())
+                    {
+                        top.remaining.clear();
+                    }
+                }
+            }
+            MacroAction::Subroutine { loc, args: _ } => {
+                let Some(addr) = self.resolve_macro_loc(&loc) else {
+                    self.set_error(format!("macro: bad subroutine loc `{loc}`"));
+                    self.macro_state = None;
+                    return false;
+                };
+                if let Some(s) = self.macro_state.as_mut() {
+                    if s.frames.len() >= 64 {
+                        self.set_error("macro: call stack overflow".to_string());
+                        self.macro_state = None;
+                        return false;
+                    }
+                    s.frames.push(MacroFrame::starting_at(addr));
+                }
+            }
+            MacroAction::Define(_) => {
+                // Positional-arg binding stub — recognized to avoid
+                // an "unknown directive" error.
+            }
+            MacroAction::Let { loc, expr } => {
+                self.execute_macro_let(&loc, &expr);
+            }
+            MacroAction::Blank(range_arg) => {
+                self.execute_macro_blank(&range_arg);
+            }
+            MacroAction::Recalc(_) => {
+                self.wb_mut().engine.recalc();
+                self.refresh_formula_caches();
+                self.recalc_pending = false;
+            }
+            MacroAction::QuestionPause => {
+                if let Some(s) = self.macro_state.as_mut() {
+                    s.suspend = Some(MacroSuspend::WaitEnter);
+                }
+            }
+            MacroAction::GetLabel { prompt_text, loc } => {
+                self.start_macro_get_input(prompt_text, loc, false);
+            }
+            MacroAction::GetNumber { prompt_text, loc } => {
+                self.start_macro_get_input(prompt_text, loc, true);
+            }
+            MacroAction::MenuBranch(loc) => {
+                self.open_custom_menu(&loc, false);
+            }
+            MacroAction::MenuCall(loc) => {
+                self.open_custom_menu(&loc, true);
+            }
+            MacroAction::Beep => {
+                self.beep_count = self.beep_count.saturating_add(1);
+                self.beep_pending = true;
+            }
+            MacroAction::Wait(_)
+            | MacroAction::BreakOff
+            | MacroAction::BreakOn
+            | MacroAction::OnError { .. } => {
+                // Stubs: lexed so a macro source using them doesn't
+                // halt with an unknown-directive error. Wall-clock
+                // sleeps and Ctrl-Break interception are deferred
+                // out of M9; ONERROR trap behavior needs set_error
+                // to consult macro state.
+            }
+        }
+        true
+    }
+
+    /// `{MENUBRANCH loc}` / `{MENUCALL loc}` — open a custom menu
+    /// reading item names + descriptions out of the cells at `loc`.
+    /// Items terminate at the first empty name cell (or 8 columns,
+    /// whichever comes first — Lotus's hard cap).
+    fn open_custom_menu(&mut self, loc: &str, is_call: bool) {
+        let Some(start) = self.resolve_macro_loc(loc) else {
+            self.set_error(format!("macro: bad menu loc `{loc}`"));
+            self.macro_state = None;
+            return;
+        };
+        let mut items: Vec<CustomMenuItem> = Vec::new();
+        for i in 0..8u16 {
+            let col = start.col.saturating_add(i);
+            let name_addr = Address::new(start.sheet, col, start.row);
+            let desc_addr = Address::new(start.sheet, col, start.row.saturating_add(1));
+            let Some(name) = self.read_macro_line(name_addr) else {
+                break;
+            };
+            if name.is_empty() {
+                break;
+            }
+            let description = self.read_macro_line(desc_addr).unwrap_or_default();
+            items.push(CustomMenuItem { name, description });
+        }
+        if items.is_empty() {
+            self.set_error("macro: empty custom menu".to_string());
+            self.macro_state = None;
+            return;
+        }
+        let action_row = Address::new(start.sheet, start.col, start.row.saturating_add(2));
+        self.custom_menu = Some(CustomMenuState {
+            items,
+            action_row,
+            is_call,
+            highlight: 0,
+        });
+        if let Some(s) = self.macro_state.as_mut() {
+            s.suspend = Some(MacroSuspend::MenuPick);
+        }
+        self.mode = Mode::Menu;
+    }
+
+    /// User picked item `idx` from the custom menu (or the menu
+    /// was cancelled with `idx = None`). Resume the macro: BRANCH
+    /// or CALL to the chosen action cell, or just continue past
+    /// the `{MENUBRANCH}` if cancelled.
+    fn finish_custom_menu(&mut self, picked: Option<usize>) {
+        let Some(menu) = self.custom_menu.take() else {
+            return;
+        };
+        if let Some(idx) = picked {
+            let action = Address::new(
+                menu.action_row.sheet,
+                menu.action_row.col.saturating_add(idx as u16),
+                menu.action_row.row,
+            );
+            if let Some(s) = self.macro_state.as_mut() {
+                if menu.is_call {
+                    if s.frames.len() >= 64 {
+                        self.set_error("macro: call stack overflow".to_string());
+                        self.macro_state = None;
+                        return;
+                    }
+                    s.frames.push(MacroFrame::starting_at(action));
+                } else if let Some(top) = s.frames.last_mut() {
+                    top.pc = action;
+                    top.remaining.clear();
+                }
+            }
+        }
+        if let Some(s) = self.macro_state.as_mut() {
+            s.suspend = None;
+        }
+        self.mode = Mode::Ready;
+        self.pump_macro();
+    }
+
+    /// `/Worksheet Learn Cancel` — drop the learn range. Stops the
+    /// recorder if it was on; the in-flight buffer is discarded.
+    fn cancel_learn(&mut self) {
+        self.learn_range = None;
+        self.learn_recording = false;
+        self.learn_buffer.clear();
+        self.close_menu();
+    }
+
+    /// `/Worksheet Learn Erase` — blank every cell in the learn
+    /// range without dropping the range definition.
+    fn erase_learn_range(&mut self) {
+        if let Some(r) = self.learn_range {
+            self.execute_range_erase(r);
+            self.wb_mut().dirty = true;
+        }
+        self.close_menu();
+    }
+
+    /// Alt-F5 LEARN toggle. Off→On arms recording; On→Off flushes
+    /// the buffered macro source to cells of the learn range.
+    fn toggle_learn_recording(&mut self) {
+        if self.learn_range.is_none() {
+            // No range set — Lotus would beep with "no learn range
+            // defined". Silent no-op for now.
+            return;
+        }
+        if self.learn_recording {
+            self.learn_recording = false;
+            self.flush_learn_buffer();
+        } else {
+            self.learn_buffer.clear();
+            self.learn_recording = true;
+        }
+    }
+
+    /// Write `learn_buffer` into the cells of `learn_range`,
+    /// splitting at 240 chars (the 1-2-3 label-cell capacity) so
+    /// the recording wraps to subsequent rows.
+    fn flush_learn_buffer(&mut self) {
+        let Some(range) = self.learn_range else {
+            return;
+        };
+        if self.learn_buffer.is_empty() {
+            return;
+        }
+        let buf = std::mem::take(&mut self.learn_buffer);
+        let mut row = range.start.row;
+        let max_row = range.end.row;
+        let chunk_size = 240;
+        let mut chars = buf.chars().peekable();
+        while chars.peek().is_some() && row <= max_row {
+            let mut chunk = String::new();
+            for _ in 0..chunk_size {
+                match chars.next() {
+                    Some(ch) => chunk.push(ch),
+                    None => break,
+                }
+            }
+            let addr = Address::new(range.start.sheet, range.start.col, row);
+            let contents = CellContents::Label {
+                prefix: LabelPrefix::Apostrophe,
+                text: chunk,
+            };
+            if self.undo_enabled {
+                let prev = self.wb().cells.get(&addr).cloned();
+                let prev_format = self.wb().cell_formats.get(&addr).copied();
+                self.wb_mut().journal.push(JournalEntry::CellEdit {
+                    addr,
+                    prev_contents: prev,
+                    prev_format,
+                });
+            }
+            self.push_to_engine_at(addr, &contents);
+            self.wb_mut().cells.insert(addr, contents);
+            self.wb_mut().dirty = true;
+            row = match row.checked_add(1) {
+                Some(r) => r,
+                None => break,
+            };
+        }
+    }
+
+    /// Append the macro-source serialization of `k` to the learn
+    /// buffer if recording is on. Skips Alt-F5 itself (the toggle)
+    /// and modifier-only "dead" key events that don't represent
+    /// user-typed input.
+    fn record_keystroke(&mut self, k: &KeyEvent) {
+        if !self.learn_recording {
+            return;
+        }
+        if let Some(token) = key_event_to_macro_source(k) {
+            self.learn_buffer.push_str(&token);
+        }
+    }
+
+    /// Custom-menu key handling: single-letter accelerators (item's
+    /// first char, case-insensitive), Enter on highlight, Esc to
+    /// cancel, arrows to move the highlight.
+    fn handle_key_custom_menu(&mut self, k: KeyEvent) {
+        let len = self
+            .custom_menu
+            .as_ref()
+            .map(|m| m.items.len())
+            .unwrap_or(0);
+        if len == 0 {
+            self.finish_custom_menu(None);
+            return;
+        }
+        match k.code {
+            KeyCode::Esc => self.finish_custom_menu(None),
+            KeyCode::Enter => {
+                let idx = self
+                    .custom_menu
+                    .as_ref()
+                    .map(|m| m.highlight)
+                    .unwrap_or(0);
+                self.finish_custom_menu(Some(idx));
+            }
+            KeyCode::Left => {
+                if let Some(m) = self.custom_menu.as_mut() {
+                    m.highlight = m.highlight.checked_sub(1).unwrap_or(len - 1);
+                }
+            }
+            KeyCode::Right => {
+                if let Some(m) = self.custom_menu.as_mut() {
+                    m.highlight = (m.highlight + 1) % len;
+                }
+            }
+            KeyCode::Home => {
+                if let Some(m) = self.custom_menu.as_mut() {
+                    m.highlight = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(m) = self.custom_menu.as_mut() {
+                    m.highlight = len - 1;
+                }
+            }
+            KeyCode::Char(c) => {
+                let needle = c.to_ascii_lowercase();
+                let pick = self.custom_menu.as_ref().and_then(|m| {
+                    m.items.iter().position(|it| {
+                        it.name
+                            .chars()
+                            .next()
+                            .map(|f| f.to_ascii_lowercase() == needle)
+                            .unwrap_or(false)
+                    })
+                });
+                if let Some(idx) = pick {
+                    self.finish_custom_menu(Some(idx));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Open a prompt in service of `{GETLABEL}` / `{GETNUMBER}` and
+    /// park the macro until the user commits or cancels.
+    fn start_macro_get_input(&mut self, prompt_text: String, loc: String, numeric: bool) {
+        if let Some(s) = self.macro_state.as_mut() {
+            s.suspend = Some(MacroSuspend::GetInput);
+        }
+        let label = if prompt_text.trim().is_empty() {
+            "Macro input:".to_string()
+        } else {
+            prompt_text.trim().to_string()
+        };
+        self.pending_macro_input_loc = Some(loc);
+        self.prompt = Some(PromptState {
+            label,
+            buffer: String::new(),
+            next: PromptNext::MacroGetInput { numeric },
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `{LET loc, expr}` — write `expr`'s value to `loc` directly.
+    /// Goes through the same source-form parser as a typed entry
+    /// commit and journals the previous cell state for undo.
+    fn execute_macro_let(&mut self, loc: &str, expr: &str) {
+        let Some(addr) = self.resolve_macro_loc(loc) else {
+            self.set_error(format!("macro: {{LET}} bad loc `{loc}`"));
+            return;
+        };
+        let intl = self.wb().international.clone();
+        let (contents, format) =
+            CellContents::from_source_with_format(expr, self.default_label_prefix, &intl);
+        if self.undo_enabled {
+            let prev_contents = self.wb().cells.get(&addr).cloned();
+            let prev_format = self.wb().cell_formats.get(&addr).copied();
+            self.wb_mut().journal.push(JournalEntry::CellEdit {
+                addr,
+                prev_contents,
+                prev_format,
+            });
+        }
+        self.push_to_engine_at(addr, &contents);
+        if contents.is_empty() {
+            self.wb_mut().cells.remove(&addr);
+        } else {
+            self.wb_mut().cells.insert(addr, contents);
+        }
+        if let Some(fmt) = format {
+            self.wb_mut().cell_formats.insert(addr, fmt);
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+    }
+
+    /// `{BLANK range}` — erase every cell in `range`. Reuses the
+    /// existing /Range Erase plumbing so the undo journal stays
+    /// consistent.
+    fn execute_macro_blank(&mut self, range_arg: &str) {
+        let Some(range) = self.parse_macro_range(range_arg) else {
+            self.set_error(format!("macro: {{BLANK}} bad range `{range_arg}`"));
+            return;
+        };
+        self.execute_range_erase(range);
+        self.wb_mut().dirty = true;
+    }
+
+    /// Resolve a `range` argument to a [`Range`]. Accepts named
+    /// ranges, single addresses (treated as 1×1 ranges), and
+    /// `addr..addr` literal forms. Returns `None` if neither
+    /// representation parses.
+    fn parse_macro_range(&self, arg: &str) -> Option<Range> {
+        let trimmed = arg.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        // Named range first.
+        let key = trimmed.to_ascii_lowercase();
+        if let Some(r) = self.wb().named_ranges.get(&key) {
+            return Some(*r);
+        }
+        // `addr..addr` literal.
+        if let Some((a, b)) = trimmed.split_once("..") {
+            let start = Address::parse(a.trim()).ok()?;
+            let end = Address::parse(b.trim()).ok()?;
+            return Some(Range { start, end });
+        }
+        // Bare address → 1×1 range.
+        let addr = Address::parse(trimmed).ok()?;
+        Some(Range {
+            start: addr,
+            end: addr,
+        })
     }
 
     fn handle_key_error(&mut self, k: KeyEvent) {
@@ -2675,8 +3476,34 @@ impl App {
             KeyCode::PageUp if ctrl => self.move_sheet(-1),
             KeyCode::PageDown => self.move_pointer(0, 20),
             KeyCode::PageUp => self.move_pointer(0, -20),
+            // Alt-F2 STEP: toggle single-step mode. Active macros
+            // pause before each action; the user advances with
+            // Space. Idle when no macro is running.
+            KeyCode::F(2) if k.modifiers.contains(KeyModifiers::ALT) => {
+                self.step_mode = !self.step_mode;
+            }
             KeyCode::F(2) => self.begin_edit(),
+            // Alt-F3 RUN: pop up the NAMES picker; Enter on a name
+            // runs the macro stored at that range. Same overlay as
+            // F3, just with a "run on commit" intent.
+            KeyCode::F(3) if k.modifiers.contains(KeyModifiers::ALT) => {
+                self.open_name_list(NameListOrigin::RunMacro);
+            }
             KeyCode::F(4) if k.modifiers.contains(KeyModifiers::ALT) => self.undo(),
+            // Alt-F5 LEARN: toggle keystroke recording. Requires a
+            // /Worksheet Learn Range to have been set first.
+            KeyCode::F(5) if k.modifiers.contains(KeyModifiers::ALT) => {
+                self.toggle_learn_recording();
+            }
+            // Alt+letter runs the macro stored at the named range
+            // `\<letter>` (case-insensitive). Per SPEC §18 / PLAN.md
+            // M9: the Lotus user-macro launch convention.
+            KeyCode::Char(c)
+                if k.modifiers.contains(KeyModifiers::ALT) && c.is_ascii_alphabetic() =>
+            {
+                let name = format!("\\{}", c.to_ascii_lowercase());
+                self.run_named_macro(&name);
+            }
             KeyCode::F(5) => self.begin_goto_prompt(),
             KeyCode::F(9) => self.do_recalc(),
             KeyCode::F(10) => self.enter_graph_view(),
@@ -3680,6 +4507,11 @@ impl App {
             Action::WorksheetPage => self.insert_page_break_at_pointer(),
             Action::WorksheetHideEnable => self.hide_current_sheet(),
             Action::WorksheetHideDisable => self.unhide_all_sheets(),
+            Action::WorksheetLearnRange => {
+                self.begin_point(PendingCommand::WorksheetLearnRange);
+            }
+            Action::WorksheetLearnCancel => self.cancel_learn(),
+            Action::WorksheetLearnErase => self.erase_learn_range(),
             Action::WorksheetGlobalDefaultOtherClockStandard => {
                 self.clock_display = ClockDisplay::Standard;
                 self.close_menu();
@@ -4353,6 +5185,7 @@ impl App {
         self.mode = match nl.origin {
             NameListOrigin::Point => Mode::Point,
             NameListOrigin::Goto | NameListOrigin::PromptName => Mode::Menu,
+            NameListOrigin::RunMacro => Mode::Ready,
         };
     }
 
@@ -4366,6 +5199,7 @@ impl App {
             self.mode = match nl.origin {
                 NameListOrigin::Point => Mode::Point,
                 NameListOrigin::Goto | NameListOrigin::PromptName => Mode::Menu,
+                NameListOrigin::RunMacro => Mode::Ready,
             };
             return;
         };
@@ -4388,6 +5222,10 @@ impl App {
                     p.fresh = false;
                 }
                 self.mode = Mode::Menu;
+            }
+            NameListOrigin::RunMacro => {
+                self.mode = Mode::Ready;
+                self.run_named_macro(&name);
             }
         }
     }
@@ -6355,6 +7193,10 @@ impl App {
             PendingCommand::MouseSelect => {
                 self.mode = Mode::Ready;
             }
+            PendingCommand::WorksheetLearnRange => {
+                self.learn_range = Some(first.normalized());
+                self.mode = Mode::Ready;
+            }
         }
     }
 
@@ -6809,8 +7651,20 @@ impl App {
     }
 
     fn cancel_prompt(&mut self) {
+        // Esc on a macro-driven prompt cancels the whole macro: the
+        // user has bailed out of the input the macro asked for, so
+        // resuming would be wrong. Match Lotus's "Esc aborts macro"
+        // convention.
+        let was_macro = matches!(
+            self.prompt.as_ref().map(|p| p.next),
+            Some(PromptNext::MacroGetInput { .. })
+        );
         self.prompt = None;
         self.mode = Mode::Ready;
+        if was_macro {
+            self.pending_macro_input_loc = None;
+            self.macro_state = None;
+        }
     }
 
     fn commit_prompt(&mut self) {
@@ -7147,6 +8001,32 @@ impl App {
             PromptNext::WgdPrinterName => {
                 self.defaults.printer_name = p.buffer;
                 self.mode = Mode::Ready;
+            }
+            PromptNext::MacroGetInput { numeric } => {
+                let buf = p.buffer;
+                let loc = self.pending_macro_input_loc.take().unwrap_or_default();
+                if !loc.is_empty() {
+                    let expr = if numeric {
+                        // Numeric: pass through as-is so the source
+                        // parser tries to make a number out of it;
+                        // a non-numeric reply will fall back to a
+                        // label, matching how Lotus' lenient {GETNUMBER}
+                        // handler stores garbage as text.
+                        buf
+                    } else {
+                        // Force-as-label: prepend the apostrophe so
+                        // the source parser recognizes a leading
+                        // value-starter (`+`, digit, ...) as part
+                        // of a label rather than a value.
+                        format!("'{buf}")
+                    };
+                    self.execute_macro_let(&loc, &expr);
+                }
+                if let Some(s) = self.macro_state.as_mut() {
+                    s.suspend = None;
+                }
+                self.mode = Mode::Ready;
+                self.pump_macro();
             }
         }
     }
@@ -8857,6 +9737,8 @@ impl App {
             self.render_save_confirm_lines()
         } else if self.erase_confirm.is_some() {
             self.render_erase_confirm_lines()
+        } else if self.custom_menu.is_some() {
+            self.render_custom_menu_lines()
         } else if let Some(msg) = self.error_message.as_ref() {
             (
                 Line::from(format!(" {msg}")),
@@ -9172,6 +10054,36 @@ impl App {
             .unwrap_or("");
         let line3 = Line::from(format!(" {} {}", ec.path.display(), help));
         (line2, line3)
+    }
+
+    /// Render `{MENUBRANCH}` / `{MENUCALL}` overlay onto lines 2/3.
+    /// Same shape as the static menu: items horizontally on line 2
+    /// with the highlight reverse-video, description on line 3.
+    fn render_custom_menu_lines(&self) -> (Line<'_>, Line<'_>) {
+        let Some(menu) = self.custom_menu.as_ref() else {
+            return (Line::from(""), Line::from(""));
+        };
+        let mut spans: Vec<Span<'_>> = Vec::with_capacity(menu.items.len() * 2 + 1);
+        spans.push(Span::raw(" "));
+        for (i, item) in menu.items.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  "));
+            }
+            if i == menu.highlight {
+                spans.push(Span::styled(
+                    item.name.clone(),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ));
+            } else {
+                spans.push(Span::raw(item.name.clone()));
+            }
+        }
+        let desc = menu
+            .items
+            .get(menu.highlight)
+            .map(|i| i.description.as_str())
+            .unwrap_or("");
+        (Line::from(spans), Line::from(format!(" {desc}")))
     }
 
     fn render_save_confirm_lines(&self) -> (Line<'_>, Line<'_>) {
@@ -9887,6 +10799,20 @@ impl App {
         if self.recalc_pending {
             indicators.push("CALC");
         }
+        if self.learn_recording {
+            indicators.push("LEARN");
+        }
+        if self.step_mode {
+            indicators.push("STEP");
+        }
+        // SST = "single-step suspended" — currently parked at a
+        // STEP-mode pause waiting for the user to advance.
+        if matches!(
+            self.macro_state.as_ref().and_then(|s| s.suspend.as_ref()),
+            Some(MacroSuspend::StepPause)
+        ) {
+            indicators.push("SST");
+        }
         let right_chunk = indicators.join(" ");
         let pad = (area.width as usize).saturating_sub(left.len() + right_chunk.len() + 1);
         let line = format!("{left}{}{right_chunk} ", " ".repeat(pad));
@@ -9912,6 +10838,174 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// One frame of the macro call stack. The interpreter executes
+/// actions out of `remaining` and refills it from the cell at `pc`
+/// whenever the buffer empties — this lets a subroutine call resume
+/// the caller mid-line on `{RETURN}`.
+struct MacroFrame {
+    pc: Address,
+    remaining: VecDeque<MacroAction>,
+}
+
+impl MacroFrame {
+    fn starting_at(addr: Address) -> Self {
+        Self {
+            pc: addr,
+            remaining: VecDeque::new(),
+        }
+    }
+}
+
+/// Top-level macro execution state. Lives on [`App`] while a macro
+/// is running. `suspend = Some(...)` parks the interpreter so the
+/// user can interact with the workbook between actions; the
+/// `handle_key` post-dispatch hook clears the parked reason and
+/// resumes via `pump_macro`.
+struct MacroState {
+    frames: Vec<MacroFrame>,
+    /// Total actions executed so far across all frames; safety guard
+    /// against runaway loops (cap at `MAX_MACRO_STEPS`).
+    steps: u32,
+    /// Why the interpreter is parked, if it is. `None` when ready
+    /// to advance.
+    suspend: Option<MacroSuspend>,
+    /// One-shot flag: when true, [`step_macro`] skips the STEP-mode
+    /// pre-pause so a single action can fire. Set by the user
+    /// pressing Space at a STEP pause, cleared once consumed.
+    step_advance: bool,
+}
+
+/// Reasons a macro can pause mid-execution.
+enum MacroSuspend {
+    /// `{?}` — resume on the next Enter the user presses.
+    WaitEnter,
+    /// `{GETLABEL p, loc}` / `{GETNUMBER p, loc}` — a prompt is up.
+    /// The dest cell and numeric flag live on `App` because
+    /// `PromptNext` is `Copy` and can't carry an owned `String`.
+    GetInput,
+    /// `{MENUBRANCH loc}` / `{MENUCALL loc}` — a custom menu is up.
+    /// On commit, BRANCH (or CALL) the macro's PC to the picked
+    /// item's action cell.
+    MenuPick,
+    /// STEP mode is on: paused before the next action. Space
+    /// advances one step; Esc aborts.
+    StepPause,
+}
+
+/// State backing a `{MENUBRANCH}` / `{MENUCALL}` overlay.
+struct CustomMenuState {
+    /// Display name + description for each menu column (item).
+    items: Vec<CustomMenuItem>,
+    /// Address of the "row 2" (action) cell of the leftmost menu
+    /// column. The action cell for item `i` is `(action_row.col +
+    /// i, action_row.row)`.
+    action_row: Address,
+    /// True when this was opened via `{MENUCALL}` — the macro will
+    /// CALL (push frame) instead of BRANCH (replace PC).
+    is_call: bool,
+    /// Currently highlighted item index.
+    highlight: usize,
+}
+
+struct CustomMenuItem {
+    name: String,
+    description: String,
+}
+
+const MAX_MACRO_STEPS: u32 = 100_000;
+
+/// One row down from `pc`, or `None` if we hit the bottom of the
+/// sheet. Macros run column-major, so this is the natural "next
+/// line" rule.
+fn next_macro_pc(pc: Address) -> Option<Address> {
+    pc.row
+        .checked_add(1)
+        .filter(|r| *r < 8192)
+        .map(|r| Address::new(pc.sheet, pc.col, r))
+}
+
+/// Reverse of [`macro_key_to_event`]: given a key the user just
+/// pressed, return its representation in macro source form (so the
+/// Learn recorder can replay it later). `None` for keys that have
+/// no macro-source equivalent (modifier-only, unmapped function
+/// keys with Alt, ...).
+fn key_event_to_macro_source(k: &KeyEvent) -> Option<String> {
+    let alt = k.modifiers.contains(KeyModifiers::ALT);
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    // Alt-prefixed keys are macro launchers / system actions; they
+    // shouldn't end up in a Learn recording as themselves.
+    if alt {
+        return None;
+    }
+    Some(match k.code {
+        KeyCode::Enter => "~".to_string(),
+        KeyCode::Up => "{UP}".to_string(),
+        KeyCode::Down => "{DOWN}".to_string(),
+        KeyCode::Left if ctrl => "{BIGLEFT}".to_string(),
+        KeyCode::Right if ctrl => "{BIGRIGHT}".to_string(),
+        KeyCode::Left => "{LEFT}".to_string(),
+        KeyCode::Right => "{RIGHT}".to_string(),
+        KeyCode::Home => "{HOME}".to_string(),
+        KeyCode::End => "{END}".to_string(),
+        KeyCode::PageUp => "{PGUP}".to_string(),
+        KeyCode::PageDown => "{PGDN}".to_string(),
+        KeyCode::Esc => "{ESC}".to_string(),
+        KeyCode::Backspace => "{BS}".to_string(),
+        KeyCode::Delete => "{DEL}".to_string(),
+        KeyCode::Insert => "{INS}".to_string(),
+        KeyCode::Tab => "{TAB}".to_string(),
+        KeyCode::F(n) => match n {
+            1 => "{HELP}".to_string(),
+            2 => "{EDIT}".to_string(),
+            3 => "{NAME}".to_string(),
+            4 => "{ABS}".to_string(),
+            5 => "{GOTO}".to_string(),
+            6 => "{WINDOW}".to_string(),
+            7 => "{QUERY}".to_string(),
+            8 => "{TABLE}".to_string(),
+            9 => "{CALC}".to_string(),
+            10 => "{GRAPH}".to_string(),
+            _ => return None,
+        },
+        KeyCode::Char(c) => match c {
+            '~' => "{TILDE}".to_string(),
+            '{' => "{LBRACE}".to_string(),
+            '}' => "{RBRACE}".to_string(),
+            other => other.to_string(),
+        },
+        _ => return None,
+    })
+}
+
+/// Translate a [`MacroKey`] from `l123-macro` into the crossterm
+/// [`KeyEvent`] the dispatcher already handles. The mapping is one-
+/// to-one: a macro pressing `{DOWN}` should be exactly the same as
+/// the user pressing the Down arrow.
+fn macro_key_to_event(key: MacroKey) -> KeyEvent {
+    let none = KeyModifiers::NONE;
+    let ctrl = KeyModifiers::CONTROL;
+    match key {
+        MacroKey::Char(c) => KeyEvent::new(KeyCode::Char(c), none),
+        MacroKey::Enter => KeyEvent::new(KeyCode::Enter, none),
+        MacroKey::Up => KeyEvent::new(KeyCode::Up, none),
+        MacroKey::Down => KeyEvent::new(KeyCode::Down, none),
+        MacroKey::Left => KeyEvent::new(KeyCode::Left, none),
+        MacroKey::Right => KeyEvent::new(KeyCode::Right, none),
+        MacroKey::Home => KeyEvent::new(KeyCode::Home, none),
+        MacroKey::End => KeyEvent::new(KeyCode::End, none),
+        MacroKey::PageUp => KeyEvent::new(KeyCode::PageUp, none),
+        MacroKey::PageDown => KeyEvent::new(KeyCode::PageDown, none),
+        MacroKey::BigLeft => KeyEvent::new(KeyCode::Left, ctrl),
+        MacroKey::BigRight => KeyEvent::new(KeyCode::Right, ctrl),
+        MacroKey::Escape => KeyEvent::new(KeyCode::Esc, none),
+        MacroKey::Backspace => KeyEvent::new(KeyCode::Backspace, none),
+        MacroKey::Delete => KeyEvent::new(KeyCode::Delete, none),
+        MacroKey::Insert => KeyEvent::new(KeyCode::Insert, none),
+        MacroKey::Tab => KeyEvent::new(KeyCode::Tab, none),
+        MacroKey::Function(n) => KeyEvent::new(KeyCode::F(n), none),
     }
 }
 

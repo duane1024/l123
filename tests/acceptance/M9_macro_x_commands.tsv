@@ -1,0 +1,62 @@
+# Phase 9 — Lotus's pre-`{}` `/X` legacy macro commands. The
+# lexer desugars them into the equivalent brace directives and
+# the existing interpreter runs them unchanged.
+#
+# Layout:
+#   A1: '/XGdone~      (Branch to `done`. Same as {BRANCH done}.)
+#   A2: 'never         (would dirty A2 if reached)
+#   D7: '{GOTO}B5~ok~/XQ
+#                      (lands "ok" in B5, then /XQ == {QUIT})
+
+ASSERT_POINTER  A:A1
+
+KEY '
+KEYS /XGdone~
+ENTER
+DOWN
+KEY '
+KEYS never
+ENTER
+
+# Branch target at D7.
+F 5
+KEYS D7
+ENTER
+KEY '
+KEYS {GOTO}B5~ok~/XQ
+ENTER
+
+# Names: \M → A1, done → D7.
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+
+F 5
+KEYS D7
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS done
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+ALT m
+ASSERT_POINTER  A:B5
+ASSERT_PANEL_L1 A:B5: 'ok
+
+# A2 should still be 'never (line 2 was skipped because /XG branched
+# away, then /XQ stopped before falling back to it).
+F 5
+KEYS A2
+ENTER
+ASSERT_PANEL_L1 A:A2: 'never

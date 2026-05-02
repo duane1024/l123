@@ -1,0 +1,55 @@
+# Phase 2 — special-key tokens. `{NAME}` syntax in macros expands
+# to the corresponding KeyEvent through the same dispatcher. A
+# trailing integer is a repeat count (`{DOWN 5}` = five Downs).
+# `{TILDE}` / `{LBRACE}` / `{RBRACE}` escape the metacharacters.
+
+ASSERT_MODE     READY
+ASSERT_POINTER  A:A1
+
+# Direction keys, no count.
+MACRO   {DOWN}{DOWN}{RIGHT}
+ASSERT_POINTER  A:B3
+
+# Repeat count: {UP 2} == two Ups.
+MACRO   {LEFT}{UP 2}
+ASSERT_POINTER  A:A1
+
+# Function-key tokens — {GOTO} is F5, then keystrokes fill the prompt.
+MACRO   {GOTO}C7~
+ASSERT_POINTER  A:C7
+ASSERT_MODE     READY
+
+# `{TILDE}` types a literal `~` char into the entry buffer (vs `~`
+# alone which is Enter). Together with `{LBRACE}`/`{RBRACE}` these
+# are the macro-source escapes for the three metacharacters.
+MACRO   a{TILDE}b{LBRACE}c{RBRACE}~
+ASSERT_PANEL_L1 A:C7: 'a~b{c}
+ASSERT_MODE     READY
+
+# {ESC} mid-entry cancels the entry. Pointer doesn't move.
+MACRO   xyz{ESC}
+ASSERT_MODE     READY
+ASSERT_POINTER  A:C7
+
+# {BS} mid-entry deletes the previous char.
+DOWN
+ASSERT_POINTER  A:C8
+MACRO   abcd{BS}{BS}~
+ASSERT_PANEL_L1 A:C8: 'ab
+ASSERT_MODE     READY
+
+# {CALC} == F9. We can't easily assert the CALC indicator (lights
+# only in manual-recalc mode) but we can verify {CALC} doesn't
+# disturb committed cell state.
+DOWN
+ASSERT_POINTER  A:C9
+MACRO   +1+1~{CALC}
+ASSERT_PANEL_L1 A:C9: (G) +1+1
+ASSERT_CELL     A:C9  2
+
+# {EDIT} == F2: opens EDIT mode on the current cell with the
+# existing source in the buffer. {BS} twice + new digit edits the
+# formula in place, then `~` commits.
+MACRO   {EDIT}{BS}{BS}3+3~
+ASSERT_PANEL_L1 A:C9: (G) +13+3
+ASSERT_CELL     A:C9  16

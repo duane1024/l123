@@ -1,0 +1,55 @@
+# Phase 11 — Alt-F2 STEP mode. With STEP on, a running macro
+# pauses before each action; Space advances one step; Esc aborts.
+
+ASSERT_POINTER  A:A1
+
+# Macro at A1: writes A:E1=1, A:E2=2, A:E3=3 then quits.
+KEY '
+KEYS {LET E1, 1}{LET E2, 2}{LET E3, 3}{QUIT}
+ENTER
+
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Toggle STEP mode on. STEP indicator appears.
+ALT_F 2
+ASSERT_STATUS   STEP
+
+# Fire the macro. Without Space presses it must NOT have written
+# any cells yet — the first action is parked.
+ALT m
+ASSERT_STATUS   SST
+F 5
+KEYS E1
+ENTER
+ASSERT_PANEL_L1 A:E1:
+
+# Advance one step → {LET E1, 1} fires. E1 now has 1; we re-pause.
+SPACE
+ASSERT_STATUS   SST
+F 5
+KEYS E1
+ENTER
+ASSERT_PANEL_L1 A:E1: (G) 1
+
+# Abort with Esc. The remaining {LET}s never run; E2 still empty.
+ESC
+ASSERT_SCREEN_NOT_CONTAINS SST
+
+F 5
+KEYS E2
+ENTER
+ASSERT_PANEL_L1 A:E2:
+
+# Toggle STEP off so the next macro run completes normally.
+ALT_F 2
+ASSERT_SCREEN_NOT_CONTAINS STEP

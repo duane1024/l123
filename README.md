@@ -30,7 +30,7 @@ Actively developed. Tracking the milestone plan in
 | M6 | Printing (ASCII, PDF, line-printer) and Range Search | ✅ done |
 | M7 | Graphs: 7 chart types, F10 view, SVG/PNG save | ✅ done |
 | M8 | R3.4 WYSIWYG icon panel with mouse support | ✅ done |
-| M9 | Macros: `/X`, `{BRANCH}`, `{IF}`, Learn | planned |
+| M9 | Macros: `/X`, `{BRANCH}`, `{IF}`, Learn | ✅ done |
 | M10 | Polish: startup splash, context help, themes | 🚧 in progress |
 
 API, keybindings, and file paths may still change before v1.0.
