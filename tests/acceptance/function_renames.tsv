@@ -1,0 +1,107 @@
+# Function-name renames + niladic completion + @@ → INDIRECT.
+# End-to-end verification that the new entries in l123-parse's rename
+# table evaluate correctly through parse → engine → display.
+
+# Seed A1..A5 = 1..5 — the input range for AVG/VARS/etc.
+KEYS 1
+DOWN
+KEYS 2
+DOWN
+KEYS 3
+DOWN
+KEYS 4
+DOWN
+KEYS 5
+ENTER
+
+# @AVG → AVERAGE: mean of {1..5} = 3.
+F 5
+KEYS B1
+ENTER
+KEY @
+KEYS AVG(A1..A5)
+ENTER
+ASSERT_CELL       A:B1  3
+ASSERT_PANEL_L1   A:B1: (G) @AVG(A1..A5)
+
+# @VARS → VAR.S: sample variance of {1..5} = 2.5.
+F 5
+KEYS B2
+ENTER
+KEY @
+KEYS VARS(A1..A5)
+ENTER
+ASSERT_CELL       A:B2  2.5
+
+# @COLS → COLUMNS: a 5-wide range.
+F 5
+KEYS B3
+ENTER
+KEY @
+KEYS COLS(A1..E1)
+ENTER
+ASSERT_CELL       A:B3  5
+
+# @LENGTH → LEN.
+F 5
+KEYS B4
+ENTER
+KEY @
+KEYS LENGTH("authenticity")
+ENTER
+ASSERT_CELL       A:B4  12
+
+# @REPEAT → REPT: produces a literal label.
+F 5
+KEYS B5
+ENTER
+KEY @
+KEYS REPEAT("=",5)
+ENTER
+ASSERT_CELL       A:B5  =====
+
+# @COUNT → COUNTA: counts non-empty cells incl. labels. Drop a label
+# at A6 first; then COUNT A1..A6 = 6.
+F 5
+KEYS A6
+ENTER
+KEY '
+KEYS hello
+ENTER
+F 5
+KEYS B6
+ENTER
+KEY @
+KEYS COUNT(A1..A6)
+ENTER
+ASSERT_CELL       A:B6  6
+
+# Niladic: @PI evaluates without explicit parens. The value is
+# irrational; assert the formula source on the panel rather than the
+# rendered cell text (which depends on column width).
+F 5
+KEYS B7
+ENTER
+KEY @
+KEYS PI
+ENTER
+ASSERT_PANEL_L1   A:B7: (G) @PI
+
+# @@ → INDIRECT. Put the literal text "A6" in C1, then @@(C1) at D1
+# resolves to A6's value ("hello"). The label flows naturally because
+# A6 is a label cell.
+F 5
+KEYS C1
+ENTER
+KEY '
+KEYS A6
+ENTER
+F 5
+KEYS D1
+ENTER
+KEY @
+KEY @
+KEYS (C1)
+ENTER
+ASSERT_CELL       A:D1  hello
+ASSERT_PANEL_L1   A:D1: (G) @@(C1)

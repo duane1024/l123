@@ -1009,6 +1009,11 @@ transcripts! {
     m9_macro_x_commands       => "M9_macro_x_commands.tsv",
     m9_learn_record           => "M9_learn_record.tsv",
     m9_macro_step             => "M9_macro_step.tsv",
+    function_renames    => "function_renames.tsv",
+    function_argfix     => "function_argfix.tsv",
+    function_emulations => "function_emulations.tsv",
+    function_reload_round_trip => "function_reload_round_trip.tsv",
+    function_sidecar_round_trip => "function_sidecar_round_trip.tsv",
 }
 
 #[cfg(feature = "wk3")]

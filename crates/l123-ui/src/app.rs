@@ -1936,9 +1936,16 @@ fn redirect_pointer_off_hidden(wb: &mut Workbook) {
     }
 }
 
-fn cell_view_to_contents(cv: &CellView) -> Option<CellContents> {
+fn cell_view_to_contents(cv: &CellView, sheets: &[&str]) -> Option<CellContents> {
     if let Some(f) = &cv.formula {
-        let expr = f.strip_prefix('=').unwrap_or(f).to_string();
+        let body = f.strip_prefix('=').unwrap_or(f);
+        // Reverse the engine's Excel form back to a 1-2-3 source so
+        // the panel and the cell cache stay authentic across save +
+        // reload. Forward and reverse round-trip cleanly for the
+        // supported subset (renames, niladic parens, `:`/`..`,
+        // sheet refs, INDIRECT, `#VALUE!`); arg-fix and emulated
+        // functions display in their decomposed Excel form.
+        let expr = l123_parse::to_lotus_source(body, sheets);
         return Some(CellContents::Formula {
             expr,
             cached_value: Some(cv.value.clone()),
@@ -5729,9 +5736,21 @@ impl App {
         }
         // Pre-populate the new file's cells cache from the engine.
         let mut cells = HashMap::new();
+        let sheet_names = engine.all_sheet_names();
+        let sheet_refs: Vec<&str> = sheet_names.iter().map(String::as_str).collect();
         for (addr, cv) in engine.used_cells() {
-            if let Some(contents) = cell_view_to_contents(&cv) {
+            if let Some(contents) = cell_view_to_contents(&cv, &sheet_refs) {
                 cells.insert(addr, contents);
+            }
+        }
+        // Apply the formula-source sidecar if present, overriding
+        // the cosmetic reverse-translated `expr` for any cell that
+        // has a stored Lotus source.
+        if let Ok(sources) = l123_io::formula_sources::read_from_xlsx(&path) {
+            for (addr, src) in sources {
+                if let Some(CellContents::Formula { expr, .. }) = cells.get_mut(&addr) {
+                    *expr = src;
+                }
             }
         }
         let mut col_widths: HashMap<(SheetId, u16), u8> = HashMap::new();
@@ -6252,9 +6271,25 @@ impl App {
         self.recalc_pending = false;
 
         // Pull every non-empty cell into the UI cache.
+        let sheet_names = self.wb().engine.all_sheet_names();
+        let sheet_refs: Vec<&str> = sheet_names.iter().map(String::as_str).collect();
         for (addr, cv) in self.wb_mut().engine.used_cells() {
-            if let Some(contents) = cell_view_to_contents(&cv) {
+            if let Some(contents) = cell_view_to_contents(&cv, &sheet_refs) {
                 self.wb_mut().cells.insert(addr, contents);
+            }
+        }
+        // Apply the formula-source sidecar if present. The sidecar
+        // is the source of truth for `expr` whenever it has an
+        // entry — the cosmetic reverse translator above is the
+        // fallback for cells without one (e.g. files originating
+        // from Excel, or saved before this feature landed).
+        if let Ok(sources) = l123_io::formula_sources::read_from_xlsx(&path) {
+            for (addr, src) in sources {
+                if let Some(CellContents::Formula { expr, .. }) =
+                    self.wb_mut().cells.get_mut(&addr)
+                {
+                    *expr = src;
+                }
             }
         }
         for (addr, w) in self.wb_mut().engine.used_column_widths() {
@@ -6472,6 +6507,22 @@ impl App {
             let _ = self.wb_mut().engine.set_sheet_color(sid, Some(color));
         }
         if self.wb_mut().engine.save_xlsx(&path).is_ok() {
+            // Embed the user-typed Lotus source per formula cell as
+            // a sidecar inside the xlsx zip so save → reload
+            // preserves shapes the cosmetic reverse translator
+            // can't recover (arg-fix wrappers, emulated functions
+            // like @CTERM, 3D-range expansions). A failure here is
+            // best-effort — the xlsx itself is already saved.
+            let sources: HashMap<Address, String> = self
+                .wb()
+                .cells
+                .iter()
+                .filter_map(|(addr, c)| match c {
+                    CellContents::Formula { expr, .. } => Some((*addr, expr.clone())),
+                    _ => None,
+                })
+                .collect();
+            let _ = l123_io::formula_sources::write_to_xlsx(&path, &sources);
             self.wb_mut().active_path = Some(path);
             self.wb_mut().dirty = false;
         }

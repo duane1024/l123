@@ -16,7 +16,8 @@
 //! - `#AND#` / `#OR#` / `#NOT#` infix → function translation.
 //! - Single-dot range separator `A1.B5`.
 //! - Named ranges — M3 (names layer).
-//! - Function renames where Lotus and Excel differ (e.g. `@AVG` ↔ `AVERAGE`).
+//! - `@`-name → IronCalc-name translation table (renames, arg-fixes,
+//!   and emulations). Catalog in `docs/AT_FUNCTIONS.md`.
 
 use l123_core::address::{col_to_letters, letters_to_col, MAX_COLS, MAX_ROWS};
 
@@ -64,18 +65,22 @@ pub fn to_engine_source(lotus: &str, sheets: &[&str]) -> String {
 /// translated to Excel's `,`; the user's decimal point is translated
 /// to Excel's `.`.
 pub fn to_engine_source_with_config(lotus: &str, sheets: &[&str], cfg: &ParseConfig) -> String {
+    // `+` is just a value-starter sigil; strip it before translating.
+    // `@` is left in place so the function-name translator inside
+    // `translate` can recognise it.
     let body = match lotus.chars().next() {
-        Some('@') | Some('+') => &lotus[1..],
+        Some('+') => &lotus[1..],
         _ => lotus,
     };
     let translated = translate(body, sheets, cfg);
     format!("={translated}")
 }
 
-/// One pass: handles string-literal transparency, strips inner `@`
-/// sigils, expands sheet-qualified refs when `sheets` is non-empty,
-/// rewrites `..` → `:` for unqualified ranges, and translates the
-/// user's argument-separator and decimal-point to Excel's `,` and `.`.
+/// One pass: handles string-literal transparency, translates `@name`
+/// function calls (renames, niladic-paren completion, `@@` → INDIRECT),
+/// expands sheet-qualified refs when `sheets` is non-empty, rewrites
+/// `..` → `:` for unqualified ranges, and translates the user's
+/// argument-separator and decimal-point to Excel's `,` and `.`.
 fn translate(s: &str, sheets: &[&str], cfg: &ParseConfig) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_string = false;
@@ -97,6 +102,11 @@ fn translate(s: &str, sheets: &[&str], cfg: &ParseConfig) -> String {
             continue;
         }
         if b == b'@' {
+            if let Some((emitted, end)) = try_at_function(s, i, sheets, cfg) {
+                out.push_str(&emitted);
+                i = end;
+                continue;
+            }
             i += 1;
             continue;
         }
@@ -134,6 +144,593 @@ fn translate(s: &str, sheets: &[&str], cfg: &ParseConfig) -> String {
         i = ch_end;
     }
     out
+}
+
+/// Reverse cosmetic translator: an Excel-shape formula body (without
+/// the leading `=`) → a 1-2-3 source-form string suitable for the
+/// control panel.
+///
+/// Covers the cleanly-reversible subset of the forward translator:
+/// function-name renames, niladic-paren elision, `:` → `..`,
+/// sheet-prefix rewriting, `INDIRECT` → `@@`, and `#VALUE!` → `@ERR`.
+/// Arg-fix rewriters and emulated functions (e.g. `@CTERM`,
+/// `@SUMPRODUCT`) are *not* reversed — their rewrite is lossy and
+/// would need sidecar metadata to round-trip. They display in their
+/// Excel-decomposed form on the panel.
+///
+/// The result starts with `@` (function call) or `+` (other
+/// expressions) so the source-form re-parses cleanly.
+pub fn to_lotus_source(excel_body: &str, sheets: &[&str]) -> String {
+    to_lotus_source_with_config(excel_body, sheets, &ParseConfig::default())
+}
+
+/// Like [`to_lotus_source`], but threads a [`ParseConfig`] for
+/// non-default Punctuation A-H. The cfg is currently advisory —
+/// IronCalc always emits the canonical `,` / `.` punctuation, so the
+/// reverse pass leaves them as-is.
+pub fn to_lotus_source_with_config(
+    excel_body: &str,
+    sheets: &[&str],
+    _cfg: &ParseConfig,
+) -> String {
+    let body = reverse_translate(excel_body, sheets);
+    if body.starts_with('@') {
+        body
+    } else {
+        format!("+{body}")
+    }
+}
+
+/// One pass: reverse renames, niladic-paren elision, sheet-prefix
+/// rewriting, range-separator swap, INDIRECT → `@@`, and the
+/// `#VALUE!` → `@ERR` literal.
+///
+/// `@` characters in the input are skipped entirely. IronCalc's
+/// xlsx codec annotates ref-returning functions with the
+/// implicit-intersection operator on save (`=INDIRECT(...)` becomes
+/// `=@INDIRECT(...)` after a round-trip). Treating `@` as a no-op
+/// here means an annotated `@INDIRECT(...)` still resolves to
+/// `@@(...)` rather than `@@@(...)`.
+fn reverse_translate(s: &str, sheets: &[&str]) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    let mut in_string = false;
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' {
+            in_string = !in_string;
+            out.push('"');
+            i += 1;
+            continue;
+        }
+        if in_string {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        if b == b'@' {
+            i += 1;
+            continue;
+        }
+        // `#VALUE!` → `@ERR`. Other error literals (`#DIV/0!`,
+        // `#REF!`, ...) pass through unchanged — they have no Lotus
+        // analogue beyond `@ERR` itself, and we don't want to lose
+        // the kind information on the panel.
+        if b == b'#' {
+            const VALUE_LIT: &[u8] = b"#VALUE!";
+            if s.as_bytes().get(i..i + VALUE_LIT.len()) == Some(VALUE_LIT) {
+                out.push_str("@ERR");
+                i += VALUE_LIT.len();
+                continue;
+            }
+        }
+        // Quoted sheet reference: `'Some Name'!`
+        if b == b'\'' {
+            if let Some((end, idx)) = try_reverse_quoted_sheet_ref(s, i, sheets) {
+                out.push_str(&col_to_letters(idx));
+                out.push(':');
+                i = end;
+                continue;
+            }
+        }
+        if b.is_ascii_alphabetic() {
+            // Bare sheet reference: `<name>!` where `<name>` matches
+            // an engine sheet name. Must be tried before the function
+            // path so `Sheet1!` doesn't collide with the function
+            // scanner.
+            if let Some((end, idx)) = try_reverse_bare_sheet_ref(s, i, sheets) {
+                out.push_str(&col_to_letters(idx));
+                out.push(':');
+                i = end;
+                continue;
+            }
+            // Function call: letters (with optional `.LETTERS`
+            // segments and trailing digits) followed immediately by
+            // `(`. Cell refs (letters followed by digits, no `(`)
+            // fall through to the byte-emit path.
+            if let Some((emitted, end)) = try_reverse_function(s, i) {
+                out.push_str(&emitted);
+                i = end;
+                continue;
+            }
+        }
+        if b == b':' {
+            out.push_str("..");
+            i += 1;
+            continue;
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
+}
+
+/// IronCalc → 1-2-3 function-name reverse renames. Asymmetric with
+/// [`FN_RENAMES`]: a forward entry like `("LEN", "LEN")` (passthrough)
+/// has no reverse entry; a one-way synonym like `LENGTH → LEN` is
+/// not reversed because `@LEN` is the canonical 1-2-3 form.
+const FN_RENAMES_BACK: &[(&str, &str)] = &[
+    ("AVERAGE", "AVG"),
+    ("COUNTA", "COUNT"),
+    ("STDEV.P", "STD"),
+    ("STDEV.S", "STDS"),
+    ("VAR.P", "VAR"),
+    ("VAR.S", "VARS"),
+    ("ISTEXT", "ISSTRING"),
+    ("REPT", "REPEAT"),
+    ("COLUMNS", "COLS"),
+    ("DAVERAGE", "DAVG"),
+    ("DSTDEVP", "DSTD"),
+    ("DSTDEV", "DSTDS"),
+    ("DVARP", "DVAR"),
+    ("DVAR", "DVARS"),
+    ("UNICODE", "CODE"),
+];
+
+fn lookup_reverse_rename(upper_name: &str) -> Option<&'static str> {
+    FN_RENAMES_BACK
+        .iter()
+        .find(|(k, _)| *k == upper_name)
+        .map(|(_, v)| *v)
+}
+
+/// Scan an Excel-shape function name starting at `start`. Recognizes
+/// `[A-Za-z]+(\.[A-Za-z]+)*[0-9]*` — letters, optionally interleaved
+/// with `.LETTERS` segments (for `STDEV.P`), with optional trailing
+/// digits (`ATAN2`). Returns the end byte index, or `start` if no
+/// letter run was found.
+fn scan_excel_function_name(s: &str, start: usize) -> usize {
+    let bytes = s.as_bytes();
+    let mut i = start;
+    if i >= bytes.len() || !bytes[i].is_ascii_alphabetic() {
+        return start;
+    }
+    while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+        i += 1;
+    }
+    while i + 1 < bytes.len() && bytes[i] == b'.' && bytes[i + 1].is_ascii_alphabetic() {
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+            i += 1;
+        }
+    }
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    i
+}
+
+/// At byte `start` (a letter), try to recognise a function call.
+/// Returns the emitted text (with leading `@` or the `@@` indirect
+/// shorthand) and the byte index after the consumed name (and, for
+/// niladic with empty parens, after the `()`).
+fn try_reverse_function(s: &str, start: usize) -> Option<(String, usize)> {
+    let name_end = scan_excel_function_name(s, start);
+    if name_end == start {
+        return None;
+    }
+    if s.as_bytes().get(name_end).copied() != Some(b'(') {
+        return None;
+    }
+    let name = &s[start..name_end];
+    let upper = name.to_ascii_uppercase();
+
+    // INDIRECT(...) → @@(...). The `(` stays for the main loop to
+    // emit normally.
+    if upper == "INDIRECT" {
+        return Some(("@@".to_string(), name_end));
+    }
+
+    // Niladic with empty `()` → drop the parens entirely.
+    if is_niladic(&upper) && s.as_bytes().get(name_end + 1).copied() == Some(b')') {
+        let lotus = lookup_reverse_rename(&upper).unwrap_or(name);
+        return Some((format!("@{lotus}"), name_end + 2));
+    }
+
+    let lotus = lookup_reverse_rename(&upper).unwrap_or(name);
+    Some((format!("@{lotus}"), name_end))
+}
+
+/// At a letter, try to consume a bare sheet name followed by `!`.
+/// Returns `(byte_index_past_!, sheet_index)` on a match.
+fn try_reverse_bare_sheet_ref(s: &str, start: usize, sheets: &[&str]) -> Option<(usize, u16)> {
+    let bytes = s.as_bytes();
+    let mut i = start;
+    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        i += 1;
+    }
+    if i == start || bytes.get(i).copied() != Some(b'!') {
+        return None;
+    }
+    let name = &s[start..i];
+    let idx = sheets.iter().position(|n| *n == name)?;
+    Some((i + 1, idx as u16))
+}
+
+/// At a `'`, try to consume a single-quoted sheet name followed by
+/// `'!`. Honors the Excel doubling convention `''` for an embedded
+/// quote.
+fn try_reverse_quoted_sheet_ref(s: &str, start: usize, sheets: &[&str]) -> Option<(usize, u16)> {
+    let bytes = s.as_bytes();
+    if bytes.get(start).copied() != Some(b'\'') {
+        return None;
+    }
+    let mut i = start + 1;
+    let mut name = String::new();
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\'' {
+            if bytes.get(i + 1).copied() == Some(b'\'') {
+                name.push('\'');
+                i += 2;
+                continue;
+            }
+            // Closing quote — must be followed by `!` to be a sheet
+            // ref.
+            if bytes.get(i + 1).copied() != Some(b'!') {
+                return None;
+            }
+            let idx = sheets.iter().position(|n| *n == name)?;
+            return Some((i + 2, idx as u16));
+        }
+        name.push(b as char);
+        i += 1;
+    }
+    None
+}
+
+/// 1-2-3 → IronCalc function-name renames where the names diverge.
+///
+/// Catalog and rationale in `docs/AT_FUNCTIONS.md`. Lookup keys are
+/// upper-case; the user's source casing is irrelevant. Names not in
+/// this table pass through unchanged (the `@` is stripped by the
+/// caller).
+const FN_RENAMES: &[(&str, &str)] = &[
+    ("AVG", "AVERAGE"),
+    ("COUNT", "COUNTA"),
+    ("STD", "STDEV.P"),
+    ("STDS", "STDEV.S"),
+    ("VAR", "VAR.P"),
+    ("VARS", "VAR.S"),
+    ("ISSTRING", "ISTEXT"),
+    ("LENGTH", "LEN"),
+    ("REPEAT", "REPT"),
+    ("COLS", "COLUMNS"),
+    // Database family — same swap pattern: 1-2-3 `@D…S` is sample,
+    // bare `@D…` is population. IronCalc's names invert the suffixing
+    // (DSTDEV is sample, DSTDEVP is population).
+    ("DAVG", "DAVERAGE"),
+    ("DSTD", "DSTDEVP"),
+    ("DSTDS", "DSTDEV"),
+    ("DVAR", "DVARP"),
+    ("DVARS", "DVAR"),
+    // 1-2-3 @CODE returns the LICS/ASCII code of the first char.
+    // IronCalc 0.7.1 ships only `UNICODE`, which is identical for
+    // ASCII; close-enough mapping until/unless a `CODE` shim lands.
+    ("CODE", "UNICODE"),
+];
+
+/// 1-2-3 niladic functions — written without parens in 1-2-3, but
+/// Excel requires `()`. The translator appends `()` unless the user
+/// already wrote them. `@ERR` is also niladic but has no Excel
+/// equivalent, so it's emulated in PR3 rather than completed here.
+const NILADIC: &[&str] = &["PI", "NOW", "TODAY", "RAND", "NA", "TRUE", "FALSE"];
+
+fn lookup_rename(upper_name: &str) -> Option<&'static str> {
+    FN_RENAMES
+        .iter()
+        .find(|(k, _)| *k == upper_name)
+        .map(|(_, v)| *v)
+}
+
+fn is_niladic(upper_name: &str) -> bool {
+    NILADIC.contains(&upper_name)
+}
+
+/// At byte `i`, where `s.as_bytes()[i] == b'@'`, try to recognise a
+/// 1-2-3 function call and emit the IronCalc-shape replacement.
+///
+/// Handles four cases:
+/// 1. `@@(...)` — Lotus indirect → `INDIRECT(...)`.
+/// 2. `@NAME` (no `(`) where `NAME` is niladic → `NAME()`.
+/// 3. `@NAME(...)` where `NAME` needs argument-shape rewriting (e.g.
+///    `@MID` 0→1-based start) — fully consume the call and emit the
+///    rewritten Excel form.
+/// 4. `@NAME(...)` — apply the rename table; pass through unchanged
+///    if not in the table. The opening `(` is left for the caller's
+///    next iteration to emit normally.
+///
+/// Returns `(emitted_text, byte_index_after_match)`. Returns `None`
+/// only when `@` is followed by no name letters at all (in which
+/// case the caller falls back to plain `@`-strip).
+fn try_at_function(
+    s: &str,
+    i: usize,
+    sheets: &[&str],
+    cfg: &ParseConfig,
+) -> Option<(String, usize)> {
+    debug_assert_eq!(s.as_bytes().get(i).copied(), Some(b'@'));
+    let bytes = s.as_bytes();
+
+    // Case 1: `@@` → INDIRECT. The opening `(` (if any) is left for
+    // the main loop — same as a normal function call.
+    if bytes.get(i + 1).copied() == Some(b'@') {
+        return Some(("INDIRECT".to_string(), i + 2));
+    }
+
+    // Scan name run: [A-Za-z][A-Za-z0-9]*. Function names like
+    // `ATAN2` end in a digit; that's the only digit-bearing 1-2-3
+    // built-in but the rule is general.
+    let name_start = i + 1;
+    let mut j = name_start;
+    while j < bytes.len() && bytes[j].is_ascii_alphabetic() {
+        j += 1;
+    }
+    while j < bytes.len() && bytes[j].is_ascii_alphanumeric() {
+        j += 1;
+    }
+    if j == name_start {
+        return None;
+    }
+
+    let name = &s[name_start..j];
+    let upper = name.to_ascii_uppercase();
+    let next = bytes.get(j).copied();
+
+    // Case 2.5: `@ERR` — Excel has no equivalent function; emit a
+    // `#VALUE!` literal so the cell evaluates to an error. 1-2-3
+    // `@ERR` is niladic and is the only emulated niladic — the
+    // generic niladic-paren completion below would emit `ERR()`,
+    // which IronCalc rejects.
+    if upper == "ERR" && next != Some(b'(') {
+        return Some(("#VALUE!".to_string(), j));
+    }
+
+    // Case 3: arg-fix. Functions where the engine name is the same
+    // (or trivially renamed) but argument shape needs rewriting.
+    // Only triggers when `(` follows; otherwise the call is malformed
+    // and we fall through to the rename-table path.
+    if next == Some(b'(') {
+        if let Some(emitted_end) = try_arg_fix(&upper, s, j, sheets, cfg) {
+            return Some(emitted_end);
+        }
+    }
+
+    // Resolved engine-side name: rename-table hit wins; otherwise
+    // preserve the user's original casing (the engine accepts both,
+    // and we avoid a gratuitous re-case for `@SUM` etc.).
+    let resolved: String = match lookup_rename(&upper) {
+        Some(repl) => repl.to_string(),
+        None => name.to_string(),
+    };
+
+    // Niladic completion only applies when the user did NOT supply
+    // `(...)`; otherwise we'd emit `PI()()`.
+    let emitted = if is_niladic(&upper) && next != Some(b'(') {
+        format!("{resolved}()")
+    } else {
+        resolved
+    };
+    Some((emitted, j))
+}
+
+/// Per-function argument-shape rewrites. Called with the upper-cased
+/// 1-2-3 name and the index of `(` immediately following it. Returns
+/// the rewritten Excel-form call plus the byte index after the
+/// matching `)`, or `None` if the name has no arg-fix or the call is
+/// malformed (unbalanced parens, wrong arity).
+///
+/// The args text is split at top-level by the user's argument
+/// separator, then each arg is recursively translated through
+/// [`translate`] so nested 1-2-3 syntax (`..` ranges, `@` calls,
+/// non-default punctuation) is handled before the rewrite combines
+/// them.
+fn try_arg_fix(
+    name: &str,
+    s: &str,
+    paren_idx: usize,
+    sheets: &[&str],
+    cfg: &ParseConfig,
+) -> Option<(String, usize)> {
+    let close = find_matching_paren(s, paren_idx)?;
+    let args_text = &s[paren_idx + 1..close];
+    let raw_args = split_top_level_args(args_text, cfg);
+    let translated: Vec<String> = raw_args.iter().map(|a| translate(a, sheets, cfg)).collect();
+    let emitted = match name {
+        "MID" => rewrite_mid(&translated)?,
+        "FIND" => rewrite_find(&translated)?,
+        "STRING" => rewrite_string(&translated)?,
+        "CTERM" => rewrite_cterm(&translated)?,
+        "TERM" => rewrite_term(&translated)?,
+        "SUMPRODUCT" => rewrite_sumproduct(&translated)?,
+        _ => return None,
+    };
+    Some((emitted, close + 1))
+}
+
+/// `@MID(s, start, count)` — 1-2-3 `start` is 0-based, Excel
+/// `MID` is 1-based. Wrap `start` to add 1.
+fn rewrite_mid(args: &[String]) -> Option<String> {
+    if args.len() != 3 {
+        return None;
+    }
+    Some(format!("MID({},({})+1,{})", args[0], args[1], args[2]))
+}
+
+/// `@FIND(needle, haystack, start)` — both `start` arg and returned
+/// position are 0-based in 1-2-3; Excel `FIND` is 1-based on both.
+/// Translate `start` via `+1`; wrap whole call to subtract 1 from the
+/// result. `#VALUE!` propagates through the subtraction unchanged.
+fn rewrite_find(args: &[String]) -> Option<String> {
+    if args.len() != 3 {
+        return None;
+    }
+    Some(format!("FIND({},{},({})+1)-1", args[0], args[1], args[2]))
+}
+
+/// `@CTERM(rate, fv, pv)` → `LN(fv/pv)/LN(1+rate)`. Periods to grow
+/// `pv` to `fv` at constant `rate`. IronCalc has no equivalent.
+fn rewrite_cterm(args: &[String]) -> Option<String> {
+    if args.len() != 3 {
+        return None;
+    }
+    let (rate, fv, pv) = (&args[0], &args[1], &args[2]);
+    Some(format!("LN({fv}/{pv})/LN(1+{rate})"))
+}
+
+/// `@TERM(pmt, rate, fv)` → `LN(1+(fv*rate)/pmt)/LN(1+rate)`.
+/// Periods of payments to reach `fv` at constant `rate`. IronCalc
+/// has no equivalent.
+fn rewrite_term(args: &[String]) -> Option<String> {
+    if args.len() != 3 {
+        return None;
+    }
+    let (pmt, rate, fv) = (&args[0], &args[1], &args[2]);
+    Some(format!("LN(1+({fv}*{rate})/{pmt})/LN(1+{rate})"))
+}
+
+/// `@SUMPRODUCT(a, b, ...)` → `SUM((a)*(b)*...)`. IronCalc 0.7.1
+/// lacks `SUMPRODUCT` but its `SUM` broadcasts arrays element-wise,
+/// so the rewrite is mechanical.
+fn rewrite_sumproduct(args: &[String]) -> Option<String> {
+    if args.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = args.iter().map(|a| format!("({a})")).collect();
+    Some(format!("SUM({})", parts.join("*")))
+}
+
+/// `@STRING(n, decimals)` → Excel `TEXT(n, fmt)`. When `decimals` is
+/// a non-negative integer literal, build `fmt` statically (`"0"`,
+/// `"0.00"`, ...). Otherwise emit a runtime form using `REPT` and
+/// branch on `decimals=0` so the format never has a trailing `.`.
+fn rewrite_string(args: &[String]) -> Option<String> {
+    if args.len() != 2 {
+        return None;
+    }
+    let n = &args[0];
+    let dec = &args[1];
+    if let Ok(d) = dec.trim().parse::<u32>() {
+        let fmt = if d == 0 {
+            "0".to_string()
+        } else {
+            format!("0.{}", "0".repeat(d as usize))
+        };
+        return Some(format!("TEXT({n},\"{fmt}\")"));
+    }
+    Some(format!(
+        "IF({dec}>0,TEXT({n},\"0.\"&REPT(\"0\",{dec})),TEXT({n},\"0\"))"
+    ))
+}
+
+/// Find the byte index of the `)` matching the `(` at `s[open_idx]`.
+/// Honors string literals and nested parens. Returns `None` if
+/// unbalanced.
+fn find_matching_paren(s: &str, open_idx: usize) -> Option<usize> {
+    debug_assert_eq!(s.as_bytes().get(open_idx).copied(), Some(b'('));
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut i = open_idx;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
+        if in_string {
+            i += 1;
+            continue;
+        }
+        if b == b'(' {
+            depth += 1;
+        } else if b == b')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Split the body of a function call (the substring strictly between
+/// the outer `(` and `)`) into top-level argument slices using the
+/// user's argument separator. Honors nested parens and string
+/// literals. The `..` range separator is never a split, even when
+/// the arg separator is `.` (Punctuation B/D).
+///
+/// An empty `args_text` yields `vec![]` (zero-arg call). A trailing
+/// separator yields a final empty slice — callers requiring a fixed
+/// arity should reject that explicitly.
+fn split_top_level_args<'a>(args_text: &'a str, cfg: &ParseConfig) -> Vec<&'a str> {
+    if args_text.is_empty() {
+        return Vec::new();
+    }
+    let bytes = args_text.as_bytes();
+    let arg_sep_byte = cfg.argument_sep as u32;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut last = 0;
+    let mut parts: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
+        if in_string {
+            i += 1;
+            continue;
+        }
+        if b == b'(' {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+        if b == b')' {
+            depth -= 1;
+            i += 1;
+            continue;
+        }
+        // `..` always wins over single-`.` arg-sep.
+        if b == b'.' && bytes.get(i + 1).copied() == Some(b'.') {
+            i += 2;
+            continue;
+        }
+        if depth == 0 && (b as u32) == arg_sep_byte {
+            parts.push(&args_text[last..i]);
+            last = i + 1;
+        }
+        i += 1;
+    }
+    parts.push(&args_text[last..]);
+    parts
 }
 
 /// At position `start`, try to parse a sheet-qualified ref starting
@@ -426,7 +1023,8 @@ mod tests {
     fn leading_at_becomes_equals() {
         assert_eq!(to_engine_source("@SUM(A1..A5)", &[]), "=SUM(A1:A5)");
         assert_eq!(to_engine_source("@IF(A1>0,1,2)", &[]), "=IF(A1>0,1,2)");
-        assert_eq!(to_engine_source("@NOW", &[]), "=NOW");
+        // Niladic: 1-2-3 omits the parens; Excel requires them.
+        assert_eq!(to_engine_source("@NOW", &[]), "=NOW()");
     }
 
     #[test]
@@ -438,7 +1036,454 @@ mod tests {
     #[test]
     fn range_separator_translated() {
         assert_eq!(to_engine_source("@SUM(A1..B5)", &[]), "=SUM(A1:B5)");
-        assert_eq!(to_engine_source("@AVG(B2..B20)", &[]), "=AVG(B2:B20)");
+        assert_eq!(to_engine_source("@AVG(B2..B20)", &[]), "=AVERAGE(B2:B20)");
+    }
+
+    // ---- M5+: function-name renames ----
+    //
+    // 1-2-3 names that map to a different IronCalc/Excel name.
+    // Catalog in docs/AT_FUNCTIONS.md.
+
+    #[test]
+    fn rename_avg_to_average() {
+        assert_eq!(to_engine_source("@AVG(A1..A5)", &[]), "=AVERAGE(A1:A5)");
+    }
+
+    #[test]
+    fn rename_count_to_counta() {
+        // 1-2-3 @COUNT counts non-empty cells (incl. labels). Excel COUNT
+        // only counts numbers; COUNTA matches 1-2-3 semantics.
+        assert_eq!(to_engine_source("@COUNT(A1..A5)", &[]), "=COUNTA(A1:A5)");
+    }
+
+    #[test]
+    fn rename_std_var_family() {
+        assert_eq!(to_engine_source("@STD(A1..A5)", &[]), "=STDEV.P(A1:A5)");
+        assert_eq!(to_engine_source("@STDS(A1..A5)", &[]), "=STDEV.S(A1:A5)");
+        assert_eq!(to_engine_source("@VAR(A1..A5)", &[]), "=VAR.P(A1:A5)");
+        assert_eq!(to_engine_source("@VARS(A1..A5)", &[]), "=VAR.S(A1:A5)");
+    }
+
+    #[test]
+    fn rename_isstring_to_istext() {
+        assert_eq!(to_engine_source("@ISSTRING(A1)", &[]), "=ISTEXT(A1)");
+    }
+
+    #[test]
+    fn rename_length_to_len() {
+        assert_eq!(to_engine_source("@LENGTH(A1)", &[]), "=LEN(A1)");
+    }
+
+    #[test]
+    fn rename_repeat_to_rept() {
+        assert_eq!(to_engine_source("@REPEAT(\"-\",5)", &[]), "=REPT(\"-\",5)");
+    }
+
+    #[test]
+    fn rename_cols_to_columns() {
+        assert_eq!(to_engine_source("@COLS(A1..C5)", &[]), "=COLUMNS(A1:C5)");
+    }
+
+    #[test]
+    fn rename_database_family() {
+        assert_eq!(
+            to_engine_source("@DAVG(A1..C5,2,E1..E2)", &[]),
+            "=DAVERAGE(A1:C5,2,E1:E2)"
+        );
+        assert_eq!(
+            to_engine_source("@DSTD(A1..C5,2,E1..E2)", &[]),
+            "=DSTDEVP(A1:C5,2,E1:E2)"
+        );
+        assert_eq!(
+            to_engine_source("@DSTDS(A1..C5,2,E1..E2)", &[]),
+            "=DSTDEV(A1:C5,2,E1:E2)"
+        );
+        assert_eq!(
+            to_engine_source("@DVAR(A1..C5,2,E1..E2)", &[]),
+            "=DVARP(A1:C5,2,E1:E2)"
+        );
+        assert_eq!(
+            to_engine_source("@DVARS(A1..C5,2,E1..E2)", &[]),
+            "=DVAR(A1:C5,2,E1:E2)"
+        );
+    }
+
+    #[test]
+    fn at_at_becomes_indirect() {
+        // 1-2-3 indirect: @@(B5) where B5 holds e.g. "A1".
+        assert_eq!(to_engine_source("@@(B5)", &[]), "=INDIRECT(B5)");
+        assert_eq!(
+            to_engine_source("@@(\"A\"&\"1\")", &[]),
+            "=INDIRECT(\"A\"&\"1\")"
+        );
+    }
+
+    #[test]
+    fn niladic_functions_get_parens() {
+        // 1-2-3 omits parens on niladic functions; Excel requires them.
+        assert_eq!(to_engine_source("@PI", &[]), "=PI()");
+        assert_eq!(to_engine_source("@TODAY", &[]), "=TODAY()");
+        assert_eq!(to_engine_source("@NOW", &[]), "=NOW()");
+        assert_eq!(to_engine_source("@RAND", &[]), "=RAND()");
+        assert_eq!(to_engine_source("@NA", &[]), "=NA()");
+        assert_eq!(to_engine_source("@TRUE", &[]), "=TRUE()");
+        assert_eq!(to_engine_source("@FALSE", &[]), "=FALSE()");
+    }
+
+    #[test]
+    fn niladic_with_explicit_parens_not_doubled() {
+        // If the user wrote `@PI()`, we must not emit `PI()()`.
+        assert_eq!(to_engine_source("@PI()", &[]), "=PI()");
+        assert_eq!(to_engine_source("@TODAY()", &[]), "=TODAY()");
+    }
+
+    #[test]
+    fn niladic_in_expression_context() {
+        // The post-paren-completion must not interfere with surrounding
+        // operators or commas.
+        assert_eq!(to_engine_source("@PI*2", &[]), "=PI()*2");
+        assert_eq!(
+            to_engine_source("@IF(@RAND>0.5,1,0)", &[]),
+            "=IF(RAND()>0.5,1,0)"
+        );
+        assert_eq!(to_engine_source("2*@PI+1", &[]), "=2*PI()+1");
+    }
+
+    #[test]
+    fn passthrough_function_names_preserved() {
+        // Functions not in the rename table pass through unchanged.
+        assert_eq!(to_engine_source("@SUM(A1..A5)", &[]), "=SUM(A1:A5)");
+        assert_eq!(
+            to_engine_source("@VLOOKUP(A1,B1..C5,2,0)", &[]),
+            "=VLOOKUP(A1,B1:C5,2,0)"
+        );
+        assert_eq!(to_engine_source("@LEN(A1)", &[]), "=LEN(A1)");
+    }
+
+    #[test]
+    fn renames_inside_nested_calls() {
+        assert_eq!(
+            to_engine_source("@IF(@AVG(A1..A5)>0,@STDS(A1..A5),0)", &[]),
+            "=IF(AVERAGE(A1:A5)>0,STDEV.S(A1:A5),0)"
+        );
+    }
+
+    // ---- M5+: arg-fix rewriters (per AT_FUNCTIONS.md) ----
+    //
+    // Functions that share a name with their IronCalc target but have
+    // a different argument shape (e.g. 0-based vs 1-based indices).
+
+    #[test]
+    fn mid_arg_zero_to_one_based() {
+        // 1-2-3 @MID(s, start, count): start is 0-based.
+        // Excel MID(s, start, count): start is 1-based. Add 1.
+        assert_eq!(
+            to_engine_source("@MID(\"hello\",2,3)", &[]),
+            "=MID(\"hello\",(2)+1,3)"
+        );
+        assert_eq!(
+            to_engine_source("@MID(A1,B1,C1)", &[]),
+            "=MID(A1,(B1)+1,C1)"
+        );
+    }
+
+    #[test]
+    fn mid_with_inner_call_in_start_arg() {
+        assert_eq!(
+            to_engine_source("@MID(A1,@FIND(\"x\",A1,0),3)", &[]),
+            "=MID(A1,(FIND(\"x\",A1,(0)+1)-1)+1,3)"
+        );
+    }
+
+    #[test]
+    fn find_arg_zero_to_one_based_and_result_minus_one() {
+        // 1-2-3 @FIND(needle, haystack, start): both start arg and
+        // returned position are 0-based. Excel FIND is 1-based on
+        // both. Add 1 to start, subtract 1 from result.
+        assert_eq!(
+            to_engine_source("@FIND(\"l\",\"hello\",0)", &[]),
+            "=FIND(\"l\",\"hello\",(0)+1)-1"
+        );
+        assert_eq!(
+            to_engine_source("@FIND(A1,B1,C1)", &[]),
+            "=FIND(A1,B1,(C1)+1)-1"
+        );
+    }
+
+    #[test]
+    fn find_inside_iserr_still_works() {
+        // FIND failure → #VALUE! in Excel; subtracting 1 propagates
+        // the error, so ISERR still detects it.
+        assert_eq!(
+            to_engine_source("@ISERR(@FIND(\"x\",A1,0))", &[]),
+            "=ISERR(FIND(\"x\",A1,(0)+1)-1)"
+        );
+    }
+
+    #[test]
+    fn string_to_text_with_literal_decimals() {
+        // @STRING(n, decimals) — for a numeric-literal `decimals`,
+        // build the format string statically: `0`, `0.0`, `0.00`, ...
+        assert_eq!(
+            to_engine_source("@STRING(1234.5,2)", &[]),
+            "=TEXT(1234.5,\"0.00\")"
+        );
+        assert_eq!(to_engine_source("@STRING(A1,0)", &[]), "=TEXT(A1,\"0\")");
+        assert_eq!(
+            to_engine_source("@STRING(A1,5)", &[]),
+            "=TEXT(A1,\"0.00000\")"
+        );
+    }
+
+    #[test]
+    fn string_with_dynamic_decimals_uses_if_rept() {
+        // When `decimals` isn't a numeric literal, build the format
+        // string at runtime using REPT — and special-case 0 so we
+        // don't get a trailing `.`.
+        assert_eq!(
+            to_engine_source("@STRING(A1,B1)", &[]),
+            "=IF(B1>0,TEXT(A1,\"0.\"&REPT(\"0\",B1)),TEXT(A1,\"0\"))"
+        );
+    }
+
+    // ---- M5+: parse-time emulations (PR3) ----
+    //
+    // Functions IronCalc 0.7.1 lacks but that compose cleanly to
+    // existing primitives.
+
+    #[test]
+    fn err_literal() {
+        // 1-2-3 @ERR → Excel #VALUE! literal. Verified IronCalc
+        // 0.7.1 accepts `=#VALUE!` as a formula.
+        assert_eq!(to_engine_source("@ERR", &[]), "=#VALUE!");
+        // Inside expressions: the literal participates as an error.
+        assert_eq!(
+            to_engine_source("@IF(A1<0,@ERR,A1)", &[]),
+            "=IF(A1<0,#VALUE!,A1)"
+        );
+    }
+
+    #[test]
+    fn cterm_emulated_via_log() {
+        // @CTERM(rate, fv, pv) → LN(fv/pv)/LN(1+rate)
+        assert_eq!(
+            to_engine_source("@CTERM(0.05,1000,500)", &[]),
+            "=LN(1000/500)/LN(1+0.05)"
+        );
+        assert_eq!(
+            to_engine_source("@CTERM(A1,B1,C1)", &[]),
+            "=LN(B1/C1)/LN(1+A1)"
+        );
+    }
+
+    #[test]
+    fn term_emulated_via_log() {
+        // @TERM(pmt, rate, fv) → LN(1+(fv*rate)/pmt)/LN(1+rate)
+        assert_eq!(
+            to_engine_source("@TERM(100,0.05,1000)", &[]),
+            "=LN(1+(1000*0.05)/100)/LN(1+0.05)"
+        );
+        assert_eq!(
+            to_engine_source("@TERM(A1,B1,C1)", &[]),
+            "=LN(1+(C1*B1)/A1)/LN(1+B1)"
+        );
+    }
+
+    #[test]
+    fn sumproduct_via_array_in_sum() {
+        // 1-2-3 (post-MVP) @SUMPRODUCT — IronCalc lacks SUMPRODUCT but
+        // accepts SUM with array broadcast: SUM(A1:A3*B1:B3) = 140
+        // for {1,2,3}*{10,20,30}.
+        assert_eq!(
+            to_engine_source("@SUMPRODUCT(A1..A3,B1..B3)", &[]),
+            "=SUM((A1:A3)*(B1:B3))"
+        );
+        // Three-arg form composes the same way.
+        assert_eq!(
+            to_engine_source("@SUMPRODUCT(A1..A3,B1..B3,C1..C3)", &[]),
+            "=SUM((A1:A3)*(B1:B3)*(C1:C3))"
+        );
+    }
+
+    #[test]
+    fn rename_code_to_unicode() {
+        // @CODE returns the codepoint of the first char of a string.
+        // Excel's `CODE` returns ASCII; IronCalc only ships `UNICODE`,
+        // which is identical to `CODE` for ASCII input.
+        assert_eq!(to_engine_source("@CODE(A1)", &[]), "=UNICODE(A1)");
+    }
+
+    // ---- Reverse translator: Excel body → 1-2-3 source form ----
+    //
+    // The forward translator turns user-typed `@AVG(A1..A5)` into the
+    // Excel-form `=AVERAGE(A1:A5)` IronCalc consumes. After save+reload
+    // the engine hands us back the Excel form; the panel needs the
+    // Lotus form. `to_lotus_source` is the reverse — cosmetic only,
+    // covering renames, niladic parens, `..`, sheet refs, INDIRECT,
+    // and `#VALUE!`. Arg-fix and emulated functions are irreversible
+    // without sidecar metadata and stay in their Excel form.
+
+    #[test]
+    fn reverse_renames_swap_back() {
+        assert_eq!(to_lotus_source("AVERAGE(A1:A5)", &[]), "@AVG(A1..A5)");
+        assert_eq!(to_lotus_source("STDEV.P(A1:A5)", &[]), "@STD(A1..A5)");
+        assert_eq!(to_lotus_source("STDEV.S(A1:A5)", &[]), "@STDS(A1..A5)");
+        assert_eq!(to_lotus_source("VAR.P(A1:A5)", &[]), "@VAR(A1..A5)");
+        assert_eq!(to_lotus_source("VAR.S(A1:A5)", &[]), "@VARS(A1..A5)");
+        assert_eq!(to_lotus_source("ISTEXT(A1)", &[]), "@ISSTRING(A1)");
+        assert_eq!(to_lotus_source("REPT(\"=\",5)", &[]), "@REPEAT(\"=\",5)");
+        assert_eq!(to_lotus_source("COLUMNS(A1:E1)", &[]), "@COLS(A1..E1)");
+        assert_eq!(to_lotus_source("COUNTA(A1:A5)", &[]), "@COUNT(A1..A5)");
+        assert_eq!(to_lotus_source("UNICODE(A1)", &[]), "@CODE(A1)");
+    }
+
+    #[test]
+    fn reverse_database_renames() {
+        assert_eq!(
+            to_lotus_source("DAVERAGE(A1:C5,2,E1:E2)", &[]),
+            "@DAVG(A1..C5,2,E1..E2)"
+        );
+        assert_eq!(
+            to_lotus_source("DSTDEVP(A1:C5,2,E1:E2)", &[]),
+            "@DSTD(A1..C5,2,E1..E2)"
+        );
+        assert_eq!(
+            to_lotus_source("DSTDEV(A1:C5,2,E1:E2)", &[]),
+            "@DSTDS(A1..C5,2,E1..E2)"
+        );
+        assert_eq!(
+            to_lotus_source("DVARP(A1:C5,2,E1:E2)", &[]),
+            "@DVAR(A1..C5,2,E1..E2)"
+        );
+        assert_eq!(
+            to_lotus_source("DVAR(A1:C5,2,E1:E2)", &[]),
+            "@DVARS(A1..C5,2,E1..E2)"
+        );
+    }
+
+    #[test]
+    fn reverse_passthrough_function_names() {
+        // 1:1 names just gain the `@` prefix; arg syntax also reverses.
+        assert_eq!(to_lotus_source("SUM(A1:A5)", &[]), "@SUM(A1..A5)");
+        assert_eq!(to_lotus_source("LEN(A1)", &[]), "@LEN(A1)");
+        assert_eq!(
+            to_lotus_source("VLOOKUP(A1,B1:C5,2,0)", &[]),
+            "@VLOOKUP(A1,B1..C5,2,0)"
+        );
+    }
+
+    #[test]
+    fn reverse_niladic_drops_empty_parens() {
+        assert_eq!(to_lotus_source("PI()", &[]), "@PI");
+        assert_eq!(to_lotus_source("NOW()", &[]), "@NOW");
+        assert_eq!(to_lotus_source("TODAY()", &[]), "@TODAY");
+        assert_eq!(to_lotus_source("RAND()", &[]), "@RAND");
+        assert_eq!(to_lotus_source("NA()", &[]), "@NA");
+        assert_eq!(to_lotus_source("TRUE()", &[]), "@TRUE");
+        assert_eq!(to_lotus_source("FALSE()", &[]), "@FALSE");
+        // In expressions.
+        assert_eq!(to_lotus_source("PI()*2", &[]), "@PI*2");
+        assert_eq!(
+            to_lotus_source("IF(RAND()>0.5,1,0)", &[]),
+            "@IF(@RAND>0.5,1,0)"
+        );
+    }
+
+    #[test]
+    fn reverse_indirect_to_at_at() {
+        assert_eq!(to_lotus_source("INDIRECT(B5)", &[]), "@@(B5)");
+        assert_eq!(
+            to_lotus_source("INDIRECT(\"A\"&\"1\")", &[]),
+            "@@(\"A\"&\"1\")"
+        );
+    }
+
+    #[test]
+    fn reverse_value_error_to_at_err() {
+        assert_eq!(to_lotus_source("#VALUE!", &[]), "@ERR");
+        assert_eq!(
+            to_lotus_source("IF(A1<0,#VALUE!,A1)", &[]),
+            "@IF(A1<0,@ERR,A1)"
+        );
+    }
+
+    #[test]
+    fn reverse_non_function_gets_plus_prefix() {
+        assert_eq!(to_lotus_source("A1+B1", &[]), "+A1+B1");
+        assert_eq!(to_lotus_source("1+2", &[]), "+1+2");
+        assert_eq!(to_lotus_source("42", &[]), "+42");
+    }
+
+    #[test]
+    fn reverse_strings_unchanged() {
+        // Inside strings, `:` stays as `:` and function-name lookalikes
+        // are preserved.
+        assert_eq!(
+            to_lotus_source("IF(A1>0,\"low:high\",\"\")", &[]),
+            "@IF(A1>0,\"low:high\",\"\")"
+        );
+        assert_eq!(
+            to_lotus_source("IF(TRUE(),\"AVG\",\"\")", &[]),
+            "@IF(@TRUE,\"AVG\",\"\")"
+        );
+    }
+
+    #[test]
+    fn reverse_nested_calls() {
+        assert_eq!(
+            to_lotus_source("IF(AVERAGE(A1:A5)>0,STDEV.S(A1:A5),0)", &[]),
+            "@IF(@AVG(A1..A5)>0,@STDS(A1..A5),0)"
+        );
+    }
+
+    #[test]
+    fn reverse_sheet_refs() {
+        let s = vec!["Sheet1", "Sheet2", "Sheet3"];
+        assert_eq!(to_lotus_source("Sheet1!B3", &s), "+A:B3");
+        assert_eq!(
+            to_lotus_source("SUM(Sheet1!B3:D5)", &s),
+            "@SUM(A:B3..D5)"
+        );
+        assert_eq!(to_lotus_source("Sheet2!C7", &s), "+B:C7");
+    }
+
+    #[test]
+    fn reverse_quoted_sheet_refs() {
+        let s = vec!["Q1 Sales", "Q2 Budget"];
+        assert_eq!(
+            to_lotus_source("SUM('Q1 Sales'!B3:D5)", &s),
+            "@SUM(A:B3..D5)"
+        );
+    }
+
+    #[test]
+    fn reverse_strips_implicit_intersection_at_sign() {
+        // IronCalc's xlsx codec adds `@` (implicit intersection) to
+        // ref-returning functions on save: `=INDIRECT(...)` round-trips
+        // through xlsx as `=@INDIRECT(...)`. The reverse translator
+        // must treat the prefix `@` as a no-op.
+        assert_eq!(to_lotus_source("@INDIRECT(C1)", &[]), "@@(C1)");
+        assert_eq!(to_lotus_source("@VLOOKUP(A1,B:C,2)", &[]), "@VLOOKUP(A1,B..C,2)");
+    }
+
+    #[test]
+    fn reverse_round_trip_with_forward() {
+        // For supported (non-emulated) cases, forward+reverse is the
+        // identity on the source form.
+        for lotus in [
+            "@SUM(A1..A5)",
+            "@AVG(A1..A5)",
+            "@STDS(A1..A5)",
+            "@IF(A1>0,@SUM(B1..B5),0)",
+            "@PI",
+            "@@(B5)",
+            "@COLS(A1..E1)",
+        ] {
+            let excel = to_engine_source(lotus, &[]);
+            let body = excel.strip_prefix('=').unwrap();
+            let back = to_lotus_source(body, &[]);
+            assert_eq!(back, lotus, "round-trip failed for {lotus}");
+        }
     }
 
     #[test]

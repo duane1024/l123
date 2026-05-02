@@ -1,0 +1,83 @@
+# Arg-fix rewriters (PR2): functions whose IronCalc target uses a
+# different argument shape from 1-2-3. Each test exercises the
+# off-by-one or format-string rewrite end-to-end so a regression in
+# the rewriter shows up as a wrong cell value, not just a wrong
+# emitted Excel string.
+
+# @MID(s, start, count) — 1-2-3 start is 0-based.
+# @MID("hello", 0, 2) → "he".
+F 5
+KEYS A1
+ENTER
+KEY @
+KEYS MID("hello",0,2)
+ENTER
+ASSERT_CELL       A:A1  he
+
+# @MID("hello", 1, 3) → "ell" (skip "h").
+F 5
+KEYS A2
+ENTER
+KEY @
+KEYS MID("hello",1,3)
+ENTER
+ASSERT_CELL       A:A2  ell
+
+# @FIND(needle, haystack, start) — both start and result are 0-based.
+# First "l" in "hello" is at position 2 (h=0, e=1, l=2).
+F 5
+KEYS A3
+ENTER
+KEY @
+KEYS FIND("l","hello",0)
+ENTER
+ASSERT_CELL       A:A3  2
+
+# Searching from past the first hit finds the next one.
+# @FIND("l", "hello", 3) → 3 (the second "l").
+F 5
+KEYS A4
+ENTER
+KEY @
+KEYS FIND("l","hello",3)
+ENTER
+ASSERT_CELL       A:A4  3
+
+# @STRING(n, decimals) — fixed-decimal text representation.
+# @STRING(1234.5, 2) → "1234.50".
+F 5
+KEYS A5
+ENTER
+KEY @
+KEYS STRING(1234.5,2)
+ENTER
+ASSERT_CELL       A:A5  1234.50
+
+# Zero-decimal form must NOT produce a trailing `.`.
+F 5
+KEYS A6
+ENTER
+KEY @
+KEYS STRING(99,0)
+ENTER
+ASSERT_CELL       A:A6  99
+
+# Five decimals.
+F 5
+KEYS A7
+ENTER
+KEY @
+KEYS STRING(1.5,5)
+ENTER
+ASSERT_CELL       A:A7  1.50000
+
+# Composed: @MID applied to @FIND's result. Verifies arg-fix nests
+# correctly (FIND returns 0-based, MID consumes 0-based start).
+# Find "w" in "hello world" → 6. MID from 6, length 5 → "world".
+F 5
+KEYS A8
+ENTER
+KEY @
+KEYS MID("hello world",@FIND("w","hello world",0),5)
+ENTER
+ASSERT_CELL       A:A8  world
