@@ -1,0 +1,104 @@
+# Save+reload preserves the 1-2-3 source form on the panel.
+#
+# Without the reverse translator, a reloaded `@AVG(A1..A5)` would
+# show as `AVERAGE(A1:A5)` because IronCalc only knows the Excel
+# form. The reverse pass in `cell_view_to_contents` swaps it back
+# (renames, niladic parens, range separator, INDIRECT, sheet refs)
+# so the panel stays authentic across save → retrieve.
+
+SIZE 200 25
+RM_FILE $TMPDIR/function_reload_round_trip.xlsx
+
+# Seed A1..A5 = 1..5.
+KEYS 1
+DOWN
+KEYS 2
+DOWN
+KEYS 3
+DOWN
+KEYS 4
+DOWN
+KEYS 5
+ENTER
+
+# A6: @AVG(A1..A5) — a renamed function.
+F 5
+KEYS A6
+ENTER
+KEY @
+KEYS AVG(A1..A5)
+ENTER
+ASSERT_PANEL_L1   A:A6: (G) @AVG(A1..A5)
+
+# A7: @PI — niladic, no parens.
+F 5
+KEYS A7
+ENTER
+KEY @
+KEYS PI
+ENTER
+ASSERT_PANEL_L1   A:A7: (G) @PI
+
+# A8: @@(C1) — Lotus indirect.
+F 5
+KEYS C1
+ENTER
+KEY '
+KEYS A6
+ENTER
+F 5
+KEYS A8
+ENTER
+KEY @
+KEY @
+KEYS (C1)
+ENTER
+ASSERT_PANEL_L1   A:A8: (G) @@(C1)
+
+# A9: @SUM(A1..A5) — passthrough name, range separator must reverse.
+F 5
+KEYS A9
+ENTER
+KEY @
+KEYS SUM(A1..A5)
+ENTER
+ASSERT_PANEL_L1   A:A9: (G) @SUM(A1..A5)
+
+# /File Save to disk.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/function_reload_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+
+# /File Retrieve the same file. The engine hands back the Excel
+# forms (`AVERAGE`, `PI()`, `INDIRECT`, `:`); the reverse translator
+# in `cell_view_to_contents` rewrites them.
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/function_reload_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+
+# Each formula's panel readout should match what the user typed.
+F 5
+KEYS A6
+ENTER
+ASSERT_PANEL_L1   A:A6: (G) @AVG(A1..A5)
+
+F 5
+KEYS A7
+ENTER
+ASSERT_PANEL_L1   A:A7: (G) @PI
+
+F 5
+KEYS A8
+ENTER
+ASSERT_PANEL_L1   A:A8: (G) @@(C1)
+
+F 5
+KEYS A9
+ENTER
+ASSERT_PANEL_L1   A:A9: (G) @SUM(A1..A5)

@@ -63,6 +63,51 @@ literal `#VALUE!` text instead of the Lotus-style `ERR` tag. This
 predates the function work; tracked as a follow-up on the engine
 crate, not a function-translation bug.
 
+## Reverse translation (engine → 1-2-3 source form)
+
+`l123_parse::to_lotus_source` reverses the cosmetic subset so the
+control panel and the cells cache stay authentic across save +
+reload. Wired into `cell_view_to_contents` in `l123-ui`.
+
+Reversed:
+
+- All entries from `FN_RENAMES_BACK` (the inverse of the forward
+  rename table where the swap is canonical — `LEN`/`LENGTH` is *not*
+  reversed because `@LEN` is the canonical 1-2-3 form).
+- Niladic-paren elision: `PI()` → `@PI`, `NOW()` → `@NOW`, etc.
+- Range separator: `:` → `..`.
+- Sheet refs: bare `Sheet1!A1` and quoted `'Q1 Sales'!B5` → `A:A1`
+  / `A:B5` based on the engine's sheet-name list.
+- `INDIRECT(...)` → `@@(...)`.
+- `#VALUE!` literal → `@ERR`. Other error literals
+  (`#DIV/0!`, `#REF!`, ...) pass through.
+- The leading `@` IronCalc's xlsx codec adds for implicit
+  intersection (e.g. `=@INDIRECT(...)` after a save round-trip) is
+  treated as a no-op so it doesn't get re-emitted on top of the
+  `@@` substitution.
+
+Output gets a `@` prefix when the body starts with a function call,
+or a `+` prefix otherwise (`A1+B1` → `+A1+B1`, `42` → `+42`).
+
+Not reversed (irreversibly destroyed by the forward rewrite):
+
+- Arg-fix: `MID(s, (b)+1, c)` does not reverse to `@MID(s, b, c)`.
+  The `(...)+1` wrapper is detectable in principle but the round
+  trip only works for L123-native files, and we don't currently
+  carry sidecar metadata to know which `+1` came from us.
+- Emulations: `LN(fv/pv)/LN(1+rate)` does not reverse to
+  `@CTERM(...)`; `TEXT(n,"0.00")` does not reverse to
+  `@STRING(n,2)`; `SUM((a)*(b))` does not reverse to `@SUMPRODUCT`.
+  These show in their decomposed form on the panel after reload.
+- 3D ranges: a `@SUM(A:B3..C:B3)` saved as
+  `=SUM(Sheet1!B3:B3,Sheet2!B3:B3,Sheet3!B3:B3)` reloads as the
+  comma-expanded form rather than collapsing back to the 3D
+  shorthand.
+
+Restoring the irreversible cases would require sidecar metadata
+(e.g. an xlsx custom property keyed by cell address storing the
+original Lotus source). Out of scope for the cosmetic round-trip.
+
 ---
 
 ## MVP set (SPEC §15) — must ship in M2

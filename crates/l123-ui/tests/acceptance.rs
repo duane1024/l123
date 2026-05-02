@@ -992,6 +992,7 @@ transcripts! {
     function_renames    => "function_renames.tsv",
     function_argfix     => "function_argfix.tsv",
     function_emulations => "function_emulations.tsv",
+    function_reload_round_trip => "function_reload_round_trip.tsv",
 }
 
 #[cfg(feature = "wk3")]
