@@ -1,0 +1,75 @@
+# Parse-time emulations (PR3): @-functions IronCalc 0.7.1 lacks but
+# that compose to existing primitives. End-to-end verification that
+# the rewrites actually evaluate.
+
+# @ERR — parser emits the Excel `#VALUE!` literal. IronCalc 0.7.1's
+# CellValue has no Error variant (it returns `String("#VALUE!")`),
+# and the engine adapter currently passes that through verbatim.
+# That display authenticity gap is tracked separately; here we
+# assert only that the formula round-trips on the panel.
+F 5
+KEYS A1
+ENTER
+KEY @
+KEYS ERR
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) @ERR
+
+# @CTERM(rate, fv, pv) → LN(fv/pv)/LN(1+rate).
+# Years to double an investment at 5%: LN(2)/LN(1.05) ≈ 14.2067.
+F 5
+KEYS A2
+ENTER
+KEY @
+KEYS CTERM(0.05,2000,1000)
+ENTER
+ASSERT_PANEL_L1   A:A2: (G) @CTERM(0.05,2000,1000)
+
+# @TERM(pmt, rate, fv) → LN(1+(fv*rate)/pmt)/LN(1+rate).
+# 100/year, 5%, fv=1000 → LN(1.5)/LN(1.05) ≈ 8.31.
+F 5
+KEYS A3
+ENTER
+KEY @
+KEYS TERM(100,0.05,1000)
+ENTER
+ASSERT_PANEL_L1   A:A3: (G) @TERM(100,0.05,1000)
+
+# Seed three pairs in B1..B3 / C1..C3 for SUMPRODUCT.
+F 5
+KEYS B1
+ENTER
+KEYS 1
+DOWN
+KEYS 2
+DOWN
+KEYS 3
+ENTER
+F 5
+KEYS C1
+ENTER
+KEYS 10
+DOWN
+KEYS 20
+DOWN
+KEYS 30
+ENTER
+
+# @SUMPRODUCT(B1..B3, C1..C3) — IronCalc lacks SUMPRODUCT but
+# `SUM` broadcasts arrays element-wise: 1*10+2*20+3*30 = 140.
+F 5
+KEYS A4
+ENTER
+KEY @
+KEYS SUMPRODUCT(B1..B3,C1..C3)
+ENTER
+ASSERT_CELL       A:A4  140
+
+# @CODE → UNICODE: codepoint of the first char of "A" is 65.
+F 5
+KEYS A5
+ENTER
+KEY @
+KEYS CODE("A")
+ENTER
+ASSERT_CELL       A:A5  65

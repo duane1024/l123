@@ -989,6 +989,9 @@ transcripts! {
     t05_tutorial_graph_setup_view_save => "T05_tutorial_graph_setup_view_save.tsv",
     t06_tutorial_multiple_sheets_group_and_3d => "T06_tutorial_multiple_sheets_group_and_3d.tsv",
     t07_tutorial_file_retrieve_and_open => "T07_tutorial_file_retrieve_and_open.tsv",
+    function_renames    => "function_renames.tsv",
+    function_argfix     => "function_argfix.tsv",
+    function_emulations => "function_emulations.tsv",
 }
 
 #[cfg(feature = "wk3")]
