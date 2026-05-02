@@ -1,0 +1,48 @@
+# Phase 10 — `/Worksheet Learn` + Alt-F5. Define a learn range,
+# arm recording, type a few keystrokes, disarm, and confirm the
+# recorded macro source materializes in the learn range cells.
+
+ASSERT_POINTER  A:A1
+ASSERT_SCREEN_NOT_CONTAINS LEARN
+
+# /WLR — POINT for the learn range (B1..B3 — three rows of capacity).
+KEY /
+KEY W
+KEY L
+KEY R
+ASSERT_PANEL_L3 Enter range to record into
+F 5
+KEYS B1
+ENTER
+KEY .
+F 5
+KEYS B3
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Pointer back to A1 for the recording.
+F 5
+KEYS A1
+ENTER
+
+# Alt-F5: arm recording. LEARN indicator lights.
+ALT_F 5
+ASSERT_STATUS   LEARN
+
+# Capture some keystrokes: type 'hi', Enter, Down arrow.
+KEYS hi
+ENTER
+DOWN
+
+# Alt-F5 again: disarm. LEARN indicator goes away. The buffered
+# source flushes into B1 (single cell — well under the 240 cap).
+ALT_F 5
+ASSERT_SCREEN_NOT_CONTAINS LEARN
+
+# Verify B1 captured the recording. Apostrophe prefix because the
+# label was created via the recorder, not typed by the user.
+F 5
+KEYS B1
+ENTER
+ASSERT_PANEL_L1 A:B1: 'hi~{DOWN}

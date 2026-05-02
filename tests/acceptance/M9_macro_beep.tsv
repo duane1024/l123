@@ -1,0 +1,31 @@
+# Phase 8 — `{BEEP}` increments the error-beep counter (which the
+# transcript harness exposes via ASSERT_BEEP_COUNT). `{WAIT}`,
+# `{BREAKOFF}`, `{BREAKON}`, `{ONERROR}` are recognized by the
+# lexer but currently no-op — exercised here only to prove the
+# parser doesn't fail.
+
+ASSERT_BEEP_COUNT 0
+
+# Macro at A1: WAIT, BREAKOFF, BEEP three times, BREAKON, ONERROR
+# stub, QUIT.
+KEY '
+KEYS {WAIT 0}{BREAKOFF}{BEEP}{BEEP}{BEEP}{BREAKON}{ONERROR \E}{QUIT}
+ENTER
+
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+ALT m
+ASSERT_MODE     READY
+
+# Three {BEEP}s should bump the cumulative counter.
+ASSERT_BEEP_COUNT 3

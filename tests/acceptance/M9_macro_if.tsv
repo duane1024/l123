@@ -1,0 +1,63 @@
+# Phase 4 — `{IF cond}`. When `cond` is non-zero, the rest of the
+# current line runs; otherwise execution falls through to the next
+# cell (the "else" branch).
+#
+# Layout:
+#   A1: '{IF B1>0}{GOTO}D5~yes~{QUIT}  (true branch: stamp "yes" + stop)
+#   A2: '{GOTO}D5~no~                  (false branch: stamp "no" + fall off)
+
+# Seed B1 = 1 (truthy).
+F 5
+KEYS B1
+ENTER
+KEYS 1
+ENTER
+
+F 5
+KEYS A1
+ENTER
+KEY '
+KEYS {IF B1>0}{GOTO}D5~yes~{QUIT}
+ENTER
+DOWN
+KEY '
+KEYS {GOTO}D5~no~
+ENTER
+
+# Define \M over A1.
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# B1=1: take the {IF} branch.
+ALT m
+ASSERT_POINTER  A:D5
+ASSERT_PANEL_L1 A:D5: 'yes
+
+# Now flip B1 to 0 and re-run: should fall through to A2.
+F 5
+KEYS B1
+ENTER
+KEYS 0
+ENTER
+
+F 5
+KEYS D5
+ENTER
+KEY /
+KEY R
+KEY E
+ENTER
+ASSERT_MODE     READY
+
+ALT m
+ASSERT_POINTER  A:D5
+ASSERT_PANEL_L1 A:D5: 'no

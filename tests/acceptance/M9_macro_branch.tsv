@@ -1,0 +1,71 @@
+# Phase 4 — `{BRANCH loc}`. The macro program counter jumps to the
+# named or addressed location and continues from there.
+#
+# Layout:
+#   A1: '{GOTO}B5~one~              (line 1: lands "one" in B5)
+#   A2: '{BRANCH \J}                (line 2: jumps to \J)
+#   A3: 'never                       (line 3: would dirty A3 if reached)
+#   D7: '{GOTO}B6~two~               (\J target: lands "two" in B6)
+
+ASSERT_POINTER  A:A1
+
+KEY '
+KEYS {GOTO}B5~one~
+ENTER
+DOWN
+KEY '
+KEYS {BRANCH \J}
+ENTER
+DOWN
+KEY '
+KEYS never
+ENTER
+
+# Stash the branch target at D7.
+F 5
+KEYS D7
+ENTER
+KEY '
+KEYS {GOTO}B6~two~
+ENTER
+
+# Define the names \M (over A1) and \J (over D7).
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+F 5
+KEYS D7
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \J
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Fire \M. Expected: B5 has 'one (line 1), B6 has 'two (\J target
+# after the BRANCH), A3 still has 'never (line 3 was never reached).
+ALT m
+ASSERT_POINTER  A:B6
+ASSERT_PANEL_L1 A:B6: 'two
+
+F 5
+KEYS B5
+ENTER
+ASSERT_PANEL_L1 A:B5: 'one
+
+F 5
+KEYS A3
+ENTER
+ASSERT_PANEL_L1 A:A3: 'never

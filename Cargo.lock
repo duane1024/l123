@@ -1507,6 +1507,7 @@ dependencies = [
  "l123-graph",
  "l123-help",
  "l123-io",
+ "l123-macro",
  "l123-menu",
  "l123-parse",
  "l123-print",
