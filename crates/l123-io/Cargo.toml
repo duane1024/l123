@@ -8,3 +8,10 @@ license.workspace = true
 l123-core = { workspace = true }
 l123-engine = { workspace = true }
 thiserror = { workspace = true }
+# Pin to match `l123-engine`'s dev-dep so we don't compile two zip
+# versions; the formula-sources sidecar is a custom file inside the
+# IronCalc-emitted xlsx zip.
+zip = "0.6"
+
+[dev-dependencies]
+tempfile = "3"

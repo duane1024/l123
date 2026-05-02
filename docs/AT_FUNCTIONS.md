@@ -89,24 +89,42 @@ Reversed:
 Output gets a `@` prefix when the body starts with a function call,
 or a `+` prefix otherwise (`A1+B1` → `+A1+B1`, `42` → `+42`).
 
-Not reversed (irreversibly destroyed by the forward rewrite):
+Cosmetic reversal handles cases where forward+reverse compose
+losslessly. The remaining cases — arg-fix wrappers (`MID(s,(b)+1,c)`,
+`FIND(...)-1`), emulations (`LN(fv/pv)/LN(1+rate)`,
+`TEXT(n,"0.00")`, `SUM((a)*(b))`), and 3D ranges expanded to a
+comma-list — are handled via the **formula-sources sidecar**.
 
-- Arg-fix: `MID(s, (b)+1, c)` does not reverse to `@MID(s, b, c)`.
-  The `(...)+1` wrapper is detectable in principle but the round
-  trip only works for L123-native files, and we don't currently
-  carry sidecar metadata to know which `+1` came from us.
-- Emulations: `LN(fv/pv)/LN(1+rate)` does not reverse to
-  `@CTERM(...)`; `TEXT(n,"0.00")` does not reverse to
-  `@STRING(n,2)`; `SUM((a)*(b))` does not reverse to `@SUMPRODUCT`.
-  These show in their decomposed form on the panel after reload.
-- 3D ranges: a `@SUM(A:B3..C:B3)` saved as
-  `=SUM(Sheet1!B3:B3,Sheet2!B3:B3,Sheet3!B3:B3)` reloads as the
-  comma-expanded form rather than collapsing back to the 3D
-  shorthand.
+## Formula-sources sidecar
 
-Restoring the irreversible cases would require sidecar metadata
-(e.g. an xlsx custom property keyed by cell address storing the
-original Lotus source). Out of scope for the cosmetic round-trip.
+`l123-io::formula_sources` embeds the user-typed Lotus source per
+formula cell as `l123/sources.tsv` inside the .xlsx zip. On save the
+UI dumps every `CellContents::Formula.expr` to the sidecar; on load
+the sidecar's `expr` overrides the cosmetic reverse-translated one.
+
+This makes the irreversible cases round-trip too:
+
+- `@CTERM(0.05,1000,500)` survives save → reload as
+  `@CTERM(0.05,1000,500)`, even though the engine stores
+  `LN(1000/500)/LN(1+0.05)`.
+- `@MID("hello",2,3)` round-trips as `@MID("hello",2,3)`, not
+  `MID("hello",(2)+1,3)`.
+- `@SUMPRODUCT(B1..B3,C1..C3)`, `@TERM(...)`, `@STRING(n,2)`, and
+  the `@FIND` arg-fix wrapper all round-trip exactly.
+
+Limitations:
+
+- The sidecar only survives if the file stays in L123. Vanilla Excel
+  ignores unknown zip parts on load but drops them on resave; a file
+  round-tripped through Excel falls back to the cosmetic reverse
+  translator.
+- 3D ranges still reload comma-expanded for *cells without a
+  sidecar entry* (e.g. files originating from Excel). L123-native
+  files preserve the `A:B3..C:B3` shorthand.
+- The sidecar is trusted on load — if an external editor changes
+  formulas without updating the sidecar, the panel will show a
+  stale source. Editing the cell in L123 (F2) re-derives the
+  sidecar entry on commit, fixing the staleness for that cell.
 
 ---
 

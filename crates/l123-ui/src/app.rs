@@ -4905,6 +4905,16 @@ impl App {
                 cells.insert(addr, contents);
             }
         }
+        // Apply the formula-source sidecar if present, overriding
+        // the cosmetic reverse-translated `expr` for any cell that
+        // has a stored Lotus source.
+        if let Ok(sources) = l123_io::formula_sources::read_from_xlsx(&path) {
+            for (addr, src) in sources {
+                if let Some(CellContents::Formula { expr, .. }) = cells.get_mut(&addr) {
+                    *expr = src;
+                }
+            }
+        }
         let mut col_widths: HashMap<(SheetId, u16), u8> = HashMap::new();
         for (addr, w) in engine.used_column_widths() {
             col_widths.insert((addr.sheet, addr.col), w);
@@ -5430,6 +5440,20 @@ impl App {
                 self.wb_mut().cells.insert(addr, contents);
             }
         }
+        // Apply the formula-source sidecar if present. The sidecar
+        // is the source of truth for `expr` whenever it has an
+        // entry — the cosmetic reverse translator above is the
+        // fallback for cells without one (e.g. files originating
+        // from Excel, or saved before this feature landed).
+        if let Ok(sources) = l123_io::formula_sources::read_from_xlsx(&path) {
+            for (addr, src) in sources {
+                if let Some(CellContents::Formula { expr, .. }) =
+                    self.wb_mut().cells.get_mut(&addr)
+                {
+                    *expr = src;
+                }
+            }
+        }
         for (addr, w) in self.wb_mut().engine.used_column_widths() {
             self.wb_mut().col_widths.insert((addr.sheet, addr.col), w);
         }
@@ -5645,6 +5669,22 @@ impl App {
             let _ = self.wb_mut().engine.set_sheet_color(sid, Some(color));
         }
         if self.wb_mut().engine.save_xlsx(&path).is_ok() {
+            // Embed the user-typed Lotus source per formula cell as
+            // a sidecar inside the xlsx zip so save → reload
+            // preserves shapes the cosmetic reverse translator
+            // can't recover (arg-fix wrappers, emulated functions
+            // like @CTERM, 3D-range expansions). A failure here is
+            // best-effort — the xlsx itself is already saved.
+            let sources: HashMap<Address, String> = self
+                .wb()
+                .cells
+                .iter()
+                .filter_map(|(addr, c)| match c {
+                    CellContents::Formula { expr, .. } => Some((*addr, expr.clone())),
+                    _ => None,
+                })
+                .collect();
+            let _ = l123_io::formula_sources::write_to_xlsx(&path, &sources);
             self.wb_mut().active_path = Some(path);
             self.wb_mut().dirty = false;
         }

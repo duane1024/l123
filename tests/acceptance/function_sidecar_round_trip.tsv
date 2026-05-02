@@ -1,0 +1,124 @@
+# Sidecar metadata preserves the user-typed source across save+reload
+# even when the forward translator decomposes the formula
+# irreversibly.
+#
+# `@CTERM(0.05, 1000, 500)` becomes `LN(1000/500)/LN(1+0.05)` for
+# IronCalc's evaluator. Without the sidecar, reload would show the LN
+# composition on the panel. With it, the panel still says `@CTERM(...)`.
+# Same for `@SUMPRODUCT`, `@TERM`, `@STRING`, and the `@MID`/`@FIND`
+# arg-fix wrappers.
+
+SIZE 200 25
+RM_FILE $TMPDIR/function_sidecar_round_trip.xlsx
+
+# A1: @CTERM — emulated to LN composition.
+KEYS @CTERM(0.05,1000,500)
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) @CTERM(0.05,1000,500)
+
+# A2: @TERM — also emulated.
+F 5
+KEYS A2
+ENTER
+KEYS @TERM(100,0.05,1000)
+ENTER
+ASSERT_PANEL_L1   A:A2: (G) @TERM(100,0.05,1000)
+
+# A3: @MID — arg-fix wrapper. The (start)+1 pattern is irreversible
+# without the sidecar.
+F 5
+KEYS A3
+ENTER
+KEYS @MID("hello",2,3)
+ENTER
+ASSERT_PANEL_L1   A:A3: (G) @MID("hello",2,3)
+
+# A4: @FIND — arg-fix with result subtraction.
+F 5
+KEYS A4
+ENTER
+KEYS @FIND("l","hello",0)
+ENTER
+ASSERT_PANEL_L1   A:A4: (G) @FIND("l","hello",0)
+
+# A5: @STRING — converts to TEXT with built format string.
+F 5
+KEYS A5
+ENTER
+KEYS @STRING(1234.5,2)
+ENTER
+ASSERT_PANEL_L1   A:A5: (G) @STRING(1234.5,2)
+
+# Seed B1..B3 / C1..C3 for SUMPRODUCT.
+F 5
+KEYS B1
+ENTER
+KEYS 1
+DOWN
+KEYS 2
+DOWN
+KEYS 3
+ENTER
+F 5
+KEYS C1
+ENTER
+KEYS 10
+DOWN
+KEYS 20
+DOWN
+KEYS 30
+ENTER
+
+# A6: @SUMPRODUCT — rewritten to SUM with array broadcast.
+F 5
+KEYS A6
+ENTER
+KEYS @SUMPRODUCT(B1..B3,C1..C3)
+ENTER
+ASSERT_PANEL_L1   A:A6: (G) @SUMPRODUCT(B1..B3,C1..C3)
+
+# Save → retrieve.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/function_sidecar_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/function_sidecar_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+
+# Each formula's panel readout should match what the user typed.
+F 5
+KEYS A1
+ENTER
+ASSERT_PANEL_L1   A:A1: (G) @CTERM(0.05,1000,500)
+
+F 5
+KEYS A2
+ENTER
+ASSERT_PANEL_L1   A:A2: (G) @TERM(100,0.05,1000)
+
+F 5
+KEYS A3
+ENTER
+ASSERT_PANEL_L1   A:A3: (G) @MID("hello",2,3)
+
+F 5
+KEYS A4
+ENTER
+ASSERT_PANEL_L1   A:A4: (G) @FIND("l","hello",0)
+
+F 5
+KEYS A5
+ENTER
+ASSERT_PANEL_L1   A:A5: (G) @STRING(1234.5,2)
+
+F 5
+KEYS A6
+ENTER
+ASSERT_PANEL_L1   A:A6: (G) @SUMPRODUCT(B1..B3,C1..C3)

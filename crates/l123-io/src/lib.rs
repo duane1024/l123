@@ -5,3 +5,4 @@
 //! today, and the legacy `.wk3` reader at stretch-tier.
 
 pub mod csv;
+pub mod formula_sources;
