@@ -1,0 +1,49 @@
+# Phase 6 — `{GETLABEL prompt, loc}` and `{GETNUMBER prompt, loc}`.
+# The macro parks while a prompt is open; the user's reply is
+# stored at `loc` (as a label or number) and the macro resumes.
+
+ASSERT_POINTER  A:A1
+
+# Macro at A1 asks for a name (label) then an age (number).
+KEY '
+KEYS {GETLABEL Name, B5}{GETNUMBER Age, C5}{QUIT}
+ENTER
+
+# Define \M over A1.
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Fire the macro: it parks in {GETLABEL}.
+ALT m
+ASSERT_PANEL_L3 Name
+
+KEYS Bob
+ENTER
+# Now {GETNUMBER} prompt is up.
+ASSERT_PANEL_L3 Age
+
+KEYS 42
+ENTER
+# Macro resumes, hits {QUIT}, exits.
+ASSERT_MODE     READY
+
+# Verify the two writes.
+F 5
+KEYS B5
+ENTER
+ASSERT_PANEL_L1 A:B5: 'Bob
+
+F 5
+KEYS C5
+ENTER
+ASSERT_PANEL_L1 A:C5: (G) 42
+ASSERT_CELL     A:C5  42

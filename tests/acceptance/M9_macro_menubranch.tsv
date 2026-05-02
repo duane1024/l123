@@ -1,0 +1,89 @@
+# Phase 7 — `{MENUBRANCH loc}`. The cell at `loc` is row 0 of a
+# custom menu (item names left-to-right, terminated by an empty
+# cell). Row 1 is descriptions; row 2 is the action body for each
+# item. On selection the macro BRANCHes to that action cell.
+#
+# Layout:
+#   A1: '{MENUBRANCH menu}        (line 1: open the menu, then end)
+#   E1, F1: 'Yes, 'No             (item names)
+#   E2, F2: 'Confirm yes, 'Confirm no   (descriptions)
+#   E3, F3: '{LET D9, 1}{QUIT}, '{LET D9, 0}{QUIT}   (action bodies)
+
+ASSERT_POINTER  A:A1
+
+KEY '
+KEYS {MENUBRANCH menu}
+ENTER
+
+# Build the menu range at E1..F3.
+F 5
+KEYS E1
+ENTER
+KEY '
+KEYS Yes
+ENTER
+DOWN
+KEY '
+KEYS Confirm yes
+ENTER
+DOWN
+KEY '
+KEYS {LET D9, 1}{QUIT}
+ENTER
+
+F 5
+KEYS F1
+ENTER
+KEY '
+KEYS No
+ENTER
+DOWN
+KEY '
+KEYS Confirm no
+ENTER
+DOWN
+KEY '
+KEYS {LET D9, 0}{QUIT}
+ENTER
+
+# Define names: menu → E1, \M → A1.
+F 5
+KEYS E1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS menu
+ENTER
+ENTER
+
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Fire \M. Custom menu opens — line 2 shows the items, line 3 the
+# description for the highlighted (first) item.
+ALT m
+ASSERT_PANEL_L2 Yes
+ASSERT_PANEL_L2 No
+ASSERT_PANEL_L3 Confirm yes
+
+# Pick "Yes" by accelerator. The menu closes, the macro BRANCHes
+# to E3 = '{LET D9, 1}{QUIT}.
+KEY y
+ASSERT_MODE     READY
+
+F 5
+KEYS D9
+ENTER
+ASSERT_PANEL_L1 A:D9: (G) 1
+ASSERT_CELL     A:D9  1

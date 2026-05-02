@@ -1,0 +1,53 @@
+# Phase 5 — `{BLANK range}` erases cells. `{RECALC range}` (current
+# crate-wide implementation: full recalc) forces a recalc.
+
+# Seed B1=10, B2=20, B3=30.
+F 5
+KEYS B1
+ENTER
+KEYS 10
+ENTER
+KEYS 20
+ENTER
+KEYS 30
+ENTER
+
+# Macro at A1: blank B1..B3, then quit.
+F 5
+KEYS A1
+ENTER
+KEY '
+KEYS {BLANK B1..B3}
+ENTER
+DOWN
+KEY '
+KEYS {QUIT}
+ENTER
+
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+
+ALT m
+ASSERT_MODE     READY
+
+# B1, B2, B3 should now all be empty.
+F 5
+KEYS B1
+ENTER
+ASSERT_PANEL_L1 A:B1:
+F 5
+KEYS B2
+ENTER
+ASSERT_PANEL_L1 A:B2:
+F 5
+KEYS B3
+ENTER
+ASSERT_PANEL_L1 A:B3:

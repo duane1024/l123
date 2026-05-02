@@ -119,6 +119,15 @@ pub enum Action {
     /// `/Worksheet Hide Disable` — unhide every hidden sheet on the
     /// current workbook.
     WorksheetHideDisable,
+    /// `/Worksheet Learn Range` — POINT for the destination range
+    /// where Alt-F5 LEARN recordings are written.
+    WorksheetLearnRange,
+    /// `/Worksheet Learn Cancel` — drop the learn-range definition
+    /// and stop recording if active.
+    WorksheetLearnCancel,
+    /// `/Worksheet Learn Erase` — blank every cell of the current
+    /// learn range without dropping the range definition itself.
+    WorksheetLearnErase,
     WorksheetGlobalDefaultOtherUndoEnable,
     WorksheetGlobalDefaultOtherUndoDisable,
     /// `/Worksheet Global Default Other Beep Enable` — turn on the
@@ -1444,7 +1453,28 @@ const WORKSHEET_MENU: &[MenuItem] = &[
         letter: 'L',
         name: "Learn",
         help: "Define / cancel / erase the Learn range",
-        body: MenuBody::NotImplemented("ws-learn"),
+        body: MenuBody::Submenu(WS_LEARN_MENU),
+    },
+];
+
+const WS_LEARN_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'R',
+        name: "Range",
+        help: "Set the destination range for Alt-F5 LEARN recordings",
+        body: MenuBody::Action(Action::WorksheetLearnRange),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Cancel",
+        help: "Forget the learn range and stop any in-progress recording",
+        body: MenuBody::Action(Action::WorksheetLearnCancel),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "Erase",
+        help: "Blank the cells of the learn range, keeping the range itself",
+        body: MenuBody::Action(Action::WorksheetLearnErase),
     },
 ];
 

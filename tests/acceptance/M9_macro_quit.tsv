@@ -1,0 +1,44 @@
+# Phase 4 — `{QUIT}` halts the macro mid-stream.
+#
+# Layout:
+#   A1: '{GOTO}C3~step1~
+#   A2: '{QUIT}
+#   A3: '{GOTO}C4~step3~       (would type "step3" if reached)
+
+ASSERT_POINTER  A:A1
+
+KEY '
+KEYS {GOTO}C3~step1~
+ENTER
+DOWN
+KEY '
+KEYS {QUIT}
+ENTER
+DOWN
+KEY '
+KEYS {GOTO}C4~step3~
+ENTER
+
+# Define \M over A1.
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Run macro: A1 runs (lands C3='step1'), A2 quits, A3 never runs.
+ALT m
+ASSERT_POINTER  A:C3
+ASSERT_PANEL_L1 A:C3: 'step1
+
+F 5
+KEYS C4
+ENTER
+# C4 is empty — its readout has the addr but no contents.
+ASSERT_PANEL_L1 A:C4:

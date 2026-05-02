@@ -1,0 +1,48 @@
+# Phase 3 — macro invocation by name. A range named \<letter> is a
+# macro the user runs by pressing Alt+<letter>. The macro source is
+# the cell at the range's start; subsequent cells in the same column
+# (until empty) extend the source.
+
+ASSERT_POINTER  A:A1
+
+# Stash a macro in A1: type the literal label `{GOTO}C5~hello~`. The
+# leading `'` forces LABEL mode so the `~` and `{` chars stay as
+# data (they only become metacharacters when the source is later
+# fed through run_macro_text).
+KEY '
+KEYS {GOTO}C5~hello~
+ENTER
+ASSERT_PANEL_L1 A:A1: '{GOTO}C5~hello~
+HOME
+ASSERT_POINTER  A:A1
+
+# Define name \M over A1.
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ASSERT_MODE     POINT
+ENTER
+ASSERT_MODE     READY
+
+# Pressing Alt-M now runs the macro at A1. The macro: F5 (GOTO),
+# type C5, Enter (commits goto), type hello, Enter (commits label).
+ALT m
+ASSERT_POINTER  A:C5
+ASSERT_PANEL_L1 A:C5: 'hello
+ASSERT_MODE     READY
+
+# Case-insensitive: Alt-Shift-M is also Alt-M (only modifier matters).
+HOME
+ASSERT_POINTER  A:A1
+ALT M
+ASSERT_POINTER  A:C5
+
+# An undefined Alt-letter is a silent no-op (Lotus beeps; we don't
+# fail the macro lookup, we just don't run anything).
+ASSERT_POINTER  A:C5
+ALT z
+ASSERT_POINTER  A:C5
+ASSERT_MODE     READY

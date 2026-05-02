@@ -1,0 +1,37 @@
+# Phase 6 — `{?}` pauses the macro until the user presses Enter.
+#
+# Layout:
+#   A1: '{?}{GOTO}D5~hi~       (pause, then stamp "hi" in D5 and stop)
+
+ASSERT_POINTER  A:A1
+
+KEY '
+KEYS {?}{GOTO}D5~hi~
+ENTER
+
+# Define \M over A1.
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Fire the macro. It hits {?} immediately and parks. Pointer
+# hasn't moved; we're back in READY because no further actions
+# have run.
+ALT m
+ASSERT_MODE     READY
+ASSERT_POINTER  A:A1
+
+# User presses Enter to resume the pause. The macro then runs
+# `{GOTO}D5~hi~` and lands a 'hi label at D5.
+ENTER
+ASSERT_POINTER  A:D5
+ASSERT_PANEL_L1 A:D5: 'hi
+ASSERT_MODE     READY

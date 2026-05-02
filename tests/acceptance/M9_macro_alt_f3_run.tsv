@@ -1,0 +1,31 @@
+# Phase 3 — Alt-F3 RUN. Pops up the NAMES list; Enter on a name
+# runs the macro stored at that range. This is how the user invokes
+# macros named anything other than `\A`..`\Z` / `\0`.
+
+ASSERT_POINTER  A:A1
+
+# Stash a macro at A1 that types "ran-it" into B2.
+KEY '
+KEYS {GOTO}B2~ran-it~
+ENTER
+ASSERT_PANEL_L1 A:A1: '{GOTO}B2~ran-it~
+HOME
+
+# Define an arbitrary name "fancy" over A1.
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS fancy
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Alt-F3 opens the NAMES overlay; Enter on the highlighted name runs
+# the corresponding macro.
+ALT_F 3
+ASSERT_MODE     NAMES
+ENTER
+ASSERT_MODE     READY
+ASSERT_POINTER  A:B2
+ASSERT_PANEL_L1 A:B2: 'ran-it

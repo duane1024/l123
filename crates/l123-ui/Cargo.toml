@@ -17,6 +17,7 @@ l123-menu = { workspace = true }
 l123-parse = { workspace = true }
 l123-io = { workspace = true }
 l123-graph = { workspace = true }
+l123-macro = { workspace = true }
 l123-print = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }

@@ -87,6 +87,7 @@ fn run_transcript(path: &Path) {
             }
             "ENTER" => app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             "ESC" => app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            "SPACE" => app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
             "TAB" => app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
             "BACKSPACE" => app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
             "DEL" => app.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
@@ -117,6 +118,7 @@ fn run_transcript(path: &Path) {
                 let n: u8 = rest.parse().expect("ALT_F directive needs number");
                 app.handle_key(KeyEvent::new(KeyCode::F(n), KeyModifiers::ALT));
             }
+            "MACRO" => app.run_macro_text(rest),
 
             // ---- assertions ----
             "ASSERT_POINTER" => {
@@ -989,6 +991,24 @@ transcripts! {
     t05_tutorial_graph_setup_view_save => "T05_tutorial_graph_setup_view_save.tsv",
     t06_tutorial_multiple_sheets_group_and_3d => "T06_tutorial_multiple_sheets_group_and_3d.tsv",
     t07_tutorial_file_retrieve_and_open => "T07_tutorial_file_retrieve_and_open.tsv",
+    m9_macro_basic_keystrokes => "M9_macro_basic_keystrokes.tsv",
+    m9_macro_special_keys     => "M9_macro_special_keys.tsv",
+    m9_macro_alt_letter       => "M9_macro_alt_letter.tsv",
+    m9_macro_alt_f3_run       => "M9_macro_alt_f3_run.tsv",
+    m9_macro_autoexec         => "M9_macro_autoexec.tsv",
+    m9_macro_branch           => "M9_macro_branch.tsv",
+    m9_macro_quit             => "M9_macro_quit.tsv",
+    m9_macro_subroutine       => "M9_macro_subroutine.tsv",
+    m9_macro_if               => "M9_macro_if.tsv",
+    m9_macro_let              => "M9_macro_let.tsv",
+    m9_macro_blank            => "M9_macro_blank.tsv",
+    m9_macro_question_pause   => "M9_macro_question_pause.tsv",
+    m9_macro_getlabel         => "M9_macro_getlabel.tsv",
+    m9_macro_menubranch       => "M9_macro_menubranch.tsv",
+    m9_macro_beep             => "M9_macro_beep.tsv",
+    m9_macro_x_commands       => "M9_macro_x_commands.tsv",
+    m9_learn_record           => "M9_learn_record.tsv",
+    m9_macro_step             => "M9_macro_step.tsv",
 }
 
 #[cfg(feature = "wk3")]

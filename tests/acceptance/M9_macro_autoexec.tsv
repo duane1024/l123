@@ -1,0 +1,50 @@
+# Phase 3 — `\0` autoexec on /File Retrieve, gated by /WGD Default
+# Other Autoexec. The harness stages a saved fixture with `\0`
+# defined and checks that retrieving it auto-runs the macro.
+
+# Build the fixture in this session, save it, then retrieve it in
+# the same session — exercises the named-range round-trip plus the
+# autoexec hook end-to-end.
+
+# Stash a macro at A1 that types "auto-ran" into B5.
+KEY '
+KEYS {GOTO}B5~auto-ran~
+ENTER
+HOME
+ASSERT_POINTER  A:A1
+
+# Define name `\0`.
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \0
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Save to a known path.
+RM_FILE $TMPDIR/autoexec.xlsx
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/autoexec
+ENTER
+
+# /File New to wipe the in-memory workbook (so the retrieve really
+# does load fresh state and the autoexec must come from the file).
+KEY /
+KEY F
+KEY N
+ASSERT_PANEL_L2 Before
+KEY B
+
+# Autoexec is on by default; retrieve fires \0.
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/autoexec.xlsx
+ENTER
+
+ASSERT_POINTER  A:B5
+ASSERT_PANEL_L1 A:B5: 'auto-ran

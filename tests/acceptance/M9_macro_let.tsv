@@ -1,0 +1,61 @@
+# Phase 5 — `{LET loc, expr}`. Writes `expr`'s value at `loc`
+# directly, without going through the keystroke dispatcher. Numbers,
+# strings, and formulas all round-trip via the same source-form
+# parser the entry-commit path uses.
+
+ASSERT_POINTER  A:A1
+
+# Macro body in A1: stamp three cells with different value types.
+KEY '
+KEYS {LET B5, 42}
+ENTER
+
+DOWN
+KEY '
+KEYS {LET C5, hi}
+ENTER
+
+DOWN
+KEY '
+KEYS {LET D5, +B5*2}
+ENTER
+
+DOWN
+KEY '
+KEYS {QUIT}
+ENTER
+
+# Define \M over A1.
+F 5
+KEYS A1
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Run \M.
+ALT m
+ASSERT_MODE     READY
+
+# Verify the three writes.
+F 5
+KEYS B5
+ENTER
+ASSERT_PANEL_L1 A:B5: (G) 42
+ASSERT_CELL     A:B5  42
+
+F 5
+KEYS C5
+ENTER
+ASSERT_PANEL_L1 A:C5: 'hi
+
+F 5
+KEYS D5
+ENTER
+ASSERT_PANEL_L1 A:D5: (G) +B5*2
+ASSERT_CELL     A:D5  84
