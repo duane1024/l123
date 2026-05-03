@@ -1,6 +1,6 @@
 # L123 Implementation Plan
 
-Companion to `SPEC.md v0.2`. This document is the execution path.
+Companion to `SPEC.md v0.4`. This document is the execution path.
 
 ---
 
@@ -226,6 +226,12 @@ quarterly ranges; F10 shows a bar chart.
 - `/Data Query Find|Extract|Unique|Del|Modify`; F7 repeats.
 - `/Data Table 1|2`; F8 repeats.
 - `/Data Distribution`, `/Data Regression`, `/Data Parse`.
+  - Distribution output gets an extra Unicode-bar histogram column
+    (`▁▂▃▄▅▆▇█`) right of the count column, scaled to the largest bin.
+    The histogram is plain `Label` cells (apostrophe prefix), so xlsx
+    round-trip is clean and the user can erase or restyle it like any
+    other range. Acceptance: `M8_data_distribution.tsv` asserts the
+    bars render at the right positions.
 
 ### M9 — Macros and Learn (week 18-20)
 
@@ -239,6 +245,17 @@ quarterly ranges; F10 shows a bar chart.
 - `/X` legacy commands on top of the above.
 - Alt-F3 RUN to invoke by name; Alt-F5 LEARN toggle; Alt-F2 STEP.
 - `\0` autoexec runs on file retrieve if `/WGD Autoexec Yes`.
+- **`.l123log` sidecar (v0.4):** while LEARN is on, the same journal
+  that backs Undo (§4.3) is also streamed line-by-line to a sidecar
+  `<workbook>.l123log` file as one JSON record per command. The
+  sidecar is human-readable and replayable via `l123 --replay
+  <file>.l123log`, which is the regression-test harness for
+  acceptance transcripts that exceed `.tsv`'s expressiveness. The
+  sidecar is *additive* to the in-range macro that `/Worksheet Learn
+  Range` already produces — picking one over the other is a workflow
+  choice. Acceptance: `M9_learn_sidecar_replay.tsv` records a
+  session, replays it on a fresh workbook, asserts identical end
+  state.
 
 ### M10 — Polish, help, themes (week 21-22)
 
@@ -251,6 +268,191 @@ quarterly ranges; F10 shows a bar chart.
 
 (Read-only `.wk3` import landed earlier via `ironcalc_lotus`; saving
 converts to `<orig>.WK3.xlsx`.)
+
+### M11 — Modern data import & Range Compare (week 23)
+
+Adds three `/File Import` verbs for modern formats. Reuses the
+FILES-mode infrastructure from M4 and the typed-loader pattern that
+already handles xlsx/csv. SPEC §14 v0.4.
+
+- `l123-io` adds `json_loader.rs`, `parquet_loader.rs`,
+  `sqlite_loader.rs`. Each implements a common `RecordLoader` trait
+  (open path → iterator of typed rows + header row).
+- Type widening rule: numbers → `Value::Number`; bools → 1/0;
+  null/None → `CellContents::Empty`; strings → `Label{prefix:
+  Apostrophe}`; dates → `Number` with format tag `(D1)`.
+- `l123-menu` adds three new leaves under `/File Import`. Each leaf
+  enters FILES mode at the cwd, filtered by extension
+  (`.json`/`.jsonl`, `.parquet`, `.sqlite`/`.db`).
+- For sqlite: after picking the file, a NAMES-mode picker over the
+  tables in that file appears (a single sqlite file can hold many).
+- Errors (malformed JSON, parquet schema mismatch, sqlite locked) map
+  to ERROR mode with a one-line cause on line 3.
+
+**Acceptance transcripts** (new under `tests/acceptance/`):
+
+```
+M11_import_json.tsv        — array-of-objects → header row + records
+M11_import_jsonl.tsv       — JSON-Lines streaming variant
+M11_import_parquet.tsv     — typed columns preserved (Number, D1 date)
+M11_import_sqlite.tsv      — picks file, then table from NAMES list
+M11_import_json_error.tsv  — malformed JSON → ERROR mode, no partial load
+```
+
+```
+/FIJ <FILES nav to fixtures/sales.json><Enter>
+  → header row at A1 (id name qty); records at A2..D11
+  → control panel reads `A:A1: 'id`
+/FIS <FILES nav to fixtures/inventory.db><Enter>
+  → NAMES list: items, suppliers, orders
+  <select items><Enter>
+  → table loaded at pointer; numeric cols right-aligned, string cols
+    left-aligned with apostrophe prefix
+```
+
+**`/Range Compare` (v0.4):** new leaf under `/Range`. Prompts for two
+ranges (POINT for both, identical to `/Copy`); produces a third
+range, anchored at a third user-pointed cell, with one row per
+differing cell: `(addr, left_value, right_value, diff_kind)` where
+`diff_kind ∈ {only-left, only-right, both-different, type-mismatch}`.
+Equal cells produce no output row. Useful for diffing xlsx
+revisions, reconciliation, and regression checking. Implementation
+sits in `l123-cmd` as a pure pass over two `RangeView`s; no engine
+changes.
+
+```
+M11_range_compare_basic.tsv      — diff two ranges, 3 differing cells
+M11_range_compare_type_mismatch.tsv — number vs label flagged distinctly
+M11_range_compare_size_mismatch.tsv — different shapes → ERROR mode
+M11_range_compare_clean.tsv      — equal ranges → empty output, info on line 3
+```
+
+```
+/RC<POINT A1..C5>~<POINT E1..G5>~<POINT A20>~
+  → output at A20..D? lists each differing cell with both values
+```
+
+### M12 — `/Data External` (week 24-25)
+
+Live SQL source. Honors 1-2-3 R3.4a's DataLens architecture: a range
+that is *backed by* an external query, refreshable on demand.
+SPEC §18 (Complete tier, v0.4).
+
+- New crate `l123-extdata` (or module under `l123-io`) with two
+  drivers: `sqlite` (file path) and `postgres` (libpq URL). Both
+  behind a `DataSource` trait so MySQL/DuckDB can land later.
+- `/Data External` submenu: `Connect`, `Use`, `Refresh`, `List`,
+  `Reset`, `Disconnect`.
+  - `Connect` — prompts for a name (≤15 chars, named-range rules) and
+    a connection string. Tests connectivity; ERROR mode on failure.
+  - `Use <name> <query>` — prompts for SQL; runs it; populates a
+    pointer-anchored range with the result. The range is marked
+    *external-bound*; cells are display-protected (PROT visible).
+  - `Refresh` — re-runs the query in WAIT mode; replaces values
+    in-place (preserving column widths and adjacent formulas).
+  - `List` — overlay listing all external connections + last-refresh
+    timestamps, like `/File List`.
+- Persistence: external-bound ranges are saved as xlsx custom
+  document properties so `/File Save` round-trips the binding.
+  Connection strings are stored without credentials; passwords come
+  from a `~/.l123/credentials` keyfile or env var on reconnect.
+- Recalc interaction: when an external-bound range's cells are
+  referenced by formulas, recalc uses the cached values (no implicit
+  query refresh on F9 — explicit `/DER` only).
+- READ-only this milestone; write-back to the external source is a
+  non-goal.
+
+**Acceptance transcripts:**
+
+```
+M12_external_sqlite_connect.tsv   — Connect/Use/Refresh round-trip
+M12_external_protected.tsv        — bound cells show PROT; direct edit refused
+M12_external_xlsx_roundtrip.tsv   — save, close, reopen → binding restored
+M12_external_refresh_wait.tsv     — long query → WAIT mode → CALC clears
+M12_external_error_disconnect.tsv — db unreachable → ERROR; range frozen
+```
+
+```
+/DEC sales sqlite:tests/fixtures/inventory.db<Enter>
+  → connection 'sales' established
+/DEU sales SELECT * FROM items WHERE qty > 0<Enter><POINT C5>
+  → C5..F? populated; range marked external-bound (PROT visible on
+    pointer enter); status shows last-refresh timestamp
+/DER sales<Enter>
+  → WAIT mode during query; cells refreshed in place
+```
+
+### M13 — ADDIN key + Data Workbench (week 26-29)
+
+The native plug-in surface. SPEC §22 (v0.4). The workbench is a
+distinct overlay surface, not part of the §20 authenticity contract;
+its in-overlay UX is permitted to break 1-2-3 conventions.
+
+Sub-milestones:
+
+**M13a — overlay framing (week 26)**
+
+- New `WORKBENCH` mode + `WORKBNCH` indicator. Mode model in
+  `l123-core` extends with `Mode::Workbench { input: Range, view:
+  WorkbenchState }`.
+- `l123-ui` adds `WorkbenchOverlay` widget that takes over the screen,
+  swapping out `Grid`/`ControlPanel` for a workbench-native layout.
+- Alt-F10 in READY → POINT for input range → overlay opens. Esc-Esc
+  or second Alt-F10 → POINT for optional write-back range → return to
+  READY.
+- 1-2-3 keys are *intentionally non-functional* inside the overlay;
+  pressing `/` shows a one-line "1-2-3 keys disabled in Workbench"
+  hint on the workbench status bar. Esc still backs out (the only
+  shared key).
+
+**M13b — transform set (week 27-28)**
+
+- New crate `l123-workbench`. Reads a typed view of the input range
+  (uses `l123-engine`'s `CellView` to extract type-tagged columns).
+- v0.4 transforms: `Sort` (multi-key), `RegexFilter`, `Frequency`
+  (with Unicode-bar histogram column), `Describe` (count, null,
+  mean, median, stdev, min, max, q1, q3).
+- Transform stack rendered in the workbench status bar; each
+  transform is non-destructive over the previous layer.
+- Vim-style movement (hjkl + g/G + /) inside the overlay. Type
+  inference per column. Sort/filter wired through the transform stack.
+
+**M13c — write-back (week 29)**
+
+- `W` (write) inside overlay → exit-then-POINT for target range →
+  current top-of-stack transform output committed as plain values
+  starting at the target. No formulas, no label prefixes (apostrophe
+  is auto-applied by the standard label-prefix rule on commit).
+- Workbench state is in-memory only; no persistence into xlsx.
+- Undo journal records the write-back as a single
+  `Command::WorkbenchCommit` so Alt-F4 reverses the entire write.
+
+**M13d — Stretch (post-v0.4)**
+
+- Melt, Transpose, Unfurl, Join, TypeAudit transforms.
+- APP1/APP2/APP3 binding via `~/.l123/plugins.toml` (Rust `cdylib`
+  load).
+
+**Acceptance transcripts (M13a-c):**
+
+```
+M13_addin_open_close.tsv         — Alt-F10 → POINT → overlay → Esc-Esc → READY
+M13_workbench_mode_indicator.tsv — WORKBNCH visible; READY hidden
+M13_workbench_disables_slash.tsv — `/` inside overlay → hint, no menu
+M13_workbench_sort.tsv           — Sort by col 2 desc, top row matches
+M13_workbench_frequency.tsv      — histogram column renders ▁..█
+M13_workbench_describe.tsv       — 9 stats per typed column
+M13_workbench_writeback.tsv      — W → POINT F1 → cells F1..H? populated
+M13_workbench_writeback_undo.tsv — Alt-F4 reverses full write-back
+M13_workbench_xlsx_clean.tsv     — workbench use leaves xlsx round-trip clean
+```
+
+Each Workbench acceptance test is structured: 1-2-3 keys outside, then
+Alt-F10, then a workbench keystroke sub-block, then exit + outside
+verification. The test harness needs a flag for "the next N keystrokes
+are workbench keystrokes" so tests don't leak workbench keys back into
+the 1-2-3 dispatch. Add this to `tests/acceptance/README.md` as part of
+M13a.
 
 ---
 
@@ -298,6 +500,33 @@ keeps IronCalc happy; we reverse on round-trip.
 **Decision: UTF-8 internally.** LMBCS input accepted via `@CHAR` and paste
 events; emitted as UTF-8 codepoints. Compose key (Alt-F1) maps Lotus's
 multi-keystroke sequences to Unicode.
+
+### 4.7 Long operations and WAIT mode
+
+**Decision: every potentially-slow op runs on a Tokio task; WAIT mode
+is the user-visible contract.** SPEC §5 already lists `WAIT` as a
+first-class mode. We honor it for: `/File Retrieve`, `/File Save`,
+`/File Import` (all formats incl. M11 JSON/Parquet/Sqlite),
+`/Data External Refresh` (M12), recalc on workbooks > 50k cells, and
+xlsx round-trip. Pattern:
+
+1. Op begins → mode switches to `WAIT` → indicator visible top-right
+   → control-panel line 3 shows "Loading foo.parquet…" (or
+   equivalent).
+2. Op runs on a background task; the UI thread continues to render
+   at 60Hz, drawing only spinner/progress updates (no input handled
+   except Ctrl-Break).
+3. Progress: where the loader can report it (file bytes read,
+   sqlite rows yielded), a simple `[████████░░] 80%` bar renders on
+   line 3. Where it can't, an animated spinner is sufficient.
+4. Ctrl-Break interrupts, returns to READY, leaves no partial state.
+5. Op completes → mode returns to caller's previous mode (usually
+   READY) → results are committed in one journal entry (so Alt-F4
+   undoes the whole load).
+
+This is a cross-cutting infra item, not a milestone. Lands as part
+of M4 (`l123-io::AsyncOp` trait + WAIT-mode plumbing in `l123-ui`)
+and is reused by every later milestone that needs it.
 
 ---
 

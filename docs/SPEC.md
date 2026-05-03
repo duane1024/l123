@@ -1,6 +1,12 @@
-# L123 — Lotus 1-2-3 TUI Spreadsheet (Spec v0.3)
+# L123 — Lotus 1-2-3 TUI Spreadsheet (Spec v0.4)
 
-> v0.3 retargets the project from Lotus 1-2-3 Release 3.1 (1990) to
+> v0.4 (2026-05-02) adds a native plug-in surface (§22): Alt-F10 ADDIN
+> opens a built-in Data Workbench for VisiData-style transforms over a
+> range; APP1/APP2/APP3 are reserved for user plug-ins. Modern data
+> loaders (`/File Import Json|Parquet|Sqlite`) and `/Data External`
+> (live SQL source) are promoted into the Complete scope tier (§18).
+>
+> v0.3 retargeted the project from Lotus 1-2-3 Release 3.1 (1990) to
 > **Release 3.4a for DOS** (1993) — the final DOS release, with the
 > WYSIWYG add-in promoted to a standard, always-on feature and the R3.4
 > icon panel. v0.2 was rewritten from v0.1 after deep review of the
@@ -133,6 +139,7 @@ Every mode is a first-class state with a visible indicator.
 | WAIT | `WAIT` | Long operation (retrieve, save, recalc) |
 | FIND | `FIND` | /Data Query Find is highlighting a record |
 | STAT | `STAT` | /Worksheet Status or /WGD Status panel shown |
+| WORKBENCH | `WORKBNCH` | The native plug-in overlay is active (§22, v0.4) |
 
 **Δ from v0.1:** v0.1 listed 4 modes; the real model has 13. These all must be
 implemented for authenticity; FIND/STAT are late-stage but the others are
@@ -286,11 +293,12 @@ Quick mnemonic: **W R C M F P G D S Q**.
 
 L123 drops 1-2-3 R3.4a's `/Add-In` slot. Add-ins were a DOS-era
 overlay/loader mechanism (`.PLC`/`.ADN` bound to APP1/APP2/APP3 and
-the ADDIN key) and don't translate to a modern Rust binary; any future
-plug-in surface will be designed natively rather than retrofitted onto
-the menu. The R3.4a ADDIN/APP1/APP2/APP3 function-key bindings are
-unbound for the same reason — keep them visible in the keymap as
-historical reference, but don't dispatch them.
+the ADDIN key) and don't translate to a modern Rust binary; the
+plug-in surface is designed natively rather than retrofitted onto the
+menu — see §22 (added in v0.4). The R3.4a ADDIN/APP1/APP2/APP3
+function-key bindings dispatch through that native surface; ADDIN
+(Alt-F10) opens the built-in Data Workbench, APP1/APP2/APP3 are
+reserved for user-supplied plug-ins.
 
 ### MVP menu slice
 
@@ -349,10 +357,11 @@ memory. `/Add-In` is intentionally omitted (see top-level note above).
 - `/Worksheet Window Perspective | Map | Graph`
 - `/Worksheet Insert Sheet`, `/Worksheet Global Group`
 - `/Range Input`
+- `/Range Compare` — diff two ranges into a third (v0.4)
 
 ### Stretch menu slice
 
-- `/Data Matrix`, `/Data External`
+- `/Data Matrix` (`/Data External` was promoted to Complete in v0.4 — §18)
 - `/Data Table 3` (3D), Labeled variants
 - Macros, `{…}` advanced commands
 - Lotus-era print drivers
@@ -484,6 +493,7 @@ active files = multiple in-memory IronCalc workbooks. Cross-file refs
 | `/File Combine Copy/Add/Subtract` | Merge disk file into current cell, element-wise |
 | `/File Xtract Formulas/Values` | Save a range to a new `.WK3` |
 | `/File Import Text/Numbers` | Import ASCII into cells |
+| `/File Import Csv/Json/Parquet/Sqlite` | L123 v0.4 modern-format extensions; each loader maps records to rows, fields to columns at the pointer |
 | `/File List` | Overlay list of files with metadata |
 | `/File Erase` | Delete file on disk |
 
@@ -506,6 +516,12 @@ To save a *subset*: `/File Xtract`. L123 must match this model.
   (`/Worksheet Global Default Ext Save .xlsx`); save to `.xlsx` by default for
   modern workflow.
 - `.csv` — /File Import Text / Numbers target
+- `.json`, `.jsonl` — /File Import Json target (array-of-objects → rows,
+  keys → header row); v0.4
+- `.parquet` — /File Import Parquet target (typed columnar; preserves
+  numeric/date types into format tags); v0.4
+- `.sqlite`, `.db` — /File Import Sqlite target (FILES-mode picker over
+  tables in the file); v0.4. Live-source equivalent is `/Data External`
 - `.wk3` — read-only import (values, formulas, basic styles, col
   widths). Save converts to `.xlsx` (`<orig>.WK3.xlsx`); writing `.wk3`
   is a non-goal.
@@ -677,14 +693,24 @@ label prefixes verbatim (since IronCalc would re-parse).
 - `/Worksheet Window` Perspective, Map, Graph pane
 - `/Range Input` form mode
 - `/File Admin` (Reservation, Seal)
+- `/File Import Csv|Json|Parquet|Sqlite` modern loaders (v0.4)
+- `/Data External` — live SQL source (DataLens-equivalent; v0.4)
+- Native plug-in surface and built-in Data Workbench (Alt-F10 ADDIN; §22, v0.4)
 - Full @function catalog
 - Macros: `/X` commands, `{BRANCH}`, `{IF}`, `{LET}`, `{GETLABEL}`,
   `{GETNUMBER}`, `{MENUBRANCH}`, `{QUIT}`, `{RETURN}`, subroutine calls,
   `\A..\Z` naming, `\0` autoexec, `/Worksheet Learn`
+- `.l123log` sidecar replay (v0.4): while LEARN is active, the
+  command journal is also streamed to a `<workbook>.l123log` file
+  (one JSON record per command). Replayable via `l123 --replay`.
+  Additive to in-range macro recording, not a replacement.
 
 ### Stretch (nice to have)
 
-- `/Data Matrix`, `/Data External` (DataLens-style)
+- `/Data Matrix` (`/Data External` was promoted to Complete in v0.4)
+- Workbench transforms beyond the v0.4 core: Melt, Transpose, Unfurl,
+  Join, TypeAudit
+- User-bindable APP1/APP2/APP3 (Alt-F7/F8/F9) plug-in slots
 - Advanced macro commands (`{FOR}`, `{OPEN}`, `{READ}`, `{FORM}`, `{DEFINE}`)
 - Wysiwyg-style add-in layer (fonts/shading); limited in terminal, could
   target Kitty image protocol
@@ -744,11 +770,136 @@ These items are the acceptance checklist for MVP authenticity review.
   its address.
 - **Anchor**: the fixed corner of a POINT-mode range; `.` cycles which corner
   is anchored.
+- **Workbench**: the native plug-in overlay reached via Alt-F10 (§22).
+  Distinct surface from the 1-2-3 grid; not part of the §20 authenticity
+  contract.
 
 ---
 
-## 22. Change log
+## 22. Native plug-in surface
 
+§10 dropped the legacy `/Add-In` menu but reserved the R3.4a
+ADDIN/APP1/APP2/APP3 function keys "as historical reference." This
+section makes them concrete. **Added in v0.4.**
+
+### 22.1 Why
+
+L123's 1-2-3 R3.4a interaction model is fixed by design: menu, formula
+syntax, key map, and the §20 authenticity contract cannot move to
+accommodate features 1-2-3 didn't have. But there is genuine value in
+modern data-wrangling features (typed columns, group-by, frequency,
+melt, transpose, regex filter, live SQL sources) that:
+
+- 1-2-3 R3.4a doesn't have native verbs for, *and*
+- can't be retrofitted to the `/` tree without breaking muscle memory.
+
+The historical answer was add-ins — code loaded over a key, presenting
+its own UI, writing back to the workbook on exit. Wysiwyg and Auditor
+were built that way. We honor the architecture; we don't replicate the
+DOS-era loader.
+
+### 22.2 Surface
+
+Four function-key slots, all already reserved by the R3.4a key map (§7):
+
+| Key | Plug-in slot | Intent |
+|---|---|---|
+| Alt-F10 (ADDIN) | `Workbench` (built-in) | Default L123 plug-in: VisiData-style data view of a range |
+| Alt-F7 (APP1) | User-bindable | Reserved for user-supplied native plug-ins |
+| Alt-F8 (APP2) | User-bindable | " |
+| Alt-F9 (APP3) | User-bindable | " |
+
+APP1/APP2/APP3 dispatch through a Rust trait registered at startup; the
+binding mechanism (config file, plug-in discovery) is out of scope for
+this spec but the slots are guaranteed available.
+
+### 22.3 Workbench (built-in, ADDIN)
+
+Pressing Alt-F10 in READY:
+
+1. Prompts for an input range via POINT, auto-anchored at the pointer
+   (identical semantics to `/Data Sort` etc.; §9). `Esc` aborts back to
+   READY with no state change.
+2. Pushes a full-screen *Workbench* overlay over the grid. The 1-2-3
+   control panel is replaced by a Workbench status bar (filename + range
+   + row count + active transform stack). The mode indicator reads
+   `WORKBNCH`.
+3. Releases all 1-2-3 keymap conventions inside the overlay. 1-2-3 keys
+   *do not work* in the Workbench; the user knows they have entered a
+   different surface. Inside, key bindings follow the Workbench's own
+   model (vim-style movement is permitted; this is documented as part
+   of the Workbench, not L123 proper).
+4. On exit (second Alt-F10, or Esc-Esc), prompts via POINT for an
+   optional write-back target range. If given, the active transform's
+   output is committed as plain values starting at that target. If
+   skipped, the workbook is unchanged.
+
+### 22.4 Workbench v0.4 transform set
+
+| Transform | Description |
+|---|---|
+| Sort | Multi-key, type-aware; non-destructive over input |
+| RegexFilter | Hide rows by regex match on a column |
+| Frequency | Group-by + count + Unicode-bar histogram column |
+| Describe | Per-column count/null/mean/median/stdev/min/max/quartiles |
+
+Stretch transforms (post-v0.4): Melt, Transpose, Unfurl, Join across
+active files, TypeAudit (highlight cells whose value mismatches inferred
+column type, using existing `@ISERR`/`@ISNA` infrastructure).
+
+### 22.5 What the Workbench MAY do
+
+- Read the input range; infer per-column types; present typed columns.
+- Stack transforms above the input (non-destructive, layered).
+- Render transform output as a sheet view inside the overlay.
+- Use vim-style movement, Python-style expressions for computed
+  columns, lazy evaluation, and a sheet stack — *inside the overlay
+  only*.
+- Commit, on user request, transform output to a target range as plain
+  values.
+
+### 22.6 What the Workbench MUST NOT do
+
+- Modify the active workbook outside the user-pointed write-back range.
+- Inject formulas or label prefixes into committed cells. Workbench
+  output is plain values; if formulas are wanted, the workbook's
+  `/Data` and `/Range` commands cover that.
+- Add menu items to the `/` tree, alter the function-key map outside
+  Alt-F10/F7/F8/F9, or surface a mode indicator other than `WORKBNCH`.
+- Persist Workbench state in the workbook file. Round-trip through
+  `.xlsx` is unaffected by Workbench use.
+
+### 22.7 Authenticity stance
+
+The Workbench is **not** part of the §20 authenticity contract. It is
+a separate surface, gated behind a single key the SPEC has always
+reserved. An experienced 1-2-3 R3.4a user who never touches Alt-F10
+sees no Workbench; promise §1.1 (sit-down-cold usability) is preserved.
+The Workbench's existence is the answer to "but a modern user wants
+pivot/melt/typed columns" — yes, and they are one keypress away in a
+place that doesn't compromise the 1-2-3 surface.
+
+---
+
+## 23. Change log
+
+- **v0.4** (2026-05-02) — VisiData-inspired feature pass.
+  - Native plug-in surface (§22): Alt-F10 ADDIN reactivated as
+    built-in Data Workbench; APP1/APP2/APP3 reserved for user
+    plug-ins. New `WORKBENCH` mode (§5).
+  - Modern data loaders added: `/File Import Csv|Json|Parquet|Sqlite`
+    (§14, §18 Complete tier).
+  - `/Data External` promoted from Stretch to Complete (§10, §18).
+  - `/Range Compare` leaf added to Complete menu slice (§10).
+  - `/Data Distribution` output gains a Unicode-bar histogram column
+    (PLAN M8).
+  - `.l123log` sidecar replay format added to Macros/Learn (§18).
+  - Long operations (file load/save, large recalc) run on background
+    tasks under WAIT mode with progress bar / spinner (PLAN §4.7).
+- **v0.3** (2026-04) — Retarget from R3.1 (1990) to R3.4a (1993).
+  WYSIWYG promoted from add-in to standard always-on feature; R3.4a
+  17-icon panel added to authenticity contract (§20#11); `/Add-In` slot
+  dropped (§10).
 - **v0.2** (2026-04-23) — Rewrite after Reference + Tutorial manual review.
   Corrections: full mode model (13, not 4); three-line control panel
   explicit; complete top-level menu; `=` is not a value starter; no
