@@ -26,3 +26,4 @@ ratatui-image = { workspace = true }
 image = { workspace = true }
 libc = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true }

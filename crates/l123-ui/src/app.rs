@@ -10,7 +10,12 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::runtime::{Builder as TokioBuilder, Runtime};
+use tokio::sync::oneshot;
 
 use crossterm::{
     event::{
@@ -899,6 +904,17 @@ pub struct App {
     /// `/Data Query` settings — sticky across Query-menu visits and
     /// across separate `/DQ` sessions until cleared by Reset.
     data_query: DataQueryState,
+    /// §4.7 — current-thread tokio runtime that backs every long-
+    /// running op via `spawn_blocking`. Owning it on `App` keeps
+    /// the runtime's lifetime tied to the UI's; tests use the same
+    /// handle to `block_on` a parked op to completion.
+    runtime: Runtime,
+    /// PLAN §4.7 cell-count threshold above which F9 recalc routes
+    /// through the WAIT path. Initialized to
+    /// `RECALC_WAIT_CELL_THRESHOLD`; transcripts can lower it via
+    /// `test_set_recalc_wait_threshold` so a 5-cell sheet exercises
+    /// the same code path without seeding 50k cells.
+    recalc_wait_cell_threshold: usize,
 }
 
 /// User-visible identity shown on the startup splash. The renderer
@@ -1298,25 +1314,177 @@ struct PromptState {
     fresh: bool,
 }
 
-/// §4.7 — a long-running file op queued while WAIT mode is active.
-/// `tick()` consumes the variant and runs the actual work.
-#[derive(Debug, Clone)]
-enum PendingAsyncOp {
-    /// `/File Retrieve` — the path is dispatched by extension.
-    FileRetrieve(PathBuf),
+/// §4.7 — a long-running op queued while WAIT mode is active. The
+/// op begins life in `OpState::Queued` (not yet on the tokio
+/// thread); the next `tick()` moves it to `OpState::Running` by
+/// spawning a `spawn_blocking` task. Subsequent ticks poll the
+/// oneshot for completion. Drop the whole struct to cancel — the
+/// shared `progress.cancel` flag lets cooperative workers bail
+/// early.
+struct PendingAsyncOp {
+    /// Verb prefix on control-panel line 3 — e.g. "Loading",
+    /// "Saving", "Importing", "Recalculating". Joined with
+    /// `display_name` for the rendered "Loading foo.csv…" line.
+    verb: &'static str,
+    /// Filename basename or other short noun — rendered after `verb`.
+    /// Empty for ops with no associated file (e.g. recalc).
+    display_name: String,
+    /// Shared progress / cancel state, written by the worker and
+    /// read by the renderer.
+    progress: AsyncProgress,
+    /// State of the op — Queued (not yet on tokio) or Running
+    /// (worker spawned, waiting for result).
+    state: OpState,
 }
 
 impl PendingAsyncOp {
-    /// Filename rendered on control-panel line 3 in `Loading <basename>…`.
-    fn display_basename(&self) -> String {
-        match self {
-            PendingAsyncOp::FileRetrieve(path) => path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string(),
+    /// Control-panel line 3 text. With a `total > 0` progress reading
+    /// we render a fixed-width bar `[████░░] N%`; otherwise just the
+    /// verb + name.
+    fn render_line3(&self) -> String {
+        let head = if self.display_name.is_empty() {
+            format!(" {}…", self.verb)
+        } else {
+            format!(" {} {}…", self.verb, self.display_name)
+        };
+        let total = self.progress.total.load(Ordering::Relaxed);
+        if total == 0 {
+            return head;
         }
+        let done = self.progress.done.load(Ordering::Relaxed).min(total);
+        let pct = ((done * 100) / total) as u16;
+        let bar = render_progress_bar(done, total, PROGRESS_BAR_CELLS);
+        format!("{head} [{bar}] {pct}%")
     }
+}
+
+/// Width (in cells) of the rendered `[████░░]` progress bar. Each
+/// cell = `total / N` bytes; partial cells round down.
+const PROGRESS_BAR_CELLS: u32 = 20;
+
+/// Threshold for routing `F9` recalc through WAIT mode (PLAN §4.7).
+/// Below this cell count the recalc stays synchronous so day-to-day
+/// edits don't pay a tokio round-trip.
+const RECALC_WAIT_CELL_THRESHOLD: usize = 50_000;
+
+fn render_progress_bar(done: u64, total: u64, cells: u32) -> String {
+    if total == 0 || cells == 0 {
+        return String::new();
+    }
+    let filled = ((done.saturating_mul(cells as u64)) / total).min(cells as u64) as u32;
+    let mut s = String::with_capacity(cells as usize * 3);
+    for _ in 0..filled {
+        s.push('\u{2588}');
+    }
+    for _ in filled..cells {
+        s.push('\u{2591}');
+    }
+    s
+}
+
+/// Shared state between the UI thread and a worker task — the worker
+/// writes progress and reads `cancel`; the UI thread does the inverse.
+#[derive(Clone, Default)]
+struct AsyncProgress {
+    /// Bytes (or rows) processed so far.
+    done: Arc<AtomicU64>,
+    /// Total bytes (or rows). Zero = indeterminate; render hides the
+    /// bar and shows the verb-only line.
+    total: Arc<AtomicU64>,
+    /// Set by Ctrl-Break. Workers in cooperative loops (CSV row
+    /// scanner, import row scanner) check this between rows and
+    /// return early; ops backed by a single opaque IronCalc call
+    /// (xlsx load, xlsx save, recalc) only honor it before/after.
+    cancel: Arc<AtomicBool>,
+}
+
+/// State machine for `PendingAsyncOp`. The `Queued` payload is
+/// boxed because some variants embed an `IronCalcEngine` (~1KB on
+/// the stack) that would otherwise dominate the enum size.
+enum OpState {
+    /// Worker hasn't been spawned yet. The next `tick()` moves it to
+    /// `Running` (unless `block_next_async_op` is set, which lets
+    /// transcripts observe pre-flight WAIT state).
+    Queued(Box<QueuedOp>),
+    /// Worker spawned; waiting for the oneshot result.
+    Running(oneshot::Receiver<AsyncResult>),
+}
+
+/// What the worker should do — variants own the inputs they need
+/// (path, taken-out engine, etc.) so the spawn-blocking closure has
+/// nothing to borrow from `App`.
+enum QueuedOp {
+    /// `/File Retrieve` — dispatched by extension inside the worker.
+    FileRetrieve { path: PathBuf },
+    /// `/File Save` — engine has been taken out of the workbook
+    /// (placeholder swapped in) and travels with the op.
+    FileSave {
+        engine: IronCalcEngine,
+        path: PathBuf,
+        formula_sources: HashMap<Address, String>,
+    },
+    /// `/File Import Numbers` — workbook engine taken out; the
+    /// worker fills it from the parsed CSV starting at `origin`.
+    FileImportNumbers {
+        engine: IronCalcEngine,
+        path: PathBuf,
+        origin: Address,
+    },
+    /// `/File Import Text` — same as Numbers but each line is a
+    /// single label (no comma-splitting).
+    FileImportText {
+        engine: IronCalcEngine,
+        path: PathBuf,
+        origin: Address,
+    },
+    /// F9 recalc, gated on cell count > `RECALC_WAIT_CELL_THRESHOLD`.
+    Recalc { engine: IronCalcEngine },
+}
+
+/// What the worker hands back over the oneshot. Each variant carries
+/// the engine (or `None` if construction failed before we got one)
+/// plus any cells-cache deltas the main thread should apply.
+enum AsyncResult {
+    /// `/File Retrieve` of an xlsx — the worker built a fresh engine
+    /// from the file. Cells/styles are pulled out of it on the main
+    /// thread (re-using the existing post-load cache rebuild).
+    FileRetrieveXlsx {
+        engine: IronCalcEngine,
+        path: PathBuf,
+        is_wk3: bool,
+    },
+    /// `/File Retrieve` of a csv — the worker built a fresh engine
+    /// pre-populated with the parsed cells; `cells` is the matching
+    /// UI-side cache.
+    FileRetrieveCsv {
+        engine: IronCalcEngine,
+        path: PathBuf,
+        cells: Vec<(Address, CellContents)>,
+    },
+    /// `/File Save` — engine returned, with success or error string.
+    FileSave {
+        engine: IronCalcEngine,
+        path: PathBuf,
+        result: std::result::Result<(), String>,
+    },
+    /// Import op completed (text or numbers). `cells` is the run of
+    /// UI-side entries to merge into `Workbook::cells`.
+    FileImport {
+        engine: IronCalcEngine,
+        cells: Vec<(Address, CellContents)>,
+    },
+    /// F9 recalc done — engine carries the recomputed values.
+    Recalc { engine: IronCalcEngine },
+    /// Worker bailed because of a cancel flag or pre-spawn check.
+    /// Engine is returned so the main thread can put it back.
+    Cancelled { engine: Option<IronCalcEngine> },
+    /// Worker hit an error (file open failed, etc.). Engine is
+    /// returned (when one was taken out) so the workbook isn't
+    /// stranded with a placeholder.
+    Errored {
+        engine: Option<IronCalcEngine>,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2967,6 +3135,29 @@ impl App {
             data_regression: DataRegressionState::default(),
             data_parse: DataParseState::default(),
             data_query: DataQueryState::default(),
+            runtime: TokioBuilder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio current-thread runtime init"),
+            recalc_wait_cell_threshold: RECALC_WAIT_CELL_THRESHOLD,
+        }
+    }
+
+    /// §4.7 acceptance hook — lowers (or raises) the F9-recalc cell-
+    /// count threshold so a small transcript can exercise the WAIT
+    /// path. No-op outside tests; production code never calls this.
+    pub fn test_set_recalc_wait_threshold(&mut self, n: usize) {
+        self.recalc_wait_cell_threshold = n;
+    }
+
+    /// §4.7 acceptance hook — write synthetic progress numbers to
+    /// the currently-pending async op's shared state so a transcript
+    /// can render-and-assert the `[████░░] N%` bar without having
+    /// to time the worker. No-op when nothing is queued.
+    pub fn test_seed_async_progress(&mut self, done: u64, total: u64) {
+        if let Some(op) = self.pending_async_op.as_ref() {
+            op.progress.done.store(done, Ordering::Relaxed);
+            op.progress.total.store(total, Ordering::Relaxed);
         }
     }
 
@@ -3072,56 +3263,297 @@ impl App {
         self.wb().dirty
     }
 
-    /// §4.7 acceptance hook: park the next async file op so a
-    /// transcript can observe mid-flight WAIT mode. Sticky until
-    /// `test_resume_async_op` or Ctrl-Break clears it.
+    /// §4.7 acceptance hook: park the next async op in `Queued`
+    /// state so a transcript can observe mid-flight WAIT mode and
+    /// pre-spawn cancellation. Sticky until `test_resume_async_op`
+    /// or Ctrl-Break clears it.
     pub fn test_block_next_async_op(&mut self) {
         self.block_next_async_op = true;
     }
 
-    /// §4.7 acceptance hook: clear the block and drain the parked op.
+    /// §4.7 acceptance hook: clear the block and run the parked op
+    /// to completion synchronously, applying the result before
+    /// returning. Equivalent to ticking until the queue drains, but
+    /// uses the runtime's `block_on` so xlsx loads / saves don't
+    /// busy-loop.
     pub fn test_resume_async_op(&mut self) {
         self.block_next_async_op = false;
-        self.tick();
+        self.tick_inner(true);
+    }
+
+    /// Acceptance-harness companion to `tick`: blocks until the
+    /// worker returns instead of polling non-blocking. Respects
+    /// `block_next_async_op` so a transcript that called
+    /// `BLOCK_NEXT_OP` keeps the op parked. Mirrors the
+    /// pre-§4.7 sync drain semantics so existing transcripts that
+    /// don't care about WAIT mid-flight stay green without
+    /// sprinkling `RESUME_OP` everywhere.
+    pub fn drain_async_op_blocking(&mut self) {
+        self.tick_inner(true);
     }
 
     /// §4.7 — drain a queued long-running op. The production event
-    /// loop calls this each iteration after rendering, which keeps
-    /// the WAIT frame visible for one terminal repaint before the
-    /// op runs and mode pops back to READY. Gated by
-    /// `block_next_async_op` so tests can hold the queue indefinitely.
+    /// loop calls this each iteration after rendering. Non-blocking:
+    /// if the worker is still running the op stays in WAIT and the
+    /// next render frame sees updated progress. Gated by
+    /// `block_next_async_op` so tests can hold the queue at the
+    /// pre-spawn boundary indefinitely.
     pub fn tick(&mut self) {
+        self.tick_inner(false);
+    }
+
+    /// Shared body of `tick` and `test_resume_async_op`. With
+    /// `wait == false` we poll the worker non-blocking; with
+    /// `wait == true` we block on the oneshot until the worker
+    /// returns.
+    fn tick_inner(&mut self, wait: bool) {
         if self.block_next_async_op {
             return;
         }
         let Some(op) = self.pending_async_op.take() else {
             return;
         };
-        match op {
-            PendingAsyncOp::FileRetrieve(path) => self.retrieve_by_extension(path),
-        }
-        if matches!(self.mode, Mode::Wait) {
-            self.mode = Mode::Ready;
+        let PendingAsyncOp {
+            verb,
+            display_name,
+            progress,
+            state,
+        } = op;
+        let mut rx = match state {
+            OpState::Queued(queued) => self.spawn_async_op(*queued, progress.clone()),
+            OpState::Running(rx) => rx,
+        };
+        let result = if wait {
+            self.runtime.block_on(&mut rx).ok()
+        } else {
+            match rx.try_recv() {
+                Ok(r) => Some(r),
+                Err(oneshot::error::TryRecvError::Empty) => None,
+                Err(oneshot::error::TryRecvError::Closed) => Some(AsyncResult::Errored {
+                    engine: None,
+                    message: "worker task dropped without result".to_string(),
+                }),
+            }
+        };
+        match result {
+            None => {
+                self.pending_async_op = Some(PendingAsyncOp {
+                    verb,
+                    display_name,
+                    progress,
+                    state: OpState::Running(rx),
+                });
+            }
+            Some(res) => {
+                self.apply_async_result(res);
+                if matches!(self.mode, Mode::Wait) {
+                    self.mode = Mode::Ready;
+                }
+            }
         }
     }
 
-    /// Queue a long-running file op and flip into WAIT mode. The
-    /// next `tick()` (driven by the event loop) actually runs it.
-    fn queue_async_op(&mut self, op: PendingAsyncOp) {
-        self.pending_async_op = Some(op);
+    /// Spawn the worker for a queued op on the tokio blocking pool;
+    /// returns the oneshot receiver the main thread polls in `tick`.
+    fn spawn_async_op(
+        &self,
+        queued: QueuedOp,
+        progress: AsyncProgress,
+    ) -> oneshot::Receiver<AsyncResult> {
+        let (tx, rx) = oneshot::channel();
+        match queued {
+            QueuedOp::FileRetrieve { path } => {
+                self.runtime.spawn_blocking(move || {
+                    let _ = tx.send(worker_file_retrieve(path, progress));
+                });
+            }
+            QueuedOp::FileSave {
+                engine,
+                path,
+                formula_sources,
+            } => {
+                self.runtime.spawn_blocking(move || {
+                    let _ = tx.send(worker_file_save(engine, path, formula_sources, progress));
+                });
+            }
+            QueuedOp::FileImportNumbers {
+                engine,
+                path,
+                origin,
+            } => {
+                self.runtime.spawn_blocking(move || {
+                    let _ = tx.send(worker_file_import(
+                        engine, path, origin, progress, /* numeric_split = */ true,
+                    ));
+                });
+            }
+            QueuedOp::FileImportText {
+                engine,
+                path,
+                origin,
+            } => {
+                self.runtime.spawn_blocking(move || {
+                    let _ = tx.send(worker_file_import(
+                        engine, path, origin, progress, /* numeric_split = */ false,
+                    ));
+                });
+            }
+            QueuedOp::Recalc { engine } => {
+                self.runtime.spawn_blocking(move || {
+                    let _ = tx.send(worker_recalc(engine, progress));
+                });
+            }
+        }
+        rx
+    }
+
+    /// Apply a worker's result to App state. Mode-flip back to READY
+    /// happens in `tick_inner` once this returns.
+    fn apply_async_result(&mut self, res: AsyncResult) {
+        match res {
+            AsyncResult::FileRetrieveXlsx {
+                engine,
+                path,
+                is_wk3,
+            } => {
+                self.wb_mut().engine = engine;
+                self.repopulate_after_xlsx_load(path, is_wk3);
+                self.try_autoexec();
+            }
+            AsyncResult::FileRetrieveCsv {
+                engine,
+                path,
+                cells,
+            } => {
+                // Mirror `execute_file_new`'s wipe (sans the engine
+                // swap, which we do explicitly below) so a /FR onto
+                // a dirty workbook lands at A:A1 with no leftover
+                // styles or pending modal state.
+                self.wb_mut().cells.clear();
+                self.wb_mut().cell_formats.clear();
+                self.wb_mut().cell_text_styles.clear();
+                self.wb_mut().cell_alignments.clear();
+                self.wb_mut().cell_fills.clear();
+                self.wb_mut().cell_font_styles.clear();
+                self.wb_mut().cell_borders.clear();
+                self.wb_mut().comments.clear();
+                self.wb_mut().merges.clear();
+                self.wb_mut().frozen.clear();
+                self.wb_mut().sheet_states.clear();
+                self.wb_mut().tables.clear();
+                self.wb_mut().sheet_colors.clear();
+                self.wb_mut().col_widths.clear();
+                self.wb_mut().default_col_width = 9;
+                self.wb_mut().hidden_cols.clear();
+                self.entry = None;
+                self.wb_mut().pointer = Address::A1;
+                self.wb_mut().viewport_col_offset = 0;
+                self.wb_mut().viewport_row_offset = 0;
+                self.recalc_pending = false;
+                self.wb_mut().engine = engine;
+                for (a, c) in cells {
+                    self.wb_mut().cells.insert(a, c);
+                }
+                self.refresh_formula_caches();
+                self.wb_mut().active_path = Some(path);
+                self.wb_mut().dirty = false;
+                self.try_autoexec();
+            }
+            AsyncResult::FileSave {
+                engine,
+                path,
+                result,
+            } => {
+                self.wb_mut().engine = engine;
+                if result.is_ok() {
+                    self.wb_mut().active_path = Some(path);
+                    self.wb_mut().dirty = false;
+                } else if let Err(msg) = result {
+                    self.set_error(format!("Cannot save: {msg}"));
+                }
+            }
+            AsyncResult::FileImport { engine, cells } => {
+                self.wb_mut().engine = engine;
+                for (a, c) in cells {
+                    self.wb_mut().cells.insert(a, c);
+                }
+                self.refresh_formula_caches();
+            }
+            AsyncResult::Recalc { engine } => {
+                self.wb_mut().engine = engine;
+                self.refresh_formula_caches();
+                self.recalc_pending = false;
+            }
+            AsyncResult::Cancelled { engine } => {
+                if let Some(e) = engine {
+                    self.wb_mut().engine = e;
+                }
+            }
+            AsyncResult::Errored { engine, message } => {
+                if let Some(e) = engine {
+                    self.wb_mut().engine = e;
+                }
+                self.set_error(message);
+            }
+        }
+    }
+
+    /// Queue a long-running op and flip into WAIT mode. The next
+    /// `tick()` spawns the worker (unless `block_next_async_op` is
+    /// set, which holds it at the pre-spawn boundary for tests).
+    fn queue_async_op(&mut self, verb: &'static str, display_name: String, queued: QueuedOp) {
+        self.pending_async_op = Some(PendingAsyncOp {
+            verb,
+            display_name,
+            progress: AsyncProgress::default(),
+            state: OpState::Queued(Box::new(queued)),
+        });
         self.mode = Mode::Wait;
     }
 
-    /// SPEC §7 / §4.7: Ctrl-Break aborts an in-flight long op,
-    /// dropping any queued work and returning to READY without
-    /// committing partial state. Returns true when an op was cancelled.
+    /// SPEC §7 / §4.7: Ctrl-Break aborts an in-flight long op. For
+    /// a Queued op this is instant — the op never spawns. For a
+    /// Running op we set the cancel flag and synchronously wait for
+    /// the worker to return so the main thread can put back any
+    /// engine that was moved out (preventing a stranded placeholder
+    /// engine in the workbook). Returns true when an op was cancelled.
     fn cancel_pending_async_op(&mut self) -> bool {
-        if self.pending_async_op.take().is_some() {
-            self.block_next_async_op = false;
-            self.mode = Mode::Ready;
-            true
-        } else {
-            false
+        let Some(op) = self.pending_async_op.take() else {
+            return false;
+        };
+        self.block_next_async_op = false;
+        match op.state {
+            OpState::Queued(_) => {
+                // Worker never started — nothing to wait on. Engine
+                // was never moved out either, so workbook is intact.
+            }
+            OpState::Running(mut rx) => {
+                op.progress.cancel.store(true, Ordering::SeqCst);
+                if let Ok(res) = self.runtime.block_on(&mut rx) {
+                    // Apply just the engine-restore portion — drop
+                    // any cells/cache deltas the worker had already
+                    // computed. Cancel is "leaves no partial state."
+                    self.restore_engine_only(res);
+                }
+            }
+        }
+        self.mode = Mode::Ready;
+        true
+    }
+
+    /// Cancel-path companion to `apply_async_result`: put back the
+    /// engine if the worker returned one, but discard any cells or
+    /// success metadata so the workbook looks like nothing happened.
+    fn restore_engine_only(&mut self, res: AsyncResult) {
+        let engine = match res {
+            AsyncResult::FileRetrieveXlsx { .. } | AsyncResult::FileRetrieveCsv { .. } => None,
+            AsyncResult::FileSave { engine, .. }
+            | AsyncResult::FileImport { engine, .. }
+            | AsyncResult::Recalc { engine } => Some(engine),
+            AsyncResult::Cancelled { engine } | AsyncResult::Errored { engine, .. } => engine,
+        };
+        if let Some(e) = engine {
+            self.wb_mut().engine = e;
         }
     }
 
@@ -4973,11 +5405,20 @@ impl App {
 
     /// Explicit recalculation — invoked by F9 in READY mode. Safe to call
     /// repeatedly; no-op in terms of values but always clears the pending
-    /// flag.
+    /// flag. PLAN §4.7: workbooks above `RECALC_WAIT_CELL_THRESHOLD`
+    /// route through the async WAIT path so the UI doesn't freeze on
+    /// big sheets; smaller workbooks stay synchronous to avoid a
+    /// tokio round-trip on every F9.
     fn do_recalc(&mut self) {
-        self.wb_mut().engine.recalc();
-        self.refresh_formula_caches();
-        self.recalc_pending = false;
+        if self.wb().cells.len() > self.recalc_wait_cell_threshold {
+            let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
+            let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
+            self.queue_async_op("Recalculating", String::new(), QueuedOp::Recalc { engine });
+        } else {
+            self.wb_mut().engine.recalc();
+            self.refresh_formula_caches();
+            self.recalc_pending = false;
+        }
     }
 
     // ---------------- MENU mode ----------------
@@ -7136,83 +7577,6 @@ impl App {
         self.mode = Mode::Menu;
     }
 
-    /// Read `path` as plain text; each line becomes an apostrophe-prefixed
-    /// label down a single column starting at the pointer.  Counterpart to
-    /// [`Self::import_numbers_from`]: no field splitting, no number coercion,
-    /// embedded commas stay in the line. Empty lines are skipped (no
-    /// overwrite of the existing target cell).
-    fn import_text_from(&mut self, path: PathBuf) {
-        let body = match std::fs::read_to_string(&path) {
-            Ok(b) => b,
-            Err(e) => {
-                self.set_error(format!("Cannot read {}: {e}", path.display()));
-                return;
-            }
-        };
-        let origin = self.wb_mut().pointer;
-        for (dr, line) in body.lines().enumerate() {
-            if line.is_empty() {
-                continue;
-            }
-            let addr = Address::new(origin.sheet, origin.col, origin.row + dr as u32);
-            let engine_input = format!("'{line}");
-            let _ = self.wb_mut().engine.set_user_input(addr, &engine_input);
-            self.wb_mut().cells.insert(
-                addr,
-                CellContents::Label {
-                    prefix: LabelPrefix::Apostrophe,
-                    text: line.to_string(),
-                },
-            );
-        }
-        self.wb_mut().engine.recalc();
-        self.refresh_formula_caches();
-        self.mode = Mode::Ready;
-    }
-
-    /// Read `path` as CSV, paint values into cells starting at the
-    /// pointer. Numeric tokens become `Constant(Number)`; everything
-    /// else becomes `Label { Apostrophe, text }`. Empty fields are
-    /// skipped (no overwrite).
-    fn import_numbers_from(&mut self, path: PathBuf) {
-        let body = match std::fs::read_to_string(&path) {
-            Ok(b) => b,
-            Err(e) => {
-                self.set_error(format!("Cannot read {}: {e}", path.display()));
-                return;
-            }
-        };
-        let rows = l123_io::csv::parse(&body);
-        let origin = self.wb_mut().pointer;
-        for (dr, row) in rows.iter().enumerate() {
-            for (dc, field) in row.iter().enumerate() {
-                if field.is_empty() {
-                    continue;
-                }
-                let addr =
-                    Address::new(origin.sheet, origin.col + dc as u16, origin.row + dr as u32);
-                let (contents, engine_input) = match field.parse::<f64>() {
-                    Ok(n) => (
-                        CellContents::Constant(Value::Number(n)),
-                        l123_core::format_number_general(n),
-                    ),
-                    Err(_) => (
-                        CellContents::Label {
-                            prefix: LabelPrefix::Apostrophe,
-                            text: field.clone(),
-                        },
-                        format!("'{field}"),
-                    ),
-                };
-                let _ = self.wb_mut().engine.set_user_input(addr, &engine_input);
-                self.wb_mut().cells.insert(addr, contents);
-            }
-        }
-        self.wb_mut().engine.recalc();
-        self.refresh_formula_caches();
-        self.mode = Mode::Ready;
-    }
-
     fn start_file_xtract_prompt(&mut self, kind: XtractKind) {
         self.menu = None;
         self.prompt = Some(PromptState {
@@ -7287,14 +7651,7 @@ impl App {
     /// Load an xlsx from disk, wiping the current in-memory workbook
     /// and repopulating the UI cache from the loaded engine model.
     fn load_workbook_from(&mut self, path: PathBuf) {
-        #[cfg(feature = "wk3")]
-        let is_wk3 = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.eq_ignore_ascii_case("wk3"))
-            .unwrap_or(false);
-        #[cfg(not(feature = "wk3"))]
-        let is_wk3 = false;
+        let is_wk3 = is_wk3_path(&path);
         let load_result = if is_wk3 {
             #[cfg(feature = "wk3")]
             {
@@ -7309,6 +7666,15 @@ impl App {
             self.set_error(format!("Cannot open {}: {e}", path.display()));
             return;
         }
+        self.repopulate_after_xlsx_load(path, is_wk3);
+    }
+
+    /// Post-engine-load workbook rebuild: wipe UI caches, pull cells
+    /// and styles back out of the engine, apply the formula-source
+    /// sidecar, and pin `active_path`. Shared by the sync CLI-startup
+    /// path (`load_workbook_from`) and the §4.7 async `/File Retrieve`
+    /// completion path (`apply_async_result::FileRetrieveXlsx`).
+    fn repopulate_after_xlsx_load(&mut self, path: PathBuf, is_wk3: bool) {
         // Wipe UI state; the loaded engine is the new source of truth.
         self.wb_mut().cells.clear();
         self.wb_mut().cell_formats.clear();
@@ -7422,14 +7788,14 @@ impl App {
         self.mode = Mode::Ready;
     }
 
-    /// Create parent dirs and write the workbook as xlsx. On success,
-    /// update `active_path` so the next /FS prefills this path.
-    fn save_workbook_to(&mut self, path: PathBuf) {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-        }
+    /// Push every UI-side override into the engine so the saved
+    /// xlsx carries column widths, text styles, formats, alignments,
+    /// fills, font styles, borders, comments, merges, frozen panes,
+    /// sheet states, tables, and tab colors. Mutates the engine in
+    /// place; safe to call repeatedly. Factored out of the legacy
+    /// sync `save_workbook_to` so the §4.7 async `/File Save` path
+    /// can run the same prep before handing the engine to a worker.
+    fn push_ui_overrides_into_engine(&mut self) {
         // Push UI-side column-width overrides into the engine so they
         // land in the xlsx. `col_widths` only contains non-default
         // entries; the engine default is preserved for every other
@@ -7567,26 +7933,91 @@ impl App {
         for (sid, color) in sheet_colors {
             let _ = self.wb_mut().engine.set_sheet_color(sid, Some(color));
         }
+    }
+
+    /// Synchronous `/File Save` — used by xlsx round-trip unit tests
+    /// where stepping through tokio adds noise. Production /FS goes
+    /// through `queue_file_save` so the UI doesn't freeze.
+    #[cfg(test)]
+    fn save_workbook_to(&mut self, path: PathBuf) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        self.push_ui_overrides_into_engine();
         if self.wb_mut().engine.save_xlsx(&path).is_ok() {
-            // Embed the user-typed Lotus source per formula cell as
-            // a sidecar inside the xlsx zip so save → reload
-            // preserves shapes the cosmetic reverse translator
-            // can't recover (arg-fix wrappers, emulated functions
-            // like @CTERM, 3D-range expansions). A failure here is
-            // best-effort — the xlsx itself is already saved.
-            let sources: HashMap<Address, String> = self
-                .wb()
-                .cells
-                .iter()
-                .filter_map(|(addr, c)| match c {
-                    CellContents::Formula { expr, .. } => Some((*addr, expr.clone())),
-                    _ => None,
-                })
-                .collect();
+            let sources = self.formula_sources_snapshot();
             let _ = l123_io::formula_sources::write_to_xlsx(&path, &sources);
             self.wb_mut().active_path = Some(path);
             self.wb_mut().dirty = false;
         }
+    }
+
+    /// Snapshot of every formula cell's user-typed Lotus source, used
+    /// by the formula-source sidecar embedded in the xlsx zip so
+    /// save → reload preserves shapes the cosmetic reverse
+    /// translator can't recover (arg-fix wrappers, emulated
+    /// functions like @CTERM, 3D-range expansions).
+    fn formula_sources_snapshot(&self) -> HashMap<Address, String> {
+        self.wb()
+            .cells
+            .iter()
+            .filter_map(|(addr, c)| match c {
+                CellContents::Formula { expr, .. } => Some((*addr, expr.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Queue an async `/File Save`. Pushes UI overrides into the
+    /// engine on the main thread (fast O(N-overridden-cells)), then
+    /// hands ownership of the engine to a worker that does the
+    /// actual xlsx write. The worker also writes the formula-source
+    /// sidecar on success. Engine is restored to the workbook when
+    /// the worker returns (success, error, or cancel).
+    fn queue_file_save(&mut self, path: PathBuf) {
+        self.push_ui_overrides_into_engine();
+        let formula_sources = self.formula_sources_snapshot();
+        let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
+        let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
+        let name = display_basename(&path);
+        self.queue_async_op(
+            "Saving",
+            name,
+            QueuedOp::FileSave {
+                engine,
+                path,
+                formula_sources,
+            },
+        );
+    }
+
+    /// Queue an async `/File Import {Numbers,Text}`. Engine is
+    /// taken out of the workbook and travels with the op so the
+    /// per-row `set_user_input` calls run off the UI thread.
+    /// `numeric_split = true` corresponds to `/FIN` (CSV split with
+    /// number coercion); `false` to `/FIT` (one label per line, no
+    /// splitting).
+    fn queue_file_import(&mut self, path: PathBuf, numeric_split: bool) {
+        let origin = self.wb().pointer;
+        let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
+        let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
+        let name = display_basename(&path);
+        let queued = if numeric_split {
+            QueuedOp::FileImportNumbers {
+                engine,
+                path,
+                origin,
+            }
+        } else {
+            QueuedOp::FileImportText {
+                engine,
+                path,
+                origin,
+            }
+        };
+        self.queue_async_op("Importing", name, queued);
     }
 
     /// Handle a keystroke while the Cancel/Replace/Backup confirm is up.
@@ -7689,16 +8120,17 @@ impl App {
                 self.mode = Mode::Ready;
             }
             1 => {
-                // Replace — overwrite.
-                self.save_workbook_to(sc.path);
-                self.mode = Mode::Ready;
+                // Replace — overwrite. IronCalc's save_xlsx refuses
+                // to clobber an existing file, so blow it away here
+                // (the user explicitly chose Replace).
+                let _ = std::fs::remove_file(&sc.path);
+                self.queue_file_save(sc.path);
             }
             2 => {
                 // Backup — rename existing to .BAK, then save.
                 let backup = sc.path.with_extension("BAK");
                 let _ = std::fs::rename(&sc.path, &backup);
-                self.save_workbook_to(sc.path);
-                self.mode = Mode::Ready;
+                self.queue_file_save(sc.path);
             }
             _ => {
                 self.mode = Mode::Ready;
@@ -10973,8 +11405,7 @@ impl App {
                     self.save_confirm = Some(SaveConfirmState { path, highlight: 0 });
                     self.mode = Mode::Menu;
                 } else {
-                    self.save_workbook_to(path);
-                    self.mode = Mode::Ready;
+                    self.queue_file_save(path);
                 }
             }
             PromptNext::GraphSaveFilename => {
@@ -10992,7 +11423,9 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                self.queue_async_op(PendingAsyncOp::FileRetrieve(PathBuf::from(&p.buffer)));
+                let path = PathBuf::from(&p.buffer);
+                let name = display_basename(&path);
+                self.queue_async_op("Loading", name, QueuedOp::FileRetrieve { path });
             }
             PromptNext::FileXtractFilename { kind } => {
                 if p.buffer.is_empty() {
@@ -11009,7 +11442,7 @@ impl App {
                     return;
                 }
                 let path = PathBuf::from(&p.buffer);
-                self.import_numbers_from(path);
+                self.queue_file_import(path, /* numeric_split = */ true);
             }
             PromptNext::FileImportTextFilename => {
                 if p.buffer.is_empty() {
@@ -11017,7 +11450,7 @@ impl App {
                     return;
                 }
                 let path = PathBuf::from(&p.buffer);
-                self.import_text_from(path);
+                self.queue_file_import(path, /* numeric_split = */ false);
             }
             PromptNext::FileEraseFilename => {
                 if p.buffer.is_empty() {
@@ -11630,8 +12063,7 @@ impl App {
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
                 let cfg = parse_config_from(&self.wb().international);
                 let expanded = l123_parse::expand_cellpointer(expr, addr);
-                let excel =
-                    l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
+                let excel = l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
                 self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
@@ -11793,8 +12225,7 @@ impl App {
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
                 let cfg = parse_config_from(&self.wb().international);
                 let expanded = l123_parse::expand_cellpointer(expr, addr);
-                let excel =
-                    l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
+                let excel = l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
                 self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
@@ -12986,7 +13417,7 @@ impl App {
                 Mode::Point => self.render_point_lines(),
                 Mode::Wait => {
                     let l3 = match self.pending_async_op.as_ref() {
-                        Some(op) => Line::from(format!(" Loading {}…", op.display_basename())),
+                        Some(op) => Line::from(op.render_line3()),
                         None => Line::from(""),
                     };
                     (Line::from(""), l3)
@@ -14493,6 +14924,328 @@ fn render_own_width(
 /// quirk in `Picker::from_query_stdio`: when the font-size probe
 /// fails (common in iTerm2), the library drops back to a default
 /// Halfblocks picker and discards its own iTerm2 env hint.
+/// Filename component used for the WAIT-mode line-3 noun, falling
+/// back to the empty string for paths without a final component.
+fn display_basename(path: &Path) -> String {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// True when `path` ends in `.wk3`/`.WK3`, regardless of whether
+/// the `wk3` cargo feature is on (callers gate the actual load
+/// behind their own `#[cfg]`). Factored out so the §4.7 async
+/// retrieve worker and the sync CLI-startup path agree.
+fn is_wk3_path(path: &Path) -> bool {
+    #[cfg(feature = "wk3")]
+    {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.eq_ignore_ascii_case("wk3"))
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "wk3"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Convert a CSV field to (UI cache contents, engine input string).
+/// Numeric tokens become `Constant(Number)` with a general-format
+/// engine string; everything else becomes an apostrophe-prefixed
+/// label. Used by both the worker and the sync CSV paths.
+fn csv_field_to_cell(field: &str) -> (CellContents, String) {
+    match field.parse::<f64>() {
+        Ok(n) => (
+            CellContents::Constant(Value::Number(n)),
+            l123_core::format_number_general(n),
+        ),
+        Err(_) => (
+            CellContents::Label {
+                prefix: LabelPrefix::Apostrophe,
+                text: field.to_string(),
+            },
+            format!("'{field}"),
+        ),
+    }
+}
+
+/// Read a file into a String, ticking `progress.done` as bytes
+/// arrive and bailing on `progress.cancel`. `progress.total` is
+/// pre-set to the file size so the renderer can draw a real
+/// `[████░░] N%` bar.
+fn read_file_with_progress(
+    path: &Path,
+    progress: &AsyncProgress,
+) -> std::result::Result<String, String> {
+    use std::io::Read;
+    let f =
+        std::fs::File::open(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    let total = f.metadata().map(|m| m.len()).unwrap_or(0);
+    progress.done.store(0, Ordering::Relaxed);
+    progress.total.store(total, Ordering::Relaxed);
+    let mut reader = std::io::BufReader::new(f);
+    let mut out = Vec::with_capacity(total as usize);
+    let mut chunk = [0u8; 8 * 1024];
+    loop {
+        if progress.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+        let n = reader
+            .read(&mut chunk)
+            .map_err(|e| format!("read error on {}: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&chunk[..n]);
+        progress.done.fetch_add(n as u64, Ordering::Relaxed);
+    }
+    String::from_utf8(out).map_err(|e| format!("invalid UTF-8 in {}: {e}", path.display()))
+}
+
+/// §4.7 worker — `/File Retrieve`. Dispatches by extension. Builds
+/// a fresh engine on the worker so the caller's existing engine is
+/// untouched until the result is applied (cancellation = no-op
+/// against the workbook).
+fn worker_file_retrieve(path: PathBuf, progress: AsyncProgress) -> AsyncResult {
+    if progress.cancel.load(Ordering::Relaxed) {
+        return AsyncResult::Cancelled { engine: None };
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    if ext.as_deref() == Some("csv") {
+        worker_csv_retrieve(path, progress)
+    } else {
+        worker_xlsx_retrieve(path, progress)
+    }
+}
+
+fn worker_xlsx_retrieve(path: PathBuf, progress: AsyncProgress) -> AsyncResult {
+    let is_wk3 = is_wk3_path(&path);
+    let mut engine = match IronCalcEngine::new() {
+        Ok(e) => e,
+        Err(err) => {
+            return AsyncResult::Errored {
+                engine: None,
+                message: err.to_string(),
+            }
+        }
+    };
+    let load_result = if is_wk3 {
+        #[cfg(feature = "wk3")]
+        {
+            engine.load_wk3(&path)
+        }
+        #[cfg(not(feature = "wk3"))]
+        {
+            engine.load_xlsx(&path)
+        }
+    } else {
+        engine.load_xlsx(&path)
+    };
+    if let Err(e) = load_result {
+        return AsyncResult::Errored {
+            engine: None,
+            message: format!("Cannot open {}: {e}", path.display()),
+        };
+    }
+    if progress.cancel.load(Ordering::Relaxed) {
+        return AsyncResult::Cancelled { engine: None };
+    }
+    AsyncResult::FileRetrieveXlsx {
+        engine,
+        path,
+        is_wk3,
+    }
+}
+
+fn worker_csv_retrieve(path: PathBuf, progress: AsyncProgress) -> AsyncResult {
+    let body = match read_file_with_progress(&path, &progress) {
+        Ok(b) => b,
+        Err(e) => {
+            return if e == "cancelled" {
+                AsyncResult::Cancelled { engine: None }
+            } else {
+                AsyncResult::Errored {
+                    engine: None,
+                    message: e,
+                }
+            }
+        }
+    };
+    let mut engine = match IronCalcEngine::new() {
+        Ok(e) => e,
+        Err(err) => {
+            return AsyncResult::Errored {
+                engine: None,
+                message: err.to_string(),
+            }
+        }
+    };
+    let rows = l123_io::csv::parse(&body);
+    let total_rows = rows.len() as u64;
+    progress.done.store(0, Ordering::Relaxed);
+    progress.total.store(total_rows.max(1), Ordering::Relaxed);
+    let mut cells = Vec::new();
+    for (dr, row) in rows.iter().enumerate() {
+        if progress.cancel.load(Ordering::Relaxed) {
+            return AsyncResult::Cancelled { engine: None };
+        }
+        for (dc, field) in row.iter().enumerate() {
+            if field.is_empty() {
+                continue;
+            }
+            let addr = Address::new(SheetId(0), dc as u16, dr as u32);
+            let (contents, engine_input) = csv_field_to_cell(field);
+            let _ = engine.set_user_input(addr, &engine_input);
+            cells.push((addr, contents));
+        }
+        progress.done.store((dr as u64) + 1, Ordering::Relaxed);
+    }
+    engine.recalc();
+    AsyncResult::FileRetrieveCsv {
+        engine,
+        path,
+        cells,
+    }
+}
+
+/// §4.7 worker — `/File Save`. The engine has been moved out of
+/// `Workbook` and travels with the op; the worker writes the xlsx
+/// (and the formula-source sidecar on success), then ships the
+/// engine back. Cancel before the save is honored; once
+/// `save_xlsx` is in flight the call is opaque.
+fn worker_file_save(
+    engine: IronCalcEngine,
+    path: PathBuf,
+    formula_sources: HashMap<Address, String>,
+    progress: AsyncProgress,
+) -> AsyncResult {
+    if progress.cancel.load(Ordering::Relaxed) {
+        return AsyncResult::Cancelled {
+            engine: Some(engine),
+        };
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    if let Err(e) = engine.save_xlsx(&path) {
+        return AsyncResult::FileSave {
+            engine,
+            path,
+            result: Err(e.to_string()),
+        };
+    }
+    let _ = l123_io::formula_sources::write_to_xlsx(&path, &formula_sources);
+    AsyncResult::FileSave {
+        engine,
+        path,
+        result: Ok(()),
+    }
+}
+
+/// §4.7 worker — `/File Import {Numbers,Text}`. The engine travels
+/// with the op so set_user_input on N rows runs off-thread. With
+/// `numeric_split = true`, each line is CSV-split and numeric
+/// fields become numbers; with `false`, each line becomes one
+/// apostrophe-prefixed label down a single column (matching the
+/// existing sync `/FIT` behavior, which doesn't split on commas).
+fn worker_file_import(
+    mut engine: IronCalcEngine,
+    path: PathBuf,
+    origin: Address,
+    progress: AsyncProgress,
+    numeric_split: bool,
+) -> AsyncResult {
+    let body = match read_file_with_progress(&path, &progress) {
+        Ok(b) => b,
+        Err(e) => {
+            return if e == "cancelled" {
+                AsyncResult::Cancelled {
+                    engine: Some(engine),
+                }
+            } else {
+                AsyncResult::Errored {
+                    engine: Some(engine),
+                    message: e,
+                }
+            }
+        }
+    };
+    let mut cells = Vec::new();
+    if numeric_split {
+        let rows = l123_io::csv::parse(&body);
+        let total_rows = rows.len() as u64;
+        progress.done.store(0, Ordering::Relaxed);
+        progress.total.store(total_rows.max(1), Ordering::Relaxed);
+        for (dr, row) in rows.iter().enumerate() {
+            if progress.cancel.load(Ordering::Relaxed) {
+                return AsyncResult::Cancelled {
+                    engine: Some(engine),
+                };
+            }
+            for (dc, field) in row.iter().enumerate() {
+                if field.is_empty() {
+                    continue;
+                }
+                let addr =
+                    Address::new(origin.sheet, origin.col + dc as u16, origin.row + dr as u32);
+                let (contents, engine_input) = csv_field_to_cell(field);
+                let _ = engine.set_user_input(addr, &engine_input);
+                cells.push((addr, contents));
+            }
+            progress.done.store((dr as u64) + 1, Ordering::Relaxed);
+        }
+    } else {
+        let lines: Vec<&str> = body.lines().collect();
+        let total_rows = lines.len() as u64;
+        progress.done.store(0, Ordering::Relaxed);
+        progress.total.store(total_rows.max(1), Ordering::Relaxed);
+        for (dr, line) in lines.iter().enumerate() {
+            if progress.cancel.load(Ordering::Relaxed) {
+                return AsyncResult::Cancelled {
+                    engine: Some(engine),
+                };
+            }
+            if !line.is_empty() {
+                let addr = Address::new(origin.sheet, origin.col, origin.row + dr as u32);
+                let engine_input = format!("'{line}");
+                let _ = engine.set_user_input(addr, &engine_input);
+                cells.push((
+                    addr,
+                    CellContents::Label {
+                        prefix: LabelPrefix::Apostrophe,
+                        text: (*line).to_string(),
+                    },
+                ));
+            }
+            progress.done.store((dr as u64) + 1, Ordering::Relaxed);
+        }
+    }
+    engine.recalc();
+    AsyncResult::FileImport { engine, cells }
+}
+
+/// §4.7 worker — F9 recalc on a workbook above `RECALC_WAIT_CELL_THRESHOLD`.
+/// IronCalc's `recalc` is opaque so progress stays indeterminate
+/// (renderer falls back to the verb-only line). Cancel is honored
+/// before the call but not during.
+fn worker_recalc(mut engine: IronCalcEngine, progress: AsyncProgress) -> AsyncResult {
+    if progress.cancel.load(Ordering::Relaxed) {
+        return AsyncResult::Cancelled {
+            engine: Some(engine),
+        };
+    }
+    engine.recalc();
+    AsyncResult::Recalc { engine }
+}
+
 fn is_iterm2_compatible_env(term_program: Option<&str>, lc_terminal: Option<&str>) -> bool {
     const HINTS: &[&str] = &[
         "iTerm",
@@ -15379,6 +16132,8 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        // Drain the §4.7 async save the prompt commit just queued.
+        app.test_resume_async_op();
     }
 
     /// End-to-end: /FS <path><Enter> writes an xlsx file at <path> that
@@ -15428,6 +16183,8 @@ mod tests {
 
         // Press B — Backup.
         app.handle_key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        // Backup queues an async save; drain it before checking disk.
+        app.test_resume_async_op();
         assert_eq!(app.mode, Mode::Ready);
         let bak = target.with_extension("BAK");
         assert!(bak.exists(), "expected {bak:?} after Backup");
@@ -15829,6 +16586,7 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.test_resume_async_op();
 
         assert_eq!(app.mode, Mode::Ready);
         match app.wb().cells.get(&Address::new(SheetId::A, 0, 0)).unwrap() {
@@ -15873,7 +16631,7 @@ mod tests {
             app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        app2.tick();
+        app2.test_resume_async_op();
 
         assert_eq!(app2.mode, Mode::Ready);
         let stored =
@@ -15914,7 +16672,7 @@ mod tests {
             app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        app2.tick();
+        app2.test_resume_async_op();
 
         assert!(!app2.is_dirty(), "successful /FR should clear dirty bit");
 
@@ -16318,6 +17076,7 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.test_resume_async_op();
         assert!(!app.is_dirty(), "successful /FS should clear the dirty bit");
 
         let _ = std::fs::remove_file(&target);

@@ -1,0 +1,26 @@
+# §4.7 — `/File Import Text` runs on a background tokio task.
+# Mid-flight WAIT mode + "Importing <basename>" hint on line 3;
+# cells aren't populated until the worker completes.
+
+SIZE 100 25
+
+BLOCK_NEXT_OP
+
+# /FIT <path><Enter> — queues the import.
+KEY /
+KEY F
+KEY I
+KEY T
+KEYS tests/acceptance/fixtures/m4_import.txt
+ENTER
+
+ASSERT_MODE      WAIT
+ASSERT_PANEL_L3  Importing m4_import.txt
+ASSERT_CELL      A:A1
+
+RESUME_OP
+
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1  alpha
+ASSERT_CELL      A:A2  beta
+ASSERT_CELL      A:A3  gamma

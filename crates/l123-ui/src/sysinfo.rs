@@ -4,6 +4,7 @@
 //! about the coprocessor now being integrated, and live memory
 //! numbers probed from the OS.
 
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 #[derive(Debug, Clone)]

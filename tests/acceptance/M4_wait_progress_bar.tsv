@@ -1,0 +1,39 @@
+# §4.7 — control-panel line 3 renders a `[████░░] N%` bar for ops
+# whose loader can report progress (CSV byte counts, import row
+# counts). For ops backed by an opaque IronCalc call (xlsx load /
+# save / recalc) the verb-only line is shown — covered by the
+# other M4_wait_* transcripts. This transcript pins the bar shape
+# and the percentage rounding by seeding synthetic done/total.
+
+SIZE 100 25
+
+BLOCK_NEXT_OP
+
+# /FIN <path><Enter> queues a CSV import. The worker normally
+# fills in done/total automatically; here we drive them ourselves
+# so the assertion isn't timing-sensitive.
+KEY /
+KEY F
+KEY I
+KEY N
+KEYS tests/acceptance/fixtures/m4_import.csv
+ENTER
+
+ASSERT_MODE          WAIT
+ASSERT_PANEL_L3      Importing m4_import.csv
+
+# 0% — no fill cells, all empty cells. The leading "Importing
+# m4_import.csv… [" anchors the substring.
+SEED_PROGRESS  0  100
+ASSERT_PANEL_L3  [░░░░░░░░░░░░░░░░░░░░] 0%
+
+# 25% — five filled cells out of twenty.
+SEED_PROGRESS  25  100
+ASSERT_PANEL_L3  [█████░░░░░░░░░░░░░░░] 25%
+
+# 100% — fully filled.
+SEED_PROGRESS  100  100
+ASSERT_PANEL_L3  [████████████████████] 100%
+
+RESUME_OP
+ASSERT_MODE      READY

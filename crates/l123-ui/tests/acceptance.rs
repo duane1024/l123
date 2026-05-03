@@ -78,10 +78,11 @@ fn run_transcript(path: &Path) {
         }
         let (directive, rest) = split_directive(line);
         // §4.7 — drain any queued async op before the next directive
-        // runs, mirroring the production event loop's per-iteration
-        // tick. Gated by `block_next_async_op` so tests that assert
-        // mid-flight WAIT state stay deterministic.
-        app.tick();
+        // runs, blocking the harness until the worker completes so
+        // sequential KEY-then-ASSERT_CELL flows see the post-op
+        // state. Gated by `block_next_async_op` so transcripts that
+        // assert mid-flight WAIT state stay deterministic.
+        app.drain_async_op_blocking();
         match directive {
             // ---- keystrokes ----
             "KEY" => press_char(&mut app, rest, line_no, path),
@@ -135,6 +136,30 @@ fn run_transcript(path: &Path) {
             // tests; production ops drain on their own schedule.
             "BLOCK_NEXT_OP" => app.test_block_next_async_op(),
             "RESUME_OP" => app.test_resume_async_op(),
+            // §4.7 — lower (or raise) the F9-recalc cell-count
+            // threshold. Lets a small transcript exercise the
+            // recalc-on-50k-cells WAIT path without actually
+            // populating 50k cells.
+            "RECALC_WAIT_THRESHOLD" => {
+                let n: usize = rest.parse().expect("RECALC_WAIT_THRESHOLD needs number");
+                app.test_set_recalc_wait_threshold(n);
+            }
+            // §4.7 — write synthetic done/total progress numbers
+            // onto the currently-pending async op so transcripts
+            // can assert the `[████░░] N%` bar shape without
+            // timing the worker. Format: "SEED_PROGRESS <done> <total>".
+            "SEED_PROGRESS" => {
+                let mut parts = rest.split_whitespace();
+                let done: u64 = parts
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .expect("SEED_PROGRESS needs <done>");
+                let total: u64 = parts
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .expect("SEED_PROGRESS needs <total>");
+                app.test_seed_async_progress(done, total);
+            }
             "MACRO" => app.run_macro_text(rest),
 
             // ---- assertions ----
@@ -696,6 +721,15 @@ fn run_transcript(path: &Path) {
                     path.display()
                 );
             }
+            "ASSERT_FILE_EXISTS" => {
+                let fpath = rest.trim();
+                let exists = std::fs::metadata(fpath).is_ok();
+                assert!(
+                    exists,
+                    "{}:{line_no}: file {fpath:?} expected to exist",
+                    path.display()
+                );
+            }
             "ASSERT_FILE_NOT_CONTAINS" => {
                 let mut parts = rest.splitn(2, char::is_whitespace);
                 let fpath = parts.next().unwrap_or("");
@@ -929,6 +963,11 @@ transcripts! {
     m4_file_list_worksheet => "M4_file_list_worksheet.tsv",
     m4_wait_progress       => "M4_wait_progress.tsv",
     m4_wait_ctrl_break     => "M4_wait_ctrl_break.tsv",
+    m4_wait_save           => "M4_wait_save.tsv",
+    m4_wait_import_numbers => "M4_wait_import_numbers.tsv",
+    m4_wait_import_text    => "M4_wait_import_text.tsv",
+    m4_wait_recalc         => "M4_wait_recalc.tsv",
+    m4_wait_progress_bar   => "M4_wait_progress_bar.tsv",
     m5_insert_sheet    => "M5_insert_sheet.tsv",
     m5_delete_sheet    => "M5_delete_sheet.tsv",
     m5_delete_file     => "M5_delete_file.tsv",

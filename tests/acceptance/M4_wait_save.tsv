@@ -1,0 +1,37 @@
+# §4.7 — `/File Save` runs on a background tokio task. While the
+# worker writes the xlsx, mode is WAIT and control-panel line 3
+# names the file being saved. On completion mode pops back to
+# READY and the file appears on disk.
+
+SIZE 100 25
+
+RM_FILE $TMPDIR/m4_wait_save.xlsx
+
+# Seed A1 with a sentinel.
+KEYS 42
+ENTER
+ASSERT_CELL      A:A1  42
+
+# Park the next async op so the transcript can observe the
+# pre-spawn WAIT frame the way the production renderer does.
+BLOCK_NEXT_OP
+
+# /FS <path><ENTER> queues the save and returns immediately.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m4_wait_save.xlsx
+ENTER
+
+# Mid-flight: WAIT indicator visible, line 3 names the file, and
+# the file hasn't been written yet (worker is parked).
+ASSERT_MODE          WAIT
+ASSERT_PANEL_L3      Saving m4_wait_save.xlsx
+ASSERT_FILE_NOT_EXISTS  $TMPDIR/m4_wait_save.xlsx
+
+# Drain the parked op to completion.
+RESUME_OP
+
+# Mode pops back to READY and the file is on disk.
+ASSERT_MODE      READY
+ASSERT_FILE_EXISTS  $TMPDIR/m4_wait_save.xlsx

@@ -1,0 +1,34 @@
+# §4.7 / PLAN — F9 recalc on a workbook above the cell-count
+# threshold routes through the WAIT path so the UI doesn't freeze
+# on big sheets. Below the threshold F9 stays synchronous (no
+# tokio round-trip). This transcript drops the threshold to 0 so
+# any populated workbook exercises the async path.
+
+SIZE 100 25
+
+# Lower the recalc-WAIT threshold so a 1-cell sheet trips it.
+RECALC_WAIT_THRESHOLD  0
+
+# Seed A1 with a constant so cells.len() > 0.
+KEYS 42
+ENTER
+ASSERT_CELL      A:A1  42
+
+# Park the next async op so the transcript can observe pre-spawn
+# WAIT state.
+BLOCK_NEXT_OP
+
+# F9 — explicit recalc. Queues the async op and returns immediately.
+F  9
+
+# Mid-flight: WAIT indicator visible, line 3 is the verb-only
+# "Recalculating…" line (recalc has no progress to report).
+ASSERT_MODE      WAIT
+ASSERT_PANEL_L3  Recalculating
+
+# Drain the parked op to completion.
+RESUME_OP
+
+# Mode pops back to READY and the cell value survived the recalc.
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1  42

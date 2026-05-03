@@ -1,0 +1,34 @@
+# §4.7 — `/File Import Numbers` runs on a background tokio task.
+# Mid-flight the user sees WAIT mode + an "Importing <basename>"
+# hint on line 3; cells aren't populated until the worker completes.
+
+SIZE 100 25
+
+# Park the next async op so the transcript can observe pre-spawn
+# WAIT state. In production any /FIN above one render-tick lands
+# here naturally.
+BLOCK_NEXT_OP
+
+# /FIN <path><Enter> — queues the import and returns immediately.
+KEY /
+KEY F
+KEY I
+KEY N
+KEYS tests/acceptance/fixtures/m4_import.csv
+ENTER
+
+# Mid-flight: WAIT indicator is visible, line 3 names the file
+# being imported, and no cells have been populated yet.
+ASSERT_MODE      WAIT
+ASSERT_PANEL_L3  Importing m4_import.csv
+ASSERT_CELL      A:A1
+
+# Drain the parked op to completion.
+RESUME_OP
+
+# Mode pops back to READY and the cells are populated as
+# /File Import Numbers normally would.
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1  10
+ASSERT_CELL      A:C1  30
+ASSERT_CELL      A:A2  foo
