@@ -1,0 +1,50 @@
+# /Range Input — restricts the pointer to unprotected cells in a
+# range until Esc.
+
+# Seed: A1=10, A2=20, A3=30. Mark A2 unprotected; turn on global
+# protection so the unprotected flag matters.
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+DOWN
+KEYS 30
+ENTER
+
+# Mark A2 unprotected.
+HOME
+DOWN
+KEY /
+KEY R
+KEY U
+ENTER
+ASSERT_MODE       READY
+
+# Enable global protection.
+HOME
+KEY /
+KEY W
+KEY G
+KEY P
+KEY E
+ASSERT_MODE       READY
+
+# /RI A1..A3 — pointer should jump to A2 (the only unprotected cell).
+KEY /
+KEY R
+KEY I
+ASSERT_PANEL_L3   input range
+DOWN
+DOWN
+ENTER
+ASSERT_POINTER    A:A2
+
+# Down stays at A2 (no other unprotected cell in the range).
+DOWN
+ASSERT_POINTER    A:A2
+
+# Esc exits Input mode; pointer is unconstrained again.
+ESC
+DOWN
+ASSERT_POINTER    A:A3

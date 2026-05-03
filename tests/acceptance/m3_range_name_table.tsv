@@ -1,0 +1,50 @@
+# /Range Name Table — dump (name, range) pairs into a 2-column block
+# anchored at the picked cell.
+
+# A1 = 10  → name "alpha" → A1
+KEYS 10
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS alpha
+ENTER
+ENTER
+ASSERT_MODE       READY
+
+# A2 = 20  → name "beta" → A2
+DOWN
+KEYS 20
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS beta
+ENTER
+ENTER
+ASSERT_MODE       READY
+
+# /RNT writes the table; pick C1 as anchor.
+KEY /
+KEY R
+KEY N
+KEY T
+ASSERT_PANEL_L3   table
+KEYS C1
+ENTER
+ASSERT_MODE       READY
+
+# alpha → C1, A:A1..A:A1 → D1; beta → C2, A:A2..A:A2 → D2.
+ASSERT_CELL       A:C1  alpha
+ASSERT_CELL       A:D1  A:A1..A1
+ASSERT_CELL       A:C2  beta
+ASSERT_CELL       A:D2  A:A2..A2
+
+# Undo wipes the dumped table.
+ALT_F 4
+ASSERT_CELL       A:C1
+ASSERT_CELL       A:D1
+ASSERT_CELL       A:C2
+ASSERT_CELL       A:D2

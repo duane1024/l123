@@ -1,0 +1,39 @@
+# /Range Value — copy a range, replacing each formula with its
+# cached value at the destination.
+
+# A1=10, A2=20, A3=@SUM(A1..A2) → 30.
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+DOWN
+KEY @
+KEYS SUM(A1..A2)
+ENTER
+ASSERT_CELL       A:A3  30
+HOME
+
+# /RV → POINT for source, POINT for destination.
+KEY /
+KEY R
+KEY V
+ASSERT_PANEL_L3   AS VALUES FROM
+DOWN
+DOWN
+ENTER
+ASSERT_PANEL_L3   copy TO
+RIGHT
+ENTER
+ASSERT_MODE       READY
+
+# B1=10, B2=20, B3=30 (frozen value, not the formula).
+ASSERT_CELL       A:B1  10
+ASSERT_CELL       A:B2  20
+ASSERT_CELL       A:B3  30
+
+# Editing A1 leaves B3 unchanged (proves it's a value, not a formula).
+HOME
+KEYS 100
+ENTER
+ASSERT_CELL       A:B3  30

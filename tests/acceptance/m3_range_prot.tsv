@@ -1,0 +1,66 @@
+# /Range Prot and /Range Unprot — toggle the per-cell unprotected
+# flag. Effective only when /WGP Enable is on; attempting to edit a
+# protected cell beeps and stays in READY.
+
+# Seed A1 = 10, A2 = 20.
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+HOME
+
+# Enable global worksheet protection (/WGPE).
+KEY /
+KEY W
+KEY G
+KEY P
+KEY E
+ASSERT_MODE       READY
+
+# Editing A1 is now refused — the buffer never opens.
+KEY 9
+ASSERT_MODE       READY
+ASSERT_BEEP_COUNT 1
+ASSERT_CELL       A:A1  10
+
+# /RU pick A1..A1 marks A1 as writable.
+KEY /
+KEY R
+KEY U
+ASSERT_PANEL_L3   UNPROTECT
+ENTER
+ASSERT_MODE       READY
+
+# Now editing A1 succeeds.
+KEYS 99
+ENTER
+ASSERT_CELL       A:A1  99
+
+# A2 is still protected — edits are refused.
+DOWN
+KEY 8
+ASSERT_MODE       READY
+ASSERT_CELL       A:A2  20
+
+# /RP pick A1..A1 re-protects A1.
+HOME
+KEY /
+KEY R
+KEY P
+ASSERT_PANEL_L3   RE-PROTECT
+ENTER
+ASSERT_MODE       READY
+KEY 7
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  99
+
+# Disabling protection lifts the gate.
+KEY /
+KEY W
+KEY G
+KEY P
+KEY D
+KEYS 55
+ENTER
+ASSERT_CELL       A:A1  55
