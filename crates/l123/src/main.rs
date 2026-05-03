@@ -46,10 +46,12 @@ ARGS:
 OPTIONS:
     -h, --help        Print this help and exit
     -V, --version     Print version and exit
-        --theme <NAME> Chrome theme: dos (default), wysiwyg, amber, green.
-                      Affects status line, menu/help highlights, splash
-                      and gridline glyph; cell colors set via :Format
-                      Color or imported from .xlsx are unaffected.
+        --theme <NAME> Chrome theme: default (default), dos, wysiwyg, amber,
+                      green. Affects status line, menu/help highlights,
+                      splash, header gutter, and gridline glyph; the dos
+                      and wysiwyg themes also paint a default cell field.
+                      Cell colors set via :Format Color or imported from
+                      .xlsx are unaffected.
                       Overrides the `theme` config key for this run.
 
 SUBCOMMANDS:
@@ -66,8 +68,8 @@ ENVIRONMENT:
                 Defaults to `info` when L123_LOG is set.
     L123_BEEP   Soft terminal bell on edge collisions (true/false).
                 Default: true.
-    L123_THEME  Chrome theme name (dos, wysiwyg, amber, green).
-                Default: dos. Overridden by --theme on the command line.
+    L123_THEME  Chrome theme name (default, dos, wysiwyg, amber, green).
+                Default: default. Overridden by --theme on the command line.
 
 CONFIG FILE:
     ~/.l123/L123.CNF    Optional. Run `l123 config --init` to create
@@ -402,9 +404,20 @@ mod tests {
     }
 
     #[test]
-    fn theme_alias_default_resolves_to_dos() {
+    fn theme_canonical_default_resolves_to_default_variant() {
         assert_eq!(
             parse(&osv(&["--theme", "default"])),
+            Action::Run {
+                path: None,
+                theme: Some(ThemeName::Default),
+            }
+        );
+    }
+
+    #[test]
+    fn theme_alias_classic_resolves_to_dos() {
+        assert_eq!(
+            parse(&osv(&["--theme", "classic"])),
             Action::Run {
                 path: None,
                 theme: Some(ThemeName::Dos),

@@ -103,7 +103,7 @@ pub const KEYS: &[KeyInfo] = &[
     KeyInfo {
         key: "theme",
         env_var: Some("L123_THEME"),
-        description: "Chrome theme: dos (default), wysiwyg, amber, green.",
+        description: "Chrome theme: default, dos, wysiwyg, amber, green.",
     },
 ];
 
@@ -472,15 +472,17 @@ pub const SAMPLE_CNF: &str = "\
 # Env: L123_BEEP. (alias: beep)
 # error_beep = true
 
-# Chrome theme. Affects status line, menu/help highlights, splash
-# field, and the dim gridline glyph; never overrides cell colors set
-# via :Format Color or imported from .xlsx. Choices:
-#   dos      — classic 1-2-3 R3.4a DOS look (default)
-#   wysiwyg  — R3.4a WYSIWYG paper look (magenta gridlines)
+# Chrome theme. Affects the status line, menu/help highlights,
+# splash field, and the column / row-number gutter; the dos and
+# wysiwyg themes also paint a default cell background. Cell colors
+# imported from .xlsx and set via :Format Color always win. Choices:
+#   default  — bare-terminal look (the out-of-the-box default)
+#   dos      — authentic 1-2-3 R3.4a DOS look (cyan headers, black field)
+#   wysiwyg  — R3.4a WYSIWYG paper look (teal headers, magenta gridlines)
 #   amber    — CRT amber phosphor
 #   green    — CRT green phosphor
 # A bad value is silently ignored. Env: L123_THEME. CLI: --theme.
-# theme = dos
+# theme = default
 ";
 
 #[cfg(test)]
@@ -748,12 +750,12 @@ mod tests {
     }
 
     #[test]
-    fn theme_defaults_to_dos() {
+    fn theme_defaults_to_bare_terminal() {
         let src = MockSource::new();
         let cfg = Config::resolve_with(&src);
-        assert_eq!(cfg.theme.value, "dos");
+        assert_eq!(cfg.theme.value, "default");
         assert_eq!(cfg.theme.source, Source::Default);
-        assert_eq!(cfg.theme(), ThemeName::Dos);
+        assert_eq!(cfg.theme(), ThemeName::Default);
     }
 
     #[test]
@@ -789,7 +791,7 @@ mod tests {
     fn theme_unknown_in_file_falls_through_to_default() {
         let src = MockSource::new().with_file("theme = solarized\n");
         let cfg = Config::resolve_with(&src);
-        assert_eq!(cfg.theme(), ThemeName::Dos);
+        assert_eq!(cfg.theme(), ThemeName::Default);
         assert_eq!(cfg.theme.source, Source::Default);
     }
 

@@ -149,16 +149,22 @@ are unaffected; the theme only paints chrome, never data.
 - **Env:** `L123_THEME`
 - **CLI:** `--theme <name>` (overrides env / file for the run)
 - **Accepted values:**
-  - `dos` (default) — classic 1-2-3 R3.4a DOS look.
-  - `wysiwyg` — R3.4a WYSIWYG paper look (magenta gridlines, blue
-    selection).
-  - `amber` — CRT amber phosphor.
-  - `green` — CRT green phosphor.
-  - Aliases: `default` / `classic` → `dos`; `paper` → `wysiwyg`.
+  - `default` (default) — bare-terminal look. Cell field and column /
+    row-number gutters fall through to the terminal's own colors;
+    only chrome bits (status bar, splash, menu highlights) are
+    painted.
+  - `dos` — authentic 1-2-3 R3.4a DOS look. Black cell field with
+    white text and a cyan column-letter / row-number gutter.
+  - `wysiwyg` — R3.4a WYSIWYG paper look. Light-grey cell field with
+    black text, teal gutter, and magenta gridlines.
+  - `amber` — CRT amber phosphor on a black field.
+  - `green` — CRT green phosphor on a black field.
+  - Aliases: `plain` / `none` → `default`; `classic` → `dos`;
+    `paper` → `wysiwyg`.
 - **Bad values:** silently ignored in `L123_THEME` and the config
   file (the next-lower tier applies). The CLI surfaces typos as a
   usage error and exits 2.
-- **Default:** `dos`
+- **Default:** `default`
 
 There is no runtime command for switching themes mid-session — set
 the value before launching.

@@ -899,7 +899,8 @@ pub struct App {
     /// `/Data Query` settings — sticky across Query-menu visits and
     /// across separate `/DQ` sessions until cleared by Reset.
     data_query: DataQueryState,
-    /// Resolved chrome palette. Defaults to [`Theme::DOS`] so existing
+    /// Resolved chrome palette. Defaults to [`Theme::DEFAULT`] (the
+    /// bare-terminal look — no cell or header colors) so existing
     /// transcripts and snapshots see no change; the CLI/config/env
     /// pipeline overrides via [`App::set_theme`] before the event loop
     /// starts.
@@ -2980,7 +2981,7 @@ impl App {
             data_regression: DataRegressionState::default(),
             data_parse: DataParseState::default(),
             data_query: DataQueryState::default(),
-            theme: crate::theme::Theme::DOS,
+            theme: crate::theme::Theme::DEFAULT,
         }
     }
 
@@ -2995,6 +2996,21 @@ impl App {
     /// Currently active palette. Test surface only.
     pub fn theme(&self) -> &crate::theme::Theme {
         &self.theme
+    }
+
+    /// Default style for a cell painted in `:Display Mode B&W` (the
+    /// out-of-the-box mode). Uses `theme.cell_bg` / `cell_fg` when
+    /// the active theme provides them, otherwise leaves the cell at
+    /// the terminal default.
+    fn theme_default_cell_style(&self) -> Style {
+        let mut s = Style::default();
+        if let Some(bg) = self.theme.cell_bg {
+            s = s.bg(bg.color());
+        }
+        if let Some(fg) = self.theme.cell_fg {
+            s = s.fg(fg.color());
+        }
+        s
     }
 
     /// Construct an app with the startup splash active. Normal
@@ -12066,11 +12082,37 @@ impl App {
     }
 
     fn render_splash(&self, area: Rect, buf: &mut Buffer, info: &SplashInfo) {
-        // The classic DOS palette (cyan field, white-on-black banner,
-        // yellow accents) is preserved as the `dos` theme; other themes
-        // override here so the splash matches the rest of the chrome.
+        // The bare-terminal default theme renders the splash using
+        // ratatui's named colors (Color::White, Color::Yellow,
+        // Color::Black) so the welcome screen reads exactly the way
+        // it did before themes existed — terminals that remap their
+        // ANSI palette stay in charge of the exact hue.  Named themes
+        // resolve every accent through the palette so splash chrome
+        // tracks the rest of the look.
+        let use_named_colors = self.theme.name == crate::theme::ThemeName::Default;
         let field = self.theme.splash_bg.color();
         let banner_bg = self.theme.mono_overlay_bg.color();
+        let title_fg = if use_named_colors {
+            Color::White
+        } else {
+            self.theme.splash_fg.color()
+        };
+        let accent_fg = if use_named_colors {
+            Color::Yellow
+        } else {
+            self.theme.accent_fg.color()
+        };
+        // Master uses the explicit Rgb(0, 0, 0) constant (not the
+        // ratatui-named `Color::Black`, which terminals may remap to
+        // dark gray for visibility); reproduce that for the default
+        // theme so the licensing block stays jet-black on cyan.
+        let label_fg = if use_named_colors {
+            Color::Rgb(0, 0, 0)
+        } else {
+            self.theme.status_fg.color()
+        };
+        let footer_fg = label_fg;
+
         let field_bg = Style::default().bg(field);
         for y in 0..area.height {
             for x in 0..area.width {
@@ -12080,7 +12122,7 @@ impl App {
 
         let title_style = Style::default()
             .bg(banner_bg)
-            .fg(self.theme.splash_fg.color())
+            .fg(title_fg)
             .add_modifier(Modifier::BOLD);
         let banner = [
             Line::from(""),
@@ -12146,16 +12188,16 @@ impl App {
             HEADING,
             Style::default()
                 .bg(field)
-                .fg(self.theme.accent_fg.color())
+                .fg(accent_fg)
                 .add_modifier(Modifier::BOLD),
         )))
         .alignment(ratatui::layout::Alignment::Center);
         heading.render(Rect::new(block_x, licensing_y, block_w, 1), buf);
 
-        let label_style = Style::default().bg(field).fg(self.theme.status_fg.color());
+        let label_style = Style::default().bg(field).fg(label_fg);
         let value_style = Style::default()
             .bg(field)
-            .fg(self.theme.accent_fg.color())
+            .fg(accent_fg)
             .add_modifier(Modifier::BOLD);
         let rows = [
             Line::from(vec![
@@ -12177,7 +12219,7 @@ impl App {
             return;
         }
         let footer = Paragraph::new(FOOTER.iter().map(|s| Line::from(*s)).collect::<Vec<_>>())
-            .style(Style::default().bg(field).fg(self.theme.status_fg.color()));
+            .style(Style::default().bg(field).fg(footer_fg));
         footer.render(Rect::new(block_x, footer_y, block_w, 3), buf);
     }
 
@@ -13623,8 +13665,15 @@ impl App {
         let layout = self.visible_column_layout(content_width);
         let visible_rows = area.height - 1;
 
-        // Column header row
-        let header_style = Style::default().add_modifier(Modifier::REVERSED);
+        // Column header row.  When the active theme supplies header
+        // colors (DOS, WYSIWYG, CRT phosphor) paint them directly so
+        // the gutter reads as a deliberate band; the bare-terminal
+        // default theme falls back to `Modifier::REVERSED` so the look
+        // matches what shipped before themes existed.
+        let header_style = match (self.theme.header_bg, self.theme.header_fg) {
+            (Some(bg), Some(fg)) => Style::default().bg(bg.color()).fg(fg.color()),
+            _ => Style::default().add_modifier(Modifier::REVERSED),
+        };
         for &(col_idx, x_off, w) in &layout {
             let letters = col_to_letters(col_idx);
             let x = area.x + ROW_GUTTER + x_off;
@@ -13643,9 +13692,10 @@ impl App {
         let row_layout = self.visible_row_layout(visible_rows);
         for &(row_idx, r) in &row_layout {
             let y = area.y + 1 + r;
-            // Row number gutter
+            // Row number gutter — same theme-controlled style as the
+            // column-letter row above so the corner reads as one band.
             let label = format!("{:>width$}", row_idx + 1, width = (ROW_GUTTER - 1) as usize);
-            let style = Style::default().add_modifier(Modifier::REVERSED);
+            let style = header_style;
             for (i, ch) in label.chars().enumerate() {
                 buf[(area.x + i as u16, y)].set_char(ch).set_style(style);
             }
@@ -13735,7 +13785,15 @@ impl App {
                 let mut cell_style = if highlighted {
                     Style::default().add_modifier(Modifier::REVERSED)
                 } else {
-                    display_mode_default_style(self.display_mode)
+                    // `:Display Mode` overrides whatever the theme
+                    // would have painted (it's the user-facing
+                    // runtime knob). Otherwise fall back to the
+                    // theme's cell colors when present, then to the
+                    // terminal default.
+                    match self.display_mode {
+                        DisplayMode::BW => self.theme_default_cell_style(),
+                        _ => display_mode_default_style(self.display_mode),
+                    }
                 };
                 // xlsx-imported background fill paints behind the cell
                 // contents.  Skip on the pointer highlight so the
@@ -13975,8 +14033,10 @@ impl App {
                     let anchor_highlighted = highlight.contains(m.anchor);
                     let mut astyle = if anchor_highlighted {
                         Style::default().add_modifier(Modifier::REVERSED)
+                    } else if matches!(self.display_mode, DisplayMode::BW) {
+                        self.theme_default_cell_style()
                     } else {
-                        Style::default()
+                        display_mode_default_style(self.display_mode)
                     };
                     if !anchor_highlighted {
                         if let Some(fill) = self.wb().cell_fills.get(&m.anchor) {
@@ -14583,9 +14643,9 @@ mod tests {
     }
 
     #[test]
-    fn default_app_uses_dos_theme() {
+    fn default_app_uses_bare_terminal_theme() {
         let app = App::new();
-        assert_eq!(app.theme().name, ThemeName::Dos);
+        assert_eq!(app.theme().name, ThemeName::Default);
     }
 
     #[test]
@@ -14650,6 +14710,173 @@ mod tests {
             cell_fg(&buf, pos as u16, 0),
             Color::Rgb(wys_accent.r, wys_accent.g, wys_accent.b),
         );
+    }
+
+    #[test]
+    fn dos_theme_paints_header_gutter_and_cell_field() {
+        // The `--theme dos` look has to match the Lotus-123-3.0-MSDOS
+        // reference image: cyan column-letter / row-number gutter
+        // with black labels, and a black cell field with white text.
+        // If any of these regress, the chrome stops looking like real
+        // 1-2-3 even after the user opted in.
+        let mut app = App::new();
+        app.set_theme(Theme::DOS);
+        let buf = app.render_to_buffer(80, 25);
+
+        let teal = Color::Rgb(0x00, 0xAA, 0xAA);
+        let black = Color::Rgb(0x00, 0x00, 0x00);
+        let white = Color::Rgb(0xFF, 0xFF, 0xFF);
+
+        // Column-letter header lives on the row right below the
+        // 4-line control panel.
+        let header_y = PANEL_HEIGHT;
+        let header_x = ROW_GUTTER + 1;
+        assert_eq!(
+            cell_bg(&buf, header_x, header_y),
+            teal,
+            "dos column header bg"
+        );
+        assert_eq!(
+            cell_fg(&buf, header_x, header_y),
+            black,
+            "dos column header fg"
+        );
+
+        // Row-number gutter (the leftmost ROW_GUTTER columns of any
+        // body row).
+        let body_y = PANEL_HEIGHT + 1;
+        assert_eq!(cell_bg(&buf, 0, body_y), teal, "dos row-number gutter bg");
+        assert_eq!(cell_fg(&buf, 0, body_y), black, "dos row-number gutter fg");
+
+        // Default cell field — pick a body cell that's clearly past
+        // the pointer (which would be REVERSED) to read the theme
+        // default style.
+        let cell_x = ROW_GUTTER + 30;
+        let cell_y = PANEL_HEIGHT + 5;
+        assert_eq!(cell_bg(&buf, cell_x, cell_y), black, "dos default cell bg");
+        assert_eq!(cell_fg(&buf, cell_x, cell_y), white, "dos default cell fg");
+    }
+
+    #[test]
+    fn wysiwyg_theme_paints_paper_field_and_teal_gutter() {
+        // The `--theme wysiwyg` look mirrors the R3.4a paper screenshot:
+        // light-grey cell field with black text, teal column / row
+        // gutter, magenta gridline glyph (covered by the gridline
+        // test below).
+        let mut app = App::new();
+        app.set_theme(Theme::WYSIWYG);
+        let buf = app.render_to_buffer(80, 25);
+
+        let teal = Color::Rgb(0x55, 0xAA, 0xAA);
+        let black = Color::Rgb(0x00, 0x00, 0x00);
+        let paper = Color::Rgb(0xC0, 0xC0, 0xC0);
+
+        let header_y = PANEL_HEIGHT;
+        let header_x = ROW_GUTTER + 1;
+        assert_eq!(cell_bg(&buf, header_x, header_y), teal);
+        assert_eq!(cell_fg(&buf, header_x, header_y), black);
+
+        let body_y = PANEL_HEIGHT + 1;
+        assert_eq!(cell_bg(&buf, 0, body_y), teal);
+        assert_eq!(cell_fg(&buf, 0, body_y), black);
+
+        let cell_x = ROW_GUTTER + 30;
+        let cell_y = PANEL_HEIGHT + 5;
+        assert_eq!(cell_bg(&buf, cell_x, cell_y), paper);
+        assert_eq!(cell_fg(&buf, cell_x, cell_y), black);
+    }
+
+    #[test]
+    fn default_theme_splash_uses_master_named_colors() {
+        // The bare-terminal default theme has to render the splash
+        // exactly the way master did before themes existed: ratatui
+        // *named* colors for accents (Color::White / Color::Yellow)
+        // so the user's terminal palette is in charge of the hue,
+        // and explicit Rgb(0,0,0) for label/footer text so it stays
+        // jet-black on cyan rather than the named Color::Black slot
+        // (which some terminals remap to dark gray).
+        let user = "Tester".to_string();
+        let org = "L123".to_string();
+        let app = App::new_with_splash(user.clone(), org.clone());
+        // App::new_with_splash leaves the Default theme in place.
+        assert_eq!(app.theme().name, ThemeName::Default);
+        let buf = app.render_to_buffer(80, 25);
+        let text = (0..buf.area.height)
+            .map(|y| App::line_text(&buf, y))
+            .collect::<Vec<_>>();
+
+        // Locate "User name:" — its label cells must be black on
+        // cyan, and the value next to it must be Color::Yellow on cyan.
+        let (label_y, label_x) = text
+            .iter()
+            .enumerate()
+            .find_map(|(y, line)| line.find("User name:").map(|c| (y as u16, c as u16)))
+            .expect("User name label rendered");
+        assert_eq!(
+            buf[(label_x, label_y)].fg,
+            Color::Rgb(0, 0, 0),
+            "User name label fg must be explicit black, got {:?}",
+            buf[(label_x, label_y)].fg,
+        );
+        assert_eq!(
+            buf[(label_x, label_y)].bg,
+            Color::Rgb(0, 170, 170),
+            "User name label bg must be DOS cyan",
+        );
+
+        // Value chars sit immediately after the label's trailing
+        // spaces; "User name:     " is 15 chars so the user's name
+        // starts at label_x + 15.
+        let value_x = label_x + 15;
+        assert_eq!(
+            buf[(value_x, label_y)].fg,
+            Color::Yellow,
+            "user-name value fg must be the named Color::Yellow",
+        );
+
+        // Footer line: explicit black on cyan.
+        let (foot_y, foot_x) = text
+            .iter()
+            .enumerate()
+            .find_map(|(y, line)| line.find("Use, duplication").map(|c| (y as u16, c as u16)))
+            .expect("license footer rendered");
+        assert_eq!(buf[(foot_x, foot_y)].fg, Color::Rgb(0, 0, 0));
+        assert_eq!(buf[(foot_x, foot_y)].bg, Color::Rgb(0, 170, 170));
+
+        // Banner title "l123" on the inner box: white on black.
+        let (title_y, title_x) = text
+            .iter()
+            .enumerate()
+            .find_map(|(y, line)| line.find("l123").map(|c| (y as u16, c as u16)))
+            .expect("banner title rendered");
+        assert_eq!(buf[(title_x, title_y)].fg, Color::White);
+        assert_eq!(buf[(title_x, title_y)].bg, Color::Rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn default_theme_leaves_grid_at_terminal_colors() {
+        // The bare-terminal default theme must NOT paint cell or
+        // header bg/fg — that's how it preserves the master look.
+        // The header row keeps the `Modifier::REVERSED` style, which
+        // ratatui represents with the `Reset` color sentinel.
+        let app = App::new();
+        let buf = app.render_to_buffer(80, 25);
+
+        let header_y = PANEL_HEIGHT;
+        let header_x = ROW_GUTTER + 1;
+        assert_eq!(cell_bg(&buf, header_x, header_y), Color::Reset);
+        assert_eq!(cell_fg(&buf, header_x, header_y), Color::Reset);
+        assert!(
+            buf[(header_x, header_y)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "default header should rely on REVERSED"
+        );
+
+        let cell_x = ROW_GUTTER + 30;
+        let cell_y = PANEL_HEIGHT + 5;
+        assert_eq!(cell_bg(&buf, cell_x, cell_y), Color::Reset);
+        assert_eq!(cell_fg(&buf, cell_x, cell_y), Color::Reset);
     }
 
     #[test]
