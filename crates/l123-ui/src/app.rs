@@ -6445,6 +6445,8 @@ impl App {
         self.wb_mut().col_widths.clear();
         self.wb_mut().default_col_width = 9;
         self.wb_mut().hidden_cols.clear();
+        self.wb_mut().named_ranges.clear();
+        self.wb_mut().name_notes.clear();
         self.entry = None;
         self.menu = None;
         self.prompt = None;
@@ -7326,6 +7328,8 @@ impl App {
         self.wb_mut().col_widths.clear();
         self.wb_mut().default_col_width = 9;
         self.wb_mut().hidden_cols.clear();
+        self.wb_mut().named_ranges.clear();
+        self.wb_mut().name_notes.clear();
         self.entry = None;
         self.wb_mut().pointer = Address::A1;
         self.wb_mut().viewport_col_offset = 0;
@@ -7397,6 +7401,15 @@ impl App {
         }
         for (sheet, t) in self.wb_mut().engine.used_tables() {
             self.wb_mut().tables.entry(sheet).or_default().push(t);
+        }
+        // Pull workbook-global defined names back into the UI map so
+        // POINT typed-buffer name resolution and Alt-letter macro
+        // dispatch (including \0 autoexec) survive a save → reload.
+        // Keys are lowercased, matching the /RNC ingestion path.
+        for (name, range) in self.wb_mut().engine.used_defined_names() {
+            self.wb_mut()
+                .named_ranges
+                .insert(name.to_ascii_lowercase(), range);
         }
         redirect_pointer_off_hidden(self.wb_mut());
         for sheet_idx in 0..sheet_count {

@@ -507,6 +507,15 @@ fn run_transcript(path: &Path) {
             "RM_FILE" => {
                 let _ = std::fs::remove_file(rest);
             }
+            // Drop the current `App` and rebuild from `App::new()` to
+            // simulate a process quit + relaunch. Required for any
+            // claim that exercises only-on-load behavior (autoexec,
+            // named-range repopulation) — otherwise stale UI maps from
+            // the same session let the test pass without exercising
+            // the load path.
+            "RESET_APP" => {
+                app = App::new();
+            }
             // "COPY_FILE <src>  <dst>" — copy a binary fixture into the
             // transcript sandbox. Two args separated by ≥2 spaces or a
             // tab so paths with single spaces still parse.
@@ -1029,6 +1038,7 @@ transcripts! {
     m9_macro_alt_letter       => "M9_macro_alt_letter.tsv",
     m9_macro_alt_f3_run       => "M9_macro_alt_f3_run.tsv",
     m9_macro_autoexec         => "M9_macro_autoexec.tsv",
+    m9_macro_autoexec_restart => "M9_macro_autoexec_restart.tsv",
     m9_macro_branch           => "M9_macro_branch.tsv",
     m9_macro_quit             => "M9_macro_quit.tsv",
     m9_macro_subroutine       => "M9_macro_subroutine.tsv",

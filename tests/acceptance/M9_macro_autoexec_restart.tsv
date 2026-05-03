@@ -1,0 +1,52 @@
+# Phase 3 — `\0` autoexec survives a process restart.
+#
+# Companion to M9_macro_autoexec.tsv. That transcript stays in the
+# same session through /FN before the retrieve, so even if the UI
+# never repopulates `named_ranges` from the loaded engine, the stale
+# in-memory `\0` -> A1 mapping makes Alt-letter dispatch (and hence
+# autoexec) "work" by accident.
+#
+# Here we use RESET_APP to drop and rebuild the App between save
+# and retrieve, mirroring what `quit l123 && launch l123` would do.
+# The autoexec must survive — it can only do so if /File Retrieve
+# pulls defined names back out of the engine.
+
+# Stash a macro at A1 that types "auto-ran" into B5.
+KEY '
+KEYS {GOTO}B5~auto-ran~
+ENTER
+HOME
+ASSERT_POINTER  A:A1
+
+# Define name `\0`.
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \0
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# Save to a known path.
+RM_FILE $TMPDIR/autoexec_restart.xlsx
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/autoexec_restart
+ENTER
+
+# Quit + relaunch — stale UI state is wiped. After this point the
+# only place `\0` exists is inside the saved xlsx.
+RESET_APP
+
+# Autoexec is on by default; retrieve fires \0 only if the load path
+# repopulates `named_ranges` from the engine.
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/autoexec_restart.xlsx
+ENTER
+
+ASSERT_POINTER  A:B5
+ASSERT_PANEL_L1 A:B5: 'auto-ran

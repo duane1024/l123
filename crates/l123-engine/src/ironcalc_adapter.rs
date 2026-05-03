@@ -1265,6 +1265,35 @@ impl IronCalcEngine {
         out
     }
 
+    /// Enumerate every workbook-global defined name as a
+    /// `(name, range)` pair. Used after `load_xlsx` to repopulate the
+    /// UI's `named_ranges` cache so macro autonames (`\0`,
+    /// `\A`..`\Z`) loaded from disk are dispatchable. Names whose
+    /// formula doesn't parse as a `Sheet!$col$row[:$col$row]`
+    /// reference, or whose sheet name is unknown, are silently
+    /// dropped — keeps a corrupt xlsx from panicking the load path.
+    /// Sheet-scoped names (`sheet_id.is_some()`) are skipped; L123's
+    /// UI map is workbook-global only.
+    pub fn used_defined_names(&self) -> Vec<(String, Range)> {
+        let names = self.all_sheet_names();
+        let mut name_to_id: std::collections::HashMap<String, SheetId> =
+            std::collections::HashMap::with_capacity(names.len());
+        for (i, n) in names.into_iter().enumerate() {
+            name_to_id.insert(n, SheetId(i as u16));
+        }
+        let mut out = Vec::new();
+        for dn in &self.model.workbook.defined_names {
+            if dn.sheet_id.is_some() {
+                continue;
+            }
+            let Some(range) = parse_name_formula(&dn.formula, &name_to_id) else {
+                continue;
+            };
+            out.push((dn.name.clone(), range));
+        }
+        out
+    }
+
     /// Enumerate every non-empty cell in the workbook. Used after
     /// `load_xlsx` to repopulate the UI's `cells` cache.
     pub fn used_cells(&self) -> Vec<(Address, CellView)> {
@@ -1299,6 +1328,78 @@ impl IronCalcEngine {
 #[allow(dead_code)]
 pub(crate) fn col_letters_1based(c: i32) -> Option<String> {
     number_to_column(c)
+}
+
+/// Parse a defined-name formula string of the form
+/// `Sheet!$A$1[:$B$2]` (or single-quoted sheet name) back into an
+/// L123 [`Range`]. Returns `None` when the string doesn't match the
+/// shape we wrote in [`IronCalcEngine::define_name`] or when the
+/// sheet name doesn't resolve. Keeps `used_defined_names` resilient
+/// to xlsx files authored elsewhere with shapes we don't model
+/// (`OFFSET()`-based names, multi-area names, etc.).
+fn parse_name_formula(
+    formula: &str,
+    sheet_index: &std::collections::HashMap<String, SheetId>,
+) -> Option<Range> {
+    let formula = formula.trim().strip_prefix('=').unwrap_or(formula.trim());
+    let bang = formula.rfind('!')?;
+    let raw_sheet = &formula[..bang];
+    let body = &formula[bang + 1..];
+    let sheet_name = if let Some(stripped) = raw_sheet.strip_prefix('\'') {
+        stripped.strip_suffix('\'')?.replace("''", "'")
+    } else {
+        raw_sheet.to_string()
+    };
+    let sheet = *sheet_index.get(&sheet_name)?;
+    let (lo, hi) = match body.split_once(':') {
+        Some((l, r)) => (l, r),
+        None => (body, body),
+    };
+    let start = parse_a1_with_dollars(lo, sheet)?;
+    let end = parse_a1_with_dollars(hi, sheet)?;
+    Some(Range { start, end }.normalized())
+}
+
+/// Parse `$A$1`, `A1`, `$A1`, or `A$1` into an [`Address`] under
+/// `sheet`. Used by [`parse_name_formula`].
+fn parse_a1_with_dollars(s: &str, sheet: SheetId) -> Option<Address> {
+    let mut bytes = s.as_bytes().iter().copied().peekable();
+    if bytes.peek() == Some(&b'$') {
+        bytes.next();
+    }
+    let mut col_letters = String::new();
+    while let Some(&b) = bytes.peek() {
+        if b.is_ascii_alphabetic() {
+            col_letters.push(b as char);
+            bytes.next();
+        } else {
+            break;
+        }
+    }
+    if col_letters.is_empty() {
+        return None;
+    }
+    if bytes.peek() == Some(&b'$') {
+        bytes.next();
+    }
+    let mut row_digits = String::new();
+    while let Some(&b) = bytes.peek() {
+        if b.is_ascii_digit() {
+            row_digits.push(b as char);
+            bytes.next();
+        } else {
+            break;
+        }
+    }
+    if bytes.next().is_some() {
+        return None; // junk after row digits
+    }
+    let col = l123_core::address::letters_to_col(&col_letters.to_ascii_uppercase()).ok()?;
+    let row_1b: u32 = row_digits.parse().ok()?;
+    if row_1b == 0 {
+        return None;
+    }
+    Some(Address::new(sheet, col, row_1b - 1))
 }
 
 /// IronCalc 0.7.1's `CellValue` enum has no `Error` variant — formulas
@@ -2951,6 +3052,49 @@ mod tests {
             !aligns.contains_key(&Address::new(SheetId::A, 0, 3)),
             "default-aligned cell should not surface in used_cell_alignments"
         );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn defined_names_round_trip_through_xlsx() {
+        // Workbook-global defined names — including the macro autoname
+        // `\0` and an Alt-letter form `\a` — survive save_xlsx +
+        // load_xlsx into a brand-new engine. The leading-backslash
+        // forms matter because L123's macro dispatch keys off them.
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "l123_engine_defined_names_rt_{}_{}",
+            process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("defined_names_rt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        let single = Range::single(Address::new(SheetId::A, 0, 0));
+        let multi = Range {
+            start: Address::new(SheetId::A, 0, 0),
+            end: Address::new(SheetId::A, 1, 4),
+        };
+        e.define_name("\\0", single).unwrap();
+        e.define_name("\\a", single).unwrap();
+        e.define_name("revenue", multi).unwrap();
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        let got: std::collections::HashMap<String, Range> =
+            e2.used_defined_names().into_iter().collect();
+        assert_eq!(got.get("\\0").copied(), Some(single), "got: {got:?}");
+        assert_eq!(got.get("\\a").copied(), Some(single), "got: {got:?}");
+        assert_eq!(got.get("revenue").copied(), Some(multi), "got: {got:?}");
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
