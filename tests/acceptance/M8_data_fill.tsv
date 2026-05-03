@@ -1,0 +1,132 @@
+# /Data Fill — write a numeric sequence into a range.
+# Flow: /DF <POINT range> ~ <Start> ~ <Step> ~ <Stop> ~
+# Defaults: Start=0, Step=1, Stop=2047 (R3.4a).
+# Order: 1-2-3 fills column-major — down column A, then down column B,
+# stopping at either the end of the range or when the next computed
+# value would exceed Stop.
+
+# ----- 1×5 column fill, all defaults: 0,1,2,3,4 -----
+KEY /
+KEY D
+KEY F
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   fill
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+
+# Start prompt — default 0.
+ASSERT_PANEL_L3   Start
+ASSERT_PANEL_L2   0
+ENTER
+
+# Step prompt — default 1.
+ASSERT_PANEL_L3   Step
+ASSERT_PANEL_L2   1
+ENTER
+
+# Stop prompt — default 2047.
+ASSERT_PANEL_L3   Stop
+ASSERT_PANEL_L2   2047
+ENTER
+
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  0
+ASSERT_CELL       A:A2  1
+ASSERT_CELL       A:A3  2
+ASSERT_CELL       A:A4  3
+ASSERT_CELL       A:A5  4
+
+# ----- 2×3 block, custom Start=10, Step=5: column-major order -----
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER    A:A7
+KEY /
+KEY D
+KEY F
+RIGHT
+DOWN
+DOWN
+ENTER
+
+# Start: replace default with 10.
+KEYS 10
+ENTER
+# Step: replace default with 5.
+KEYS 5
+ENTER
+# Stop: leave default.
+ENTER
+
+ASSERT_CELL       A:A7  10
+ASSERT_CELL       A:A8  15
+ASSERT_CELL       A:A9  20
+ASSERT_CELL       A:B7  25
+ASSERT_CELL       A:B8  30
+ASSERT_CELL       A:B9  35
+
+# ----- Stop clamps the sequence — A1..A10 with Stop=3 fills only 4 cells -----
+HOME
+KEYS 99
+ENTER
+DOWN
+KEYS 99
+ENTER
+DOWN
+KEYS 99
+ENTER
+DOWN
+KEYS 99
+ENTER
+DOWN
+KEYS 99
+ENTER
+DOWN
+KEYS 99
+ENTER
+DOWN
+KEYS 99
+ENTER
+DOWN
+KEYS 99
+ENTER
+DOWN
+KEYS 99
+ENTER
+DOWN
+KEYS 99
+ENTER
+
+# Pre-seed: A1..A10 each contain 99. /DF will overwrite the first
+# four (0,1,2,3); the rest stay at 99.
+HOME
+KEY /
+KEY D
+KEY F
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+ENTER
+ENTER
+KEYS 3
+ENTER
+ASSERT_CELL       A:A1  0
+ASSERT_CELL       A:A2  1
+ASSERT_CELL       A:A3  2
+ASSERT_CELL       A:A4  3
+ASSERT_CELL       A:A5  99
+ASSERT_CELL       A:A10 99

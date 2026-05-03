@@ -1,0 +1,89 @@
+# /Data Distribution — frequency-distribution table.
+# Flow: /DD <POINT values-range> ~ <POINT bin-range> ~
+# Writes the count of Values <= bin[i] AND > bin[i-1] into the cell
+# immediately right of each bin cell, plus one extra row at the
+# bottom of the bin-column-plus-one for the "above the largest bin"
+# overflow count. (R3.4a Reference, "Distribution".)
+#
+# Seed:  A1..A7 = 5, 15, 25, 35, 10, 18, 42  (seven values)
+# Bins:  B1..B4 = 10, 20, 30, 40             (four bins)
+# Expected counts:
+#   C1 = #{v <= 10}            = {5, 10}      = 2
+#   C2 = #{10 < v <= 20}       = {15, 18}     = 2
+#   C3 = #{20 < v <= 30}       = {25}         = 1
+#   C4 = #{30 < v <= 40}       = {35}         = 1
+#   C5 = #{v > 40} (overflow)  = {42}         = 1
+
+# Seed Values column A.
+KEYS 5
+ENTER
+DOWN
+KEYS 15
+ENTER
+DOWN
+KEYS 25
+ENTER
+DOWN
+KEYS 35
+ENTER
+DOWN
+KEYS 10
+ENTER
+DOWN
+KEYS 18
+ENTER
+DOWN
+KEYS 42
+ENTER
+
+# Seed Bins column B.
+HOME
+RIGHT
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+DOWN
+KEYS 30
+ENTER
+DOWN
+KEYS 40
+ENTER
+
+# /DD opens the Values POINT.
+HOME
+KEY /
+KEY D
+KEY D
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   values
+
+# Highlight A1..A7 and commit.
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+
+# Bin-range POINT — pointer is parked at the values top-left (A1)
+# with no anchor (Copy-style "navigate to destination" semantics).
+# Walk to B1, anchor with `.`, extend to B4, commit.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   bin
+RIGHT
+ASSERT_POINTER    A:B1
+KEY .
+DOWN
+DOWN
+DOWN
+ENTER
+
+ASSERT_MODE       READY
+ASSERT_CELL       A:C1  2
+ASSERT_CELL       A:C2  2
+ASSERT_CELL       A:C3  1
+ASSERT_CELL       A:C4  1
+ASSERT_CELL       A:C5  1

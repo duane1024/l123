@@ -1,0 +1,116 @@
+# /Data Sort — sort a range by a primary key column.
+# Flow: /DS opens the sort menu (sticky — leaves return to it).
+#   D <POINT data-range> ~      sets the data range
+#   P <POINT key-cell> ~ A      sets the primary key column + Ascending
+#   G                           runs the sort
+#
+# Seed four rows of (id, name, value); sort by id ascending.
+
+# Row 1: 3, "cherry", 30
+KEYS 3
+ENTER
+RIGHT
+KEY "
+KEYS cherry
+ENTER
+RIGHT
+KEYS 30
+ENTER
+
+# Row 2: 1, "apple", 10
+HOME
+DOWN
+KEYS 1
+ENTER
+RIGHT
+KEY "
+KEYS apple
+ENTER
+RIGHT
+KEYS 10
+ENTER
+
+# Row 3: 4, "date", 40
+HOME
+DOWN
+DOWN
+KEYS 4
+ENTER
+RIGHT
+KEY "
+KEYS date
+ENTER
+RIGHT
+KEYS 40
+ENTER
+
+# Row 4: 2, "banana", 20
+HOME
+DOWN
+DOWN
+DOWN
+KEYS 2
+ENTER
+RIGHT
+KEY "
+KEYS banana
+ENTER
+RIGHT
+KEYS 20
+ENTER
+
+# Open /DS — Sort menu is now sticky; leaves return to it.
+HOME
+KEY /
+KEY D
+KEY S
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Data-Range
+
+# D = Data-Range → POINT A1..C4 → Enter.
+KEY D
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   data-range
+RIGHT
+RIGHT
+DOWN
+DOWN
+DOWN
+ENTER
+
+# Sticky: back at the Sort menu.
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Data-Range
+
+# P = Primary-Key → POINT A1 (any cell in the key column) → Enter.
+KEY P
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   primary
+ENTER
+
+# Asc/Desc submenu.
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Ascending
+KEY A
+
+# Sticky again.
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Data-Range
+
+# G = Go.
+KEY G
+ASSERT_MODE       READY
+
+# Rows now sorted by column A ascending: 1, 2, 3, 4.
+ASSERT_CELL       A:A1  1
+ASSERT_CELL       A:B1  apple
+ASSERT_CELL       A:C1  10
+ASSERT_CELL       A:A2  2
+ASSERT_CELL       A:B2  banana
+ASSERT_CELL       A:C2  20
+ASSERT_CELL       A:A3  3
+ASSERT_CELL       A:B3  cherry
+ASSERT_CELL       A:C3  30
+ASSERT_CELL       A:A4  4
+ASSERT_CELL       A:B4  date
+ASSERT_CELL       A:C4  40

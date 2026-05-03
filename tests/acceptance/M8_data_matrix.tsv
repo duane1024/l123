@@ -1,0 +1,129 @@
+# /Data Matrix — Invert and Multiply.
+# Flow:
+#   /DMI <POINT square-matrix> ~ <POINT output-cell> ~
+#   /DMM <POINT A> ~ <POINT B> ~ <POINT output-cell> ~
+#
+# ---- Invert: A = [[4,7],[2,6]], det = 10, inv = [[0.6,-0.7],[-0.2,0.4]]
+KEYS 4
+ENTER
+RIGHT
+KEYS 7
+ENTER
+HOME
+DOWN
+KEYS 2
+ENTER
+RIGHT
+KEYS 6
+ENTER
+
+HOME
+KEY /
+KEY D
+KEY M
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Invert
+KEY I
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   matrix
+RIGHT
+DOWN
+ASSERT_PANEL_L3   A:A1..A:B2
+ENTER
+
+# Output-anchor POINT — single cell at D1.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   output
+HOME
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER    A:D1
+ENTER
+ASSERT_MODE       READY
+
+ASSERT_CELL       A:D1  0.6
+ASSERT_CELL       A:E1  -0.7
+ASSERT_CELL       A:D2  -0.2
+ASSERT_CELL       A:E2  0.4
+
+# ---- Multiply: A above unchanged at A1..B2.
+# Replace A1..B2 with [[1,2],[3,4]] and seed B at D1..E2 = [[5,6],[7,8]].
+HOME
+KEYS 1
+ENTER
+RIGHT
+KEYS 2
+ENTER
+HOME
+DOWN
+KEYS 3
+ENTER
+RIGHT
+KEYS 4
+ENTER
+HOME
+RIGHT
+RIGHT
+RIGHT
+KEYS 5
+ENTER
+RIGHT
+KEYS 6
+ENTER
+HOME
+DOWN
+RIGHT
+RIGHT
+RIGHT
+KEYS 7
+ENTER
+RIGHT
+KEYS 8
+ENTER
+
+HOME
+KEY /
+KEY D
+KEY M
+KEY M
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   first matrix
+RIGHT
+DOWN
+ENTER
+
+# Second matrix POINT — anchored at A2 (post-A-commit pointer); Esc
+# unanchors so we can navigate cleanly to D1..E2.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   second matrix
+ESC
+HOME
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER    A:D1
+KEY .
+RIGHT
+DOWN
+ENTER
+
+# Output-anchor POINT.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   output
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER    A:G1
+ENTER
+ASSERT_MODE       READY
+
+# A*B = [[1,2],[3,4]] * [[5,6],[7,8]] = [[19,22],[43,50]]
+ASSERT_CELL       A:G1  19
+ASSERT_CELL       A:H1  22
+ASSERT_CELL       A:G2  43
+ASSERT_CELL       A:H2  50

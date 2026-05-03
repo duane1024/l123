@@ -1,0 +1,103 @@
+# /Data Table 2 — two-input what-if table.
+#
+# Layout:
+#   top-left corner of table range:   the formula
+#   row 1 of table (right of corner): var-2 values across the top
+#   col 1 of table (below corner):    var-1 values down the left
+#   body:                             filled with formula evaluated
+#                                     after substituting var-1 into
+#                                     Input cell 1 and var-2 into
+#                                     Input cell 2.
+#
+# Setup:
+#   A1 = 0          (Input cell 1)
+#   A2 = 0          (Input cell 2)
+#   B1 = +A1*A2     (formula at corner of table)
+#   C1=1, D1=2, E1=3       (var-2 values, top row)
+#   B2=10, B3=20            (var-1 values, left column)
+# Table range = B1..E3, Input cell 1 = A1, Input cell 2 = A2.
+# Expected body (= var1 * var2):
+#   C2=10  D2=20  E2=30
+#   C3=20  D3=40  E3=60
+# A1 and A2 must end the operation back at their original 0 values.
+
+KEYS 0
+ENTER
+DOWN
+KEYS 0
+ENTER
+
+# B1 = +A1*A2
+HOME
+RIGHT
+KEYS +A1*A2
+ENTER
+
+# Top row: C1=1, D1=2, E1=3
+HOME
+RIGHT
+RIGHT
+KEYS 1
+ENTER
+RIGHT
+KEYS 2
+ENTER
+RIGHT
+KEYS 3
+ENTER
+
+# Left column: B2=10, B3=20
+HOME
+RIGHT
+DOWN
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+
+# Pointer to B1 (table top-left).
+HOME
+RIGHT
+
+KEY /
+KEY D
+KEY T
+KEY 2
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   table
+
+# Highlight B1..E3.
+RIGHT
+RIGHT
+RIGHT
+DOWN
+DOWN
+ENTER
+
+# Input cell 1 POINT — A1.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   Input cell 1
+ESC
+HOME
+ASSERT_POINTER    A:A1
+ENTER
+
+# Input cell 2 POINT — A2.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   Input cell 2
+HOME
+DOWN
+ASSERT_POINTER    A:A2
+ENTER
+
+ASSERT_MODE       READY
+ASSERT_CELL       A:C2  10
+ASSERT_CELL       A:D2  20
+ASSERT_CELL       A:E2  30
+ASSERT_CELL       A:C3  20
+ASSERT_CELL       A:D3  40
+ASSERT_CELL       A:E3  60
+# Input cells restored.
+ASSERT_CELL       A:A1  0
+ASSERT_CELL       A:A2  0

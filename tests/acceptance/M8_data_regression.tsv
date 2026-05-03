@@ -1,0 +1,133 @@
+# /Data Regression — univariate least-squares linear regression.
+# Flow (sticky Sort-style submenu):
+#   /DR             → opens the Regression menu
+#   X <POINT> ~     → sets X-Range
+#   Y <POINT> ~     → sets Y-Range
+#   O <POINT cell>~ → sets Output-Range top-left anchor
+#   G               → computes and writes the labeled output table
+#
+# Seed:  X = A1..A5 = 1..5, Y = B1..B5 = 2..10 step 2  (perfect line y=2x)
+# Expected:
+#   Constant            = 0
+#   Std Err of Y Est    = 0
+#   R Squared           = 1
+#   No. of Observations = 5
+#   Degrees of Freedom  = 3
+#   X Coefficient       = 2
+#   Std Err of Coef     = 0
+#
+# Output anchor: D1.  Labels in column D, scalar values in column E,
+# X-coefficient row's value in column E (single X for now).
+
+# Seed X column.
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+DOWN
+KEYS 3
+ENTER
+DOWN
+KEYS 4
+ENTER
+DOWN
+KEYS 5
+ENTER
+
+# Seed Y column.
+HOME
+RIGHT
+KEYS 2
+ENTER
+DOWN
+KEYS 4
+ENTER
+DOWN
+KEYS 6
+ENTER
+DOWN
+KEYS 8
+ENTER
+DOWN
+KEYS 10
+ENTER
+
+# Open /DR — sticky Regression menu.
+HOME
+KEY /
+KEY D
+KEY R
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   X-Range
+
+# X = X-Range → POINT A1..A5 → Enter → back to Regression menu.
+KEY X
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   X-range
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   X-Range
+
+# Y = Y-Range → POINT B1..B5 → Enter → back to Regression menu.
+# Pointer is at A5 from the X commit; Esc un-anchors so we can
+# navigate fresh to B1, anchor with `.`, then extend down to B5.
+KEY Y
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   Y-range
+ESC
+HOME
+RIGHT
+ASSERT_POINTER    A:B1
+KEY .
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+ASSERT_MODE       MENU
+
+# O = Output-Range → POINT D1 → Enter.  Pointer position alone
+# matters here (only the top-left of the chosen range is used);
+# any prior anchor is ignored by the commit handler.
+KEY O
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   output
+HOME
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER    A:D1
+ENTER
+ASSERT_MODE       MENU
+
+# G = Go.
+KEY G
+ASSERT_MODE       READY
+
+# Output table — the labels in column D are wider than the default
+# 9-char column and would render truncated; we assert via the panel-
+# line-1 readout (which shows the full source) by parking the cursor
+# on each label. Numeric values fit and are checked with ASSERT_CELL.
+ASSERT_CELL       A:E3  0
+ASSERT_CELL       A:E4  0
+ASSERT_CELL       A:E5  1
+ASSERT_CELL       A:E6  5
+ASSERT_CELL       A:E7  3
+ASSERT_CELL       A:E9  2
+ASSERT_CELL       A:E10 0
+
+# Spot-check a couple of the labels via the full-source readout.
+F 5
+KEYS D1
+ENTER
+ASSERT_PANEL_L1   A:D1: 'Regression Output:
+
+F 5
+KEYS D6
+ENTER
+ASSERT_PANEL_L1   A:D6: 'No. of Observations
