@@ -1,0 +1,51 @@
+# /Range Name Labels Right — for each label in the picked range,
+# define a 1-cell range name (the label's text) pointing at the
+# cell immediately to the right.
+
+# A1 = "tax"  (label, leading apostrophe inserted by first-char rule)
+KEYS tax
+ENTER
+# A2 = "rate"
+DOWN
+KEYS rate
+ENTER
+
+# B1 = 0.05
+HOME
+RIGHT
+KEYS .05
+ENTER
+# B2 = 0.10
+DOWN
+KEYS .1
+ENTER
+
+# /RNLR — labels-right; pick A1..A2.
+HOME
+KEY /
+KEY R
+KEY N
+KEY L
+KEY R
+ASSERT_PANEL_L3   range
+DOWN
+ENTER
+ASSERT_MODE       READY
+
+# F3 names list shows tax and rate.
+F 5
+F 3
+ASSERT_MODE       NAMES
+ASSERT_SCREEN     tax
+ASSERT_SCREEN     rate
+ESC
+ESC
+
+# Formula referencing one of the new names evaluates correctly.
+DOWN
+DOWN
+ASSERT_POINTER    A:A4
+KEY @
+KEYS SUM(tax)
+ENTER
+ASSERT_CELL       A:A4  0.05

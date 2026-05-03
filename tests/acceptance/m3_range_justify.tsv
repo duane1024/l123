@@ -1,0 +1,26 @@
+# /Range Justify — word-wrap a long label across a column block at
+# the column's width.
+
+# A1 holds a long label; B1..B... irrelevant. Default column width is 9.
+KEYS one two three four five six seven
+ENTER
+HOME
+
+# /RJ A1..A4 → wrap into 4 rows.
+KEY /
+KEY R
+KEY J
+ASSERT_PANEL_L3   justify
+KEYS A1..A4
+ENTER
+ASSERT_MODE       READY
+
+# Width is 9; words pack greedily.
+#   A1 = "one two"   (7 chars)
+#   A2 = "three"     (5)
+#   A3 = "four five" (9)
+#   A4 = "six seven" (9)
+ASSERT_CELL       A:A1  one two
+ASSERT_CELL       A:A2  three
+ASSERT_CELL       A:A3  four five
+ASSERT_CELL       A:A4  six seven
