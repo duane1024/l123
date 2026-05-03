@@ -20,6 +20,7 @@
 //!   and emulations). Catalog in `docs/AT_FUNCTIONS.md`.
 
 use l123_core::address::{col_to_letters, letters_to_col, MAX_COLS, MAX_ROWS};
+use l123_core::Address;
 
 /// Locale-specific punctuation the parser must honor when translating
 /// to Excel input. Defaults to Punct A: `,` arg-sep, `.` decimal —
@@ -74,6 +75,79 @@ pub fn to_engine_source_with_config(lotus: &str, sheets: &[&str], cfg: &ParseCon
     };
     let translated = translate(body, sheets, cfg);
     format!("={translated}")
+}
+
+/// Substitute `@CELLPOINTER(attr)` with `@CELL(attr, <cursor>)`.
+///
+/// `@CELLPOINTER` returns information about the cell holding the
+/// formula — the engine has no way to recover that context once
+/// translation reaches the IronCalc layer, so the caller must thread
+/// the address through here. Callers should run this *before*
+/// [`to_engine_source`] / [`to_engine_source_with_config`]; the
+/// resulting `@CELL(...)` then flows through the standard keyword
+/// dispatch (`"sheet"` → `SHEET(ref)`, `"coord"` → `#VALUE!`, others
+/// pass through).
+///
+/// Outside of `@CELLPOINTER(...)` the input is byte-for-byte unchanged
+/// — string literals, argument separators, and existing `@CELL(...)`
+/// calls all pass through. Bare `@CELLPOINTER` without a parenthesized
+/// arg is malformed in 1-2-3 R3.4a; this pass leaves it alone for the
+/// engine to surface as an error.
+pub fn expand_cellpointer(lotus: &str, cursor: Address) -> String {
+    let needle: &[u8] = b"CELLPOINTER";
+    let bytes = lotus.as_bytes();
+    let mut out = String::with_capacity(lotus.len());
+    let mut in_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' {
+            in_string = !in_string;
+            out.push('"');
+            i += 1;
+            continue;
+        }
+        if in_string {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        if b == b'@'
+            && bytes.len() > i + 1 + needle.len()
+            && bytes[i + 1..i + 1 + needle.len()].eq_ignore_ascii_case(needle)
+            && bytes[i + 1 + needle.len()] == b'('
+        {
+            let paren_idx = i + 1 + needle.len();
+            if let Some(close) = find_matching_paren(lotus, paren_idx) {
+                let attr = &lotus[paren_idx + 1..close];
+                // Special-case `"sheet"`: rewriting to `@CELL("sheet",
+                // <self>)` would expand to `SHEET(<self>)`, which
+                // IronCalc treats as a self-reference and flags as
+                // #CIRC!. The niladic `SHEET()` returns the formula
+                // cell's sheet without registering the dep.
+                if strip_string_literal(attr.trim())
+                    .map(|s| s.eq_ignore_ascii_case("sheet"))
+                    .unwrap_or(false)
+                {
+                    out.push_str("@SHEET()");
+                    i = close + 1;
+                    continue;
+                }
+                out.push_str("@CELL(");
+                out.push_str(attr);
+                out.push(',');
+                out.push_str(&col_to_letters(cursor.col));
+                out.push_str(&(cursor.row + 1).to_string());
+                out.push(')');
+                i = close + 1;
+                continue;
+            }
+        }
+        let ch_end = next_char_boundary(lotus, i);
+        out.push_str(&lotus[i..ch_end]);
+        i = ch_end;
+    }
+    out
 }
 
 /// One pass: handles string-literal transparency, translates `@name`
@@ -287,6 +361,7 @@ const FN_RENAMES_BACK: &[(&str, &str)] = &[
     ("DVAR", "DVARS"),
     ("UNICODE", "CODE"),
     ("DAYS360", "D360"),
+    ("ISREF", "ISRANGE"),
 ];
 
 fn lookup_reverse_rename(upper_name: &str) -> Option<&'static str> {
@@ -431,6 +506,10 @@ const FN_RENAMES: &[(&str, &str)] = &[
     // ASCII; close-enough mapping until/unless a `CODE` shim lands.
     ("CODE", "UNICODE"),
     ("D360", "DAYS360"),
+    // 1-2-3 @ISRANGE checks "is `arg` a valid range / defined range
+    // name?". Excel's ISREF is broader (any reference), but agrees on
+    // the cases users actually write — accept the small divergence.
+    ("ISRANGE", "ISREF"),
 ];
 
 /// 1-2-3 niladic functions — written without parens in 1-2-3, but
@@ -509,6 +588,21 @@ fn try_at_function(
         return Some(("#VALUE!".to_string(), j));
     }
 
+    // Case 2.6: `@DQUERY` — external-database hook, out of scope for
+    // L123. Both the bare `@DQUERY` and `@DQUERY(...)` forms collapse
+    // to the `#NAME?` error literal so the cell evaluates to ERR
+    // (matching what 1-2-3 returns when no external DB is connected).
+    // Args are swallowed; the formula-source sidecar preserves the
+    // original Lotus form on round-trip.
+    if upper == "DQUERY" {
+        let consumed = if next == Some(b'(') {
+            find_matching_paren(s, j)? + 1
+        } else {
+            j
+        };
+        return Some(("#NAME?".to_string(), consumed));
+    }
+
     // Case 3: arg-fix. Functions where the engine name is the same
     // (or trivially renamed) but argument shape needs rewriting.
     // Only triggers when `(` follows; otherwise the call is malformed
@@ -567,6 +661,8 @@ fn try_arg_fix(
         "TERM" => rewrite_term(&translated)?,
         "SUMPRODUCT" => rewrite_sumproduct(&translated)?,
         "REPLACE" => rewrite_replace(&translated)?,
+        "CELL" => rewrite_cell(&translated)?,
+        "S" => rewrite_s(&translated)?,
         _ => return None,
     };
     Some((emitted, close + 1))
@@ -622,6 +718,71 @@ fn rewrite_sumproduct(args: &[String]) -> Option<String> {
     }
     let parts: Vec<String> = args.iter().map(|a| format!("({a})")).collect();
     Some(format!("SUM({})", parts.join("*")))
+}
+
+/// `@S(range)` — return the text content of the top-left cell as a
+/// label, or `""` if that cell is blank or numeric. IronCalc 0.7.1
+/// has no equivalent; compose with `ISTEXT` and (for range args)
+/// `INDEX`. IronCalc's `INDEX` rejects non-range args (`Expecting a
+/// Range`), so for a single-cell or named-cell arg we skip INDEX and
+/// test the value directly. Ranges are detected by the presence of
+/// `:` in the already-translated arg (1-2-3 `..` is rewritten before
+/// the rewriter sees it).
+fn rewrite_s(args: &[String]) -> Option<String> {
+    if args.len() != 1 {
+        return None;
+    }
+    let r = args[0].trim();
+    let topleft = if r.contains(':') {
+        format!("INDEX({r},1,1)")
+    } else {
+        r.to_string()
+    };
+    Some(format!("IF(ISTEXT({topleft}),{topleft},\"\")"))
+}
+
+/// `@CELL(keyword, ref)` — keyword dispatch. The 1-2-3 and Excel
+/// keyword sets overlap heavily but two R3-only keywords need
+/// rewriting:
+///   * `"sheet"` → `SHEET(ref)` (returns the 1-based sheet number;
+///     IronCalc CELL itself rejects this keyword).
+///   * `"coord"` → `#VALUE!` literal (IronCalc 0.7.1 lacks ADDRESS,
+///     so reconstructing the (sheet, col, row) triple isn't possible
+///     without an engine shim).
+///
+/// All other keywords pass through unchanged: `address`, `col`,
+/// `contents`, `row`, `type` are implemented in IronCalc; `color`,
+/// `filename`, `format`, `parentheses`, `prefix`, `protect`, `width`
+/// IronCalc stubs to `#VALUE!`. Either way the user sees the right
+/// rendering. Non-literal keyword args (e.g. `@CELL(B1, A1)`) also
+/// return `None` so the call passes through verbatim.
+fn rewrite_cell(args: &[String]) -> Option<String> {
+    if args.len() != 2 {
+        return None;
+    }
+    let kw_literal = strip_string_literal(args[0].trim())?;
+    let kw = kw_literal.to_ascii_lowercase();
+    match kw.as_str() {
+        "sheet" => Some(format!("SHEET({})", args[1])),
+        "coord" => Some("#VALUE!".to_string()),
+        _ => None,
+    }
+}
+
+/// If `s` is a double-quoted string literal `"..."` with no embedded
+/// quotes, return its content. Used to recognise compile-time keyword
+/// args (e.g. `@CELL("sheet", ...)`) without committing to a full
+/// expression parser.
+fn strip_string_literal(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
+        return None;
+    }
+    let inner = &s[1..s.len() - 1];
+    if inner.contains('"') {
+        return None;
+    }
+    Some(inner.to_string())
 }
 
 /// `@REPLACE(s, start, n, new)` — IronCalc 0.7.1 has `SUBSTITUTE` but
@@ -1338,10 +1499,7 @@ mod tests {
         // 1-2-3 @D360(start, end) → Excel DAYS360(start, end). Same
         // semantics (days between dates on a 360-day-year basis); just
         // a name swap.
-        assert_eq!(
-            to_engine_source("@D360(A1,B1)", &[]),
-            "=DAYS360(A1,B1)"
-        );
+        assert_eq!(to_engine_source("@D360(A1,B1)", &[]), "=DAYS360(A1,B1)");
     }
 
     #[test]
@@ -1352,6 +1510,244 @@ mod tests {
         assert_eq!(
             to_engine_source("@DGET(A1..C5,2,E1..E2)", &[]),
             "=DGET(A1:C5,2,E1:E2)"
+        );
+    }
+
+    #[test]
+    fn dquery_emits_name_literal() {
+        // 1-2-3 @DQUERY hooks an external database; out of scope for
+        // L123. Rewrite to the Excel `#NAME?` error literal so the
+        // cell evaluates to ERR (matching what 1-2-3 returns when no
+        // DB is connected) rather than silently ignoring the call.
+        // Args are swallowed — the formula-source sidecar preserves
+        // the original Lotus form for round-trip.
+        assert_eq!(to_engine_source("@DQUERY", &[]), "=#NAME?");
+        assert_eq!(to_engine_source("@DQUERY()", &[]), "=#NAME?");
+        assert_eq!(
+            to_engine_source("@DQUERY(\"orders\",\"name=alice\")", &[]),
+            "=#NAME?"
+        );
+    }
+
+    // ---- @CELL keyword-map dispatch ----
+    //
+    // 1-2-3 R3.4a's @CELL takes the same lowercase keywords as Excel
+    // for the overlapping set — so most keywords need no rewrite (the
+    // @-strip is enough). Two R3-only keywords need attention:
+    //   * "sheet"  → IronCalc has `SHEET(ref)` which returns the same
+    //     1-based sheet number 1-2-3 wants; rewrite the call.
+    //   * "coord"  → builds a (sheet, col, row) triple. IronCalc 0.7.1
+    //     lacks ADDRESS, and SHEET alone isn't enough to reconstruct
+    //     the 1-2-3 form. Emit `#VALUE!` so the cell evaluates to ERR
+    //     until ADDRESS lands.
+    //
+    // For the rest of the keywords IronCalc 0.7.1 implements `address`,
+    // `col`, `contents`, `row`, `type`. The remaining keywords (color,
+    // filename, format, parentheses, prefix, protect, width) IronCalc
+    // recognises but stubs to `#VALUE!`; passing them through preserves
+    // that error rendering until each gets a real implementation.
+
+    #[test]
+    fn cell_passes_through_known_keywords() {
+        assert_eq!(
+            to_engine_source("@CELL(\"address\",A1)", &[]),
+            "=CELL(\"address\",A1)"
+        );
+        assert_eq!(
+            to_engine_source("@CELL(\"contents\",A1)", &[]),
+            "=CELL(\"contents\",A1)"
+        );
+        assert_eq!(
+            to_engine_source("@CELL(\"row\",A1)", &[]),
+            "=CELL(\"row\",A1)"
+        );
+        assert_eq!(
+            to_engine_source("@CELL(\"col\",A1)", &[]),
+            "=CELL(\"col\",A1)"
+        );
+        assert_eq!(
+            to_engine_source("@CELL(\"type\",A1)", &[]),
+            "=CELL(\"type\",A1)"
+        );
+        assert_eq!(
+            to_engine_source("@CELL(\"width\",A1)", &[]),
+            "=CELL(\"width\",A1)"
+        );
+    }
+
+    #[test]
+    fn cell_sheet_keyword_rewrites_to_sheet_function() {
+        // 1-2-3 @CELL("sheet", ref) returns the 1-based sheet number.
+        // IronCalc has SHEET(ref) with identical semantics; CELL itself
+        // rejects "sheet" with #VALUE!.
+        assert_eq!(to_engine_source("@CELL(\"sheet\",A1)", &[]), "=SHEET(A1)");
+        // Case-insensitive on the keyword.
+        assert_eq!(to_engine_source("@CELL(\"Sheet\",A1)", &[]), "=SHEET(A1)");
+        assert_eq!(to_engine_source("@CELL(\"SHEET\",A1)", &[]), "=SHEET(A1)");
+        // The reference arg is recursively translated like any other
+        // call (here `..` → `:`).
+        assert_eq!(
+            to_engine_source("@CELL(\"sheet\",A1..A5)", &[]),
+            "=SHEET(A1:A5)"
+        );
+    }
+
+    #[test]
+    fn cell_coord_keyword_emits_value_error() {
+        // 1-2-3 @CELL("coord", ref) returns the full address triple
+        // (worksheet, col, row). Reconstructing this needs ADDRESS,
+        // which IronCalc 0.7.1 lacks. Emit `#VALUE!` until then.
+        assert_eq!(to_engine_source("@CELL(\"coord\",A1)", &[]), "=#VALUE!");
+        assert_eq!(to_engine_source("@CELL(\"COORD\",A1)", &[]), "=#VALUE!");
+    }
+
+    #[test]
+    fn cell_dynamic_keyword_falls_through() {
+        // When the keyword arg is not a literal we recognize, the call
+        // passes through unchanged — IronCalc CELL handles whatever
+        // string the cell evaluates to at runtime.
+        assert_eq!(to_engine_source("@CELL(B1,A1)", &[]), "=CELL(B1,A1)");
+    }
+
+    // ---- @CELLPOINTER pre-pass ----
+    //
+    // @CELLPOINTER(attr) returns information about the *current* cell
+    // — the cell holding the formula. The engine doesn't know which
+    // cell that is, so the cmd layer rewrites @CELLPOINTER(...) to
+    // @CELL(..., <addr>) before handing the source to to_engine_source.
+    // The substitution itself lives in l123-parse so the syntax-layer
+    // policy stays in one place.
+
+    use l123_core::SheetId;
+
+    fn addr(col: u16, row: u32) -> Address {
+        Address::new(SheetId::A, col, row)
+    }
+
+    #[test]
+    fn cellpointer_expands_to_cell_with_cursor() {
+        assert_eq!(
+            expand_cellpointer("@CELLPOINTER(\"contents\")", addr(0, 0)),
+            "@CELL(\"contents\",A1)"
+        );
+        assert_eq!(
+            expand_cellpointer("@CELLPOINTER(\"row\")", addr(1, 4)),
+            "@CELL(\"row\",B5)"
+        );
+        assert_eq!(
+            expand_cellpointer("@CELLPOINTER(\"col\")", addr(26, 99)),
+            "@CELL(\"col\",AA100)"
+        );
+    }
+
+    #[test]
+    fn cellpointer_case_insensitive() {
+        assert_eq!(
+            expand_cellpointer("@cellpointer(\"row\")", addr(0, 0)),
+            "@CELL(\"row\",A1)"
+        );
+        assert_eq!(
+            expand_cellpointer("@CellPointer(\"col\")", addr(0, 0)),
+            "@CELL(\"col\",A1)"
+        );
+    }
+
+    #[test]
+    fn cellpointer_inside_string_literal_unchanged() {
+        assert_eq!(
+            expand_cellpointer(
+                "@IF(@CELLPOINTER(\"type\")=\"l\",\"@CELLPOINTER\",\"\")",
+                addr(0, 0)
+            ),
+            "@IF(@CELL(\"type\",A1)=\"l\",\"@CELLPOINTER\",\"\")"
+        );
+    }
+
+    #[test]
+    fn cellpointer_no_occurrence_passes_through() {
+        assert_eq!(
+            expand_cellpointer("@SUM(A1..A5)", addr(2, 3)),
+            "@SUM(A1..A5)"
+        );
+    }
+
+    #[test]
+    fn cellpointer_full_pipeline_through_to_engine_source() {
+        // After expansion the existing @CELL keyword dispatch handles
+        // the call. End-to-end check.
+        // "sheet" uses the niladic SHEET() form to dodge the self-ref
+        // that SHEET(<formula-cell>) would otherwise flag as #CIRC!.
+        let lotus = expand_cellpointer("@CELLPOINTER(\"sheet\")", addr(1, 4));
+        assert_eq!(to_engine_source(&lotus, &[]), "=SHEET()");
+        let lotus = expand_cellpointer("@CELLPOINTER(\"contents\")", addr(0, 0));
+        assert_eq!(to_engine_source(&lotus, &[]), "=CELL(\"contents\",A1)");
+        let lotus = expand_cellpointer("@CELLPOINTER(\"coord\")", addr(0, 0));
+        assert_eq!(to_engine_source(&lotus, &[]), "=#VALUE!");
+    }
+
+    #[test]
+    fn cellpointer_sheet_keyword_uses_niladic_form() {
+        // The pre-pass must skip the @CELL rewrite for "sheet" so we
+        // don't generate a SHEET(<self>) self-ref.
+        assert_eq!(
+            expand_cellpointer("@CELLPOINTER(\"sheet\")", addr(0, 0)),
+            "@SHEET()"
+        );
+        // Case-insensitive on the keyword.
+        assert_eq!(
+            expand_cellpointer("@CELLPOINTER(\"SHEET\")", addr(0, 0)),
+            "@SHEET()"
+        );
+        // Whitespace around the keyword string is tolerated.
+        assert_eq!(
+            expand_cellpointer("@CELLPOINTER( \"sheet\" )", addr(0, 0)),
+            "@SHEET()"
+        );
+    }
+
+    #[test]
+    fn cellpointer_malformed_left_alone() {
+        // Bare @CELLPOINTER without `(` is invalid in 1-2-3 (the help
+        // shows the function as taking exactly one attribute arg). We
+        // pass it through verbatim — IronCalc will surface the error.
+        assert_eq!(
+            expand_cellpointer("@CELLPOINTER", addr(0, 0)),
+            "@CELLPOINTER"
+        );
+    }
+
+    #[test]
+    fn rename_isrange_to_isref() {
+        // 1-2-3 @ISRANGE checks if its arg is a defined range name or
+        // valid range address. Excel's ISREF tests if the arg is any
+        // reference. The two agree on the cases users actually write
+        // (cell refs, range refs, defined names); 1-2-3 also returns
+        // false for non-range references but ISREF returns true. We
+        // accept the divergence — it favors reasonable behavior on
+        // the common path.
+        assert_eq!(to_engine_source("@ISRANGE(A1)", &[]), "=ISREF(A1)");
+        assert_eq!(
+            to_engine_source("@ISRANGE(A1..C5)", &[]),
+            "=ISREF(A1:C5)"
+        );
+        assert_eq!(to_engine_source("@ISRANGE(SALES)", &[]), "=ISREF(SALES)");
+    }
+
+    #[test]
+    fn s_range_emulated_via_index_istext() {
+        // @S(range) returns the text content of the top-left cell as
+        // a label, or the empty string if that cell is blank or holds
+        // a number. IronCalc 0.7.1 has no equivalent. Compose:
+        //   IF(ISTEXT(INDEX(range,1,1)),INDEX(range,1,1),"")
+        // IronCalc's INDEX rejects single-cell args, so for those we
+        // skip INDEX and test the value directly.
+        assert_eq!(
+            to_engine_source("@S(A1..C5)", &[]),
+            "=IF(ISTEXT(INDEX(A1:C5,1,1)),INDEX(A1:C5,1,1),\"\")"
+        );
+        assert_eq!(
+            to_engine_source("@S(A1)", &[]),
+            "=IF(ISTEXT(A1),A1,\"\")"
         );
     }
 
@@ -1395,6 +1791,7 @@ mod tests {
         assert_eq!(to_lotus_source("COUNTA(A1:A5)", &[]), "@COUNT(A1..A5)");
         assert_eq!(to_lotus_source("UNICODE(A1)", &[]), "@CODE(A1)");
         assert_eq!(to_lotus_source("DAYS360(A1,B1)", &[]), "@D360(A1,B1)");
+        assert_eq!(to_lotus_source("ISREF(A1)", &[]), "@ISRANGE(A1)");
     }
 
     #[test]
@@ -1500,10 +1897,7 @@ mod tests {
     fn reverse_sheet_refs() {
         let s = vec!["Sheet1", "Sheet2", "Sheet3"];
         assert_eq!(to_lotus_source("Sheet1!B3", &s), "+A:B3");
-        assert_eq!(
-            to_lotus_source("SUM(Sheet1!B3:D5)", &s),
-            "@SUM(A:B3..D5)"
-        );
+        assert_eq!(to_lotus_source("SUM(Sheet1!B3:D5)", &s), "@SUM(A:B3..D5)");
         assert_eq!(to_lotus_source("Sheet2!C7", &s), "+B:C7");
     }
 
@@ -1523,7 +1917,10 @@ mod tests {
         // through xlsx as `=@INDIRECT(...)`. The reverse translator
         // must treat the prefix `@` as a no-op.
         assert_eq!(to_lotus_source("@INDIRECT(C1)", &[]), "@@(C1)");
-        assert_eq!(to_lotus_source("@VLOOKUP(A1,B:C,2)", &[]), "@VLOOKUP(A1,B..C,2)");
+        assert_eq!(
+            to_lotus_source("@VLOOKUP(A1,B:C,2)", &[]),
+            "@VLOOKUP(A1,B..C,2)"
+        );
     }
 
     #[test]

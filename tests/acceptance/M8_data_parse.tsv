@@ -1,0 +1,75 @@
+# /Data Parse — split a column of long labels into typed fields
+# using a hand-crafted format-line label.
+#
+# Format-line syntax (after the leading `|`):
+#   L  = start of a Label field
+#   V  = start of a Value field
+#   D  = start of a Date field   (stored as a label for now)
+#   T  = start of a Time field   (stored as a label for now)
+#   S  = Skip column
+#   >  = continuation of the previous field
+#
+# This transcript skips Format-Line Create — the user types the
+# format line by hand. Coverage:
+#   /DP I  → Input-Column POINT (range includes the format-line row)
+#   /DP O  → Output-Range POINT (top-left cell)
+#   /DP G  → split each subsequent label by the format-line slots
+#
+# Seed:
+#   A1 = '|L>>>V>>>>     (format line: 3-char label, 4-char value)
+#   A2 = 'abc 100        (data row 1)
+#   A3 = 'def 200        (data row 2)
+#   A4 = 'ghi 300        (data row 3)
+# Expected at output anchor C1:
+#   C1=abc D1=100, C2=def D2=200, C3=ghi D3=300
+
+KEYS '|L>>>V>>>>
+ENTER
+DOWN
+KEYS 'abc 100
+ENTER
+DOWN
+KEYS 'def 200
+ENTER
+DOWN
+KEYS 'ghi 300
+ENTER
+
+HOME
+KEY /
+KEY D
+KEY P
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Input-Column
+
+# I = Input-Column → POINT A1..A4 → Enter → back to Parse menu.
+KEY I
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   input
+DOWN
+DOWN
+DOWN
+ENTER
+ASSERT_MODE       MENU
+
+# O = Output-Range → POINT C1 → Enter.
+KEY O
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   output
+HOME
+RIGHT
+RIGHT
+ASSERT_POINTER    A:C1
+ENTER
+ASSERT_MODE       MENU
+
+# G = Go.
+KEY G
+ASSERT_MODE       READY
+
+ASSERT_CELL       A:C1  abc
+ASSERT_CELL       A:D1  100
+ASSERT_CELL       A:C2  def
+ASSERT_CELL       A:D2  200
+ASSERT_CELL       A:C3  ghi
+ASSERT_CELL       A:D3  300

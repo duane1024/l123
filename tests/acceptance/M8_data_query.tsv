@@ -1,0 +1,236 @@
+# /Data Query — full database mode (Input + Criteria + Output and
+# Find / Extract / Del operations).
+#
+# Setup:
+#   Input range A1..C5 — header row (name/region/age) + 4 records.
+#   Criteria range E1..F2 — match records where region=east.
+#   Output range  H1..J4 — header pre-filled (name/region/age).
+#
+# Records:
+#   alice  east  30
+#   bob    west  25
+#   carol  east  40
+#   dave   east  35
+# Matches: alice, carol, dave.
+
+# ---- Input header.
+KEY "
+KEYS name
+ENTER
+RIGHT
+KEY "
+KEYS region
+ENTER
+RIGHT
+KEY "
+KEYS age
+ENTER
+
+# Records.
+HOME
+DOWN
+KEY "
+KEYS alice
+ENTER
+RIGHT
+KEY "
+KEYS east
+ENTER
+RIGHT
+KEYS 30
+ENTER
+
+HOME
+DOWN
+DOWN
+KEY "
+KEYS bob
+ENTER
+RIGHT
+KEY "
+KEYS west
+ENTER
+RIGHT
+KEYS 25
+ENTER
+
+HOME
+DOWN
+DOWN
+DOWN
+KEY "
+KEYS carol
+ENTER
+RIGHT
+KEY "
+KEYS east
+ENTER
+RIGHT
+KEYS 40
+ENTER
+
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+KEY "
+KEYS dave
+ENTER
+RIGHT
+KEY "
+KEYS east
+ENTER
+RIGHT
+KEYS 35
+ENTER
+
+# ---- Criteria range header (E1..F1) and one criterion row (E2..F2).
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+KEY "
+KEYS region
+ENTER
+RIGHT
+KEY "
+KEYS age
+ENTER
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+DOWN
+KEY "
+KEYS east
+ENTER
+
+# ---- Output range header (H1..J1).
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+KEY "
+KEYS name
+ENTER
+RIGHT
+KEY "
+KEYS region
+ENTER
+RIGHT
+KEY "
+KEYS age
+ENTER
+
+# ---- /DQ — Query menu.
+HOME
+KEY /
+KEY D
+KEY Q
+ASSERT_MODE       MENU
+
+# I = Input → POINT A1..C5.
+KEY I
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   input
+DOWN
+DOWN
+DOWN
+DOWN
+RIGHT
+RIGHT
+ENTER
+ASSERT_MODE       MENU
+
+# C = Criteria → POINT E1..F2.
+KEY C
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   criteria
+ESC
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER    A:E1
+KEY .
+RIGHT
+DOWN
+ENTER
+ASSERT_MODE       MENU
+
+# O = Output → POINT H1..J4 (header + space for 3 matches).
+KEY O
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   output
+ESC
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER    A:H1
+KEY .
+RIGHT
+RIGHT
+DOWN
+DOWN
+DOWN
+ENTER
+ASSERT_MODE       MENU
+
+# E = Extract → matching records appear at H2..J4.
+KEY E
+ASSERT_MODE       READY
+
+# Output header is preserved.
+ASSERT_CELL       A:H1  name
+ASSERT_CELL       A:I1  region
+ASSERT_CELL       A:J1  age
+# Matches: alice/east/30, carol/east/40, dave/east/35 (in input order).
+ASSERT_CELL       A:H2  alice
+ASSERT_CELL       A:I2  east
+ASSERT_CELL       A:J2  30
+ASSERT_CELL       A:H3  carol
+ASSERT_CELL       A:I3  east
+ASSERT_CELL       A:J3  40
+ASSERT_CELL       A:H4  dave
+ASSERT_CELL       A:I4  east
+ASSERT_CELL       A:J4  35
+
+# ---- Find — pointer jumps to the first matching input record (alice/A2).
+HOME
+KEY /
+KEY D
+KEY Q
+KEY F
+ASSERT_MODE       READY
+ASSERT_POINTER    A:A2
+
+# ---- Del — drop matching records (alice, carol, dave); only bob remains.
+HOME
+KEY /
+KEY D
+KEY Q
+KEY D
+ASSERT_MODE       READY
+
+# After Del, the input range still has its header at row 1 and only
+# bob's record at row 2; rows 3..5 are blank.
+ASSERT_CELL       A:A1  name
+ASSERT_CELL       A:A2  bob
+ASSERT_CELL       A:B2  west
+ASSERT_CELL       A:C2  25
+ASSERT_CELL       A:A3
+ASSERT_CELL       A:A4
+ASSERT_CELL       A:A5

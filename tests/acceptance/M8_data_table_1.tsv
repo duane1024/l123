@@ -1,0 +1,84 @@
+# /Data Table 1 — one-input what-if table.
+#
+# Layout convention:
+#   row 1 of the table range:  [empty corner] [formula1] [formula2] ...
+#   col 1 of the table range:  [variable values, one per row]
+#   body cells:                filled by /DT 1 with each formula
+#                              re-evaluated after substituting the
+#                              variable value into Input cell 1.
+#
+# Setup:
+#   A1 = 0          (Input cell 1 — what the formula references)
+#   C1 = +A1*A1     (formula at top of table)
+#   B1 = (empty)    (table corner)
+#   B2..B5 = 1,2,3,4 (variable values)
+# Table range = B1..C5, Input cell 1 = A1.
+# Expected after /DT 1:
+#   C2 = 1   (1*1)
+#   C3 = 4   (2*2)
+#   C4 = 9   (3*3)
+#   C5 = 16  (4*4)
+# A1 must end the operation back at its original value (0).
+
+# A1 = 0
+KEYS 0
+ENTER
+
+# C1 = +A1*A1
+HOME
+RIGHT
+RIGHT
+KEYS +A1*A1
+ENTER
+
+# Variable values in B2..B5.
+HOME
+RIGHT
+DOWN
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+DOWN
+KEYS 3
+ENTER
+DOWN
+KEYS 4
+ENTER
+
+# Pointer to B1 (table top-left).
+HOME
+RIGHT
+
+KEY /
+KEY D
+KEY T
+ASSERT_MODE       MENU
+KEY 1
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   table
+
+# Highlight B1..C5.
+RIGHT
+DOWN
+DOWN
+DOWN
+DOWN
+ENTER
+
+# Input cell 1 POINT — single cell A1.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   Input cell
+ESC
+HOME
+ASSERT_POINTER    A:A1
+ENTER
+
+ASSERT_MODE       READY
+ASSERT_CELL       A:C2  1
+ASSERT_CELL       A:C3  4
+ASSERT_CELL       A:C4  9
+ASSERT_CELL       A:C5  16
+# A1 restored to its original value.
+ASSERT_CELL       A:A1  0

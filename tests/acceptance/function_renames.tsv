@@ -159,3 +159,23 @@ KEYS DGET(F1..G3,2,I1..I2)
 ENTER
 ASSERT_CELL       A:B9  30
 ASSERT_PANEL_L1   A:B9: (G) @DGET(F1..G3,2,I1..I2)
+
+# @ISRANGE → ISREF. ISREF returns a Bool; the renderer paints it as
+# "TRUE"/"FALSE" today. Authentic 1-2-3 displays booleans as 1/0;
+# that's a separate cleanup that affects every IS* function.
+F 5
+KEYS B10
+ENTER
+KEY @
+KEYS ISRANGE(A1)
+ENTER
+ASSERT_CELL       A:B10  TRUE
+ASSERT_PANEL_L1   A:B10: (G) @ISRANGE(A1)
+
+F 5
+KEYS B11
+ENTER
+KEY @
+KEYS ISRANGE(A1..A5)
+ENTER
+ASSERT_CELL       A:B11  TRUE

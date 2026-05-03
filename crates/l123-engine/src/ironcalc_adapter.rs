@@ -25,9 +25,9 @@ use ironcalc_xlsx::import::load_from_xlsx;
 use ironcalc_lotus::load_from_wk3_bytes;
 
 use l123_core::{
-    address::col_to_letters, Address, Alignment, Border, BorderEdge, BorderStyle, Comment, Fill,
-    FillPattern, FontStyle, Format, HAlign, Merge, Range, RgbColor, SheetId, SheetState, Table,
-    TableColumn, TableStyle, TextStyle, VAlign, Value,
+    address::col_to_letters, Address, Alignment, Border, BorderEdge, BorderStyle, Comment, ErrKind,
+    Fill, FillPattern, FontStyle, Format, HAlign, Merge, Range, RgbColor, SheetId, SheetState,
+    Table, TableColumn, TableStyle, TextStyle, VAlign, Value,
 };
 
 use crate::engine::{CellView, Engine, EngineError, Result};
@@ -91,14 +91,25 @@ impl Engine for IronCalcEngine {
             .model
             .get_cell_value_by_index(sheet, row, col)
             .map_err(EngineError::Backend)?;
+        // Formula retrieval is optional for M0; attempted but non-fatal.
+        let formula = self.model.get_cell_formula(sheet, row, col).ok().flatten();
         let value = match cv {
             ironcalc_xlsx::base::cell::CellValue::None => Value::Empty,
-            ironcalc_xlsx::base::cell::CellValue::String(s) => Value::Text(s),
+            // IronCalc 0.7.1's CellValue has no Error variant; formulas
+            // that evaluate to errors come back as String("#VALUE!"),
+            // String("#DIV/0!"), etc. Only invert when the cell is a
+            // formula — a user-typed label like `'#VALUE!` reaches the
+            // same arm but must pass through as text.
+            ironcalc_xlsx::base::cell::CellValue::String(s) => {
+                if formula.is_some() {
+                    string_to_value(s)
+                } else {
+                    Value::Text(s)
+                }
+            }
             ironcalc_xlsx::base::cell::CellValue::Number(n) => Value::Number(n),
             ironcalc_xlsx::base::cell::CellValue::Boolean(b) => Value::Bool(b),
         };
-        // Formula retrieval is optional for M0; attempted but non-fatal.
-        let formula = self.model.get_cell_formula(sheet, row, col).ok().flatten();
         Ok(CellView {
             value,
             formula,
@@ -1290,6 +1301,27 @@ pub(crate) fn col_letters_1based(c: i32) -> Option<String> {
     number_to_column(c)
 }
 
+/// IronCalc 0.7.1's `CellValue` enum has no `Error` variant — formulas
+/// that evaluate to errors come back as `CellValue::String("#VALUE!")`,
+/// `"#DIV/0!"`, etc. Invert the codes so the renderer paints the
+/// Lotus-style `ERR`/`NA` tag instead of literal text. Strings that
+/// don't match a known Excel error code pass through as `Value::Text`.
+fn string_to_value(s: String) -> Value {
+    let kind = match s.as_str() {
+        "#VALUE!" => Some(ErrKind::Value),
+        "#DIV/0!" => Some(ErrKind::DivZero),
+        "#N/A" => Some(ErrKind::Na),
+        "#NAME?" => Some(ErrKind::Name),
+        "#NUM!" => Some(ErrKind::Num),
+        "#REF!" => Some(ErrKind::Ref),
+        _ => None,
+    };
+    match kind {
+        Some(k) => Value::Error(k),
+        None => Value::Text(s),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1327,6 +1359,68 @@ mod tests {
         e.recalc();
         let cv = e.get_cell(Address::new(SheetId::A, 0, 0)).unwrap();
         assert_eq!(cv.value, Value::Text("hello".into()));
+    }
+
+    #[test]
+    fn excel_error_codes_map_to_value_error() {
+        // IronCalc 0.7.1's CellValue has no Error variant — errors come
+        // back as String payloads. The adapter must invert the codes
+        // back to Value::Error so the renderer paints the Lotus-style
+        // ERR/NA tag instead of the literal text.
+        use l123_core::ErrKind;
+        let mut e = IronCalcEngine::new().unwrap();
+        // Plain literal: =#VALUE!
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "=#VALUE!")
+            .unwrap();
+        // 1/0 → #DIV/0!
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "=1/0")
+            .unwrap();
+        // =NA() → #N/A
+        e.set_user_input(Address::new(SheetId::A, 0, 2), "=NA()")
+            .unwrap();
+        // Reference to an undefined name → #NAME?
+        e.set_user_input(Address::new(SheetId::A, 0, 3), "=BOGUS_NAME")
+            .unwrap();
+        // SQRT(-1) is out of domain → #NUM!
+        e.set_user_input(Address::new(SheetId::A, 0, 4), "=SQRT(-1)")
+            .unwrap();
+        // #REF! literal.
+        e.set_user_input(Address::new(SheetId::A, 0, 5), "=#REF!")
+            .unwrap();
+        e.recalc();
+        let cells: Vec<Value> = (0..6)
+            .map(|r| {
+                e.get_cell(Address::new(SheetId::A, 0, r as u32))
+                    .unwrap()
+                    .value
+            })
+            .collect();
+        assert_eq!(cells[0], Value::Error(ErrKind::Value));
+        assert_eq!(cells[1], Value::Error(ErrKind::DivZero));
+        assert_eq!(cells[2], Value::Error(ErrKind::Na));
+        assert_eq!(cells[3], Value::Error(ErrKind::Name));
+        assert_eq!(cells[4], Value::Error(ErrKind::Num));
+        assert_eq!(cells[5], Value::Error(ErrKind::Ref));
+    }
+
+    #[test]
+    fn non_error_strings_still_pass_through_as_text() {
+        // Make sure the error-code inversion doesn't accidentally swallow
+        // user labels that happen to start with `#` or look error-ish.
+        let mut e = IronCalcEngine::new().unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "'#VALUE!")
+            .unwrap();
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "'#hashtag")
+            .unwrap();
+        e.recalc();
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 0, 0)).unwrap().value,
+            Value::Text("#VALUE!".into())
+        );
+        assert_eq!(
+            e.get_cell(Address::new(SheetId::A, 0, 1)).unwrap().value,
+            Value::Text("#hashtag".into())
+        );
     }
 
     #[test]

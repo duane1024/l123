@@ -74,7 +74,10 @@ pub enum MacroAction {
     If(String),
     /// Subroutine call `{loc arg1,arg2,...}` — push a return frame
     /// and set the PC to `loc`.
-    Subroutine { loc: String, args: Vec<String> },
+    Subroutine {
+        loc: String,
+        args: Vec<String>,
+    },
     /// `{DEFINE arg-loc[: type]...}` — declare a subroutine's
     /// positional argument cells. Stub: the interpreter currently
     /// ignores the arg-binding side; recognized so it doesn't
@@ -86,7 +89,10 @@ pub enum MacroAction {
     /// `:value` suffix on `expr` forces a coercion (Lotus syntax);
     /// for now we drop it and let the source parser figure out the
     /// shape.
-    Let { loc: String, expr: String },
+    Let {
+        loc: String,
+        expr: String,
+    },
     /// `{BLANK range}` — erase the cells at `range` (no journal
     /// note: we re-use the existing /Range Erase plumbing on the UI
     /// side so this is undoable).
@@ -103,10 +109,16 @@ pub enum MacroAction {
     /// `{GETLABEL prompt-text, loc}` — pause, show `prompt-text` in
     /// the control panel, accept user input, store the result at
     /// `loc` as a label.
-    GetLabel { prompt_text: String, loc: String },
+    GetLabel {
+        prompt_text: String,
+        loc: String,
+    },
     /// `{GETNUMBER prompt-text, loc}` — same as `{GETLABEL}` but the
     /// commit is parsed as a number.
-    GetNumber { prompt_text: String, loc: String },
+    GetNumber {
+        prompt_text: String,
+        loc: String,
+    },
     /// `{MENUBRANCH loc}` — open a custom menu whose definition
     /// lives at `loc` (item names in row 0, descriptions in row 1,
     /// macro bodies starting at row 2). On selection the
@@ -130,7 +142,10 @@ pub enum MacroAction {
     /// recognized so a macro source using it doesn't fail to lex;
     /// proper trap behavior is a follow-up once `set_error` learns
     /// to consult the macro state.
-    OnError { branch: String, msg_loc: String },
+    OnError {
+        branch: String,
+        msg_loc: String,
+    },
 }
 
 /// Errors the lexer can raise. Macro execution converts these into a
@@ -459,7 +474,10 @@ fn split_args(tail: &str) -> Vec<String> {
 /// treated as the prefix and `loc` is empty.
 fn split_last_comma(tail: &str) -> (String, String) {
     match tail.rfind(',') {
-        Some(i) => (tail[..i].trim().to_string(), tail[i + 1..].trim().to_string()),
+        Some(i) => (
+            tail[..i].trim().to_string(),
+            tail[i + 1..].trim().to_string(),
+        ),
         None => (tail.trim().to_string(), String::new()),
     }
 }
@@ -581,7 +599,11 @@ mod tests {
     fn metachar_escapes_round_trip() {
         assert_eq!(
             lex_ok("{TILDE}{LBRACE}{RBRACE}"),
-            vec![MacroKey::Char('~'), MacroKey::Char('{'), MacroKey::Char('}')]
+            vec![
+                MacroKey::Char('~'),
+                MacroKey::Char('{'),
+                MacroKey::Char('}')
+            ]
         );
     }
 

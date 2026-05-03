@@ -1,0 +1,122 @@
+# /Data Sort with Primary + Secondary + Extra keys all in play.
+# Tiebreak chain: when Primary keys are equal, fall through to
+# Secondary; when Secondary keys are also equal, fall through to
+# Extra. Each key has its own Asc/Desc choice.
+#
+# Setup: A=region (string), B=segment (string), C=score (number).
+# Sort by A asc, then B asc, then C desc — the tiebreaker chain
+# kicks in only on the rows where A AND B are equal.
+
+KEY "
+KEYS east
+ENTER
+RIGHT
+KEY "
+KEYS small
+ENTER
+RIGHT
+KEYS 5
+ENTER
+
+HOME
+DOWN
+KEY "
+KEYS east
+ENTER
+RIGHT
+KEY "
+KEYS small
+ENTER
+RIGHT
+KEYS 9
+ENTER
+
+HOME
+DOWN
+DOWN
+KEY "
+KEYS east
+ENTER
+RIGHT
+KEY "
+KEYS large
+ENTER
+RIGHT
+KEYS 3
+ENTER
+
+HOME
+DOWN
+DOWN
+DOWN
+KEY "
+KEYS west
+ENTER
+RIGHT
+KEY "
+KEYS small
+ENTER
+RIGHT
+KEYS 1
+ENTER
+
+HOME
+KEY /
+KEY D
+KEY S
+ASSERT_MODE       MENU
+
+# Data-Range = A1..C4
+KEY D
+DOWN
+DOWN
+DOWN
+RIGHT
+RIGHT
+ENTER
+
+# Primary-Key = A1, Ascending
+KEY P
+ESC
+HOME
+ENTER
+KEY A
+
+# Secondary-Key = B1, Ascending
+KEY S
+ESC
+HOME
+RIGHT
+ENTER
+KEY A
+
+# Extra-Key = C1, Descending
+KEY E
+ESC
+HOME
+RIGHT
+RIGHT
+ENTER
+KEY D
+
+# Go.
+KEY G
+ASSERT_MODE       READY
+
+# Expected order after sort by A asc, B asc, C desc:
+#   row 1: east, large, 3
+#   row 2: east, small, 9   (tie on A=east+B=small → C=9 first by C desc)
+#   row 3: east, small, 5
+#   row 4: west, small, 1
+ASSERT_CELL       A:A1  east
+ASSERT_CELL       A:B1  large
+ASSERT_CELL       A:C1  3
+ASSERT_CELL       A:A2  east
+ASSERT_CELL       A:B2  small
+ASSERT_CELL       A:C2  9
+ASSERT_CELL       A:A3  east
+ASSERT_CELL       A:B3  small
+ASSERT_CELL       A:C3  5
+ASSERT_CELL       A:A4  west
+ASSERT_CELL       A:B4  small
+ASSERT_CELL       A:C4  1

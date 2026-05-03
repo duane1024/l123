@@ -530,6 +530,164 @@ pub enum Action {
     DisplayOptionsGridYes,
     /// `:Display Options Grid No` — hide row/column gutter.
     DisplayOptionsGridNo,
+
+    /// `/Data Fill` — POINT for the fill range, then prompt for
+    /// Start, Step, and Stop. Writes the arithmetic sequence into
+    /// the range column-major (down each column, left to right),
+    /// stopping when the next computed value would exceed Stop.
+    DataFill,
+
+    /// `/Data Sort Data-Range` — POINT for the rectangular range
+    /// of records to sort. Stored on `App.data_sort` and surviving
+    /// across visits to the Sort menu.
+    DataSortDataRange,
+    /// `/Data Sort Primary-Key` — POINT for any cell in the desired
+    /// key column, then descend into the Asc/Desc submenu.
+    DataSortPrimaryKey,
+    /// `/Data Sort Secondary-Key` — same shape as Primary-Key, used
+    /// as the tiebreaker when primary keys compare equal.
+    DataSortSecondaryKey,
+    /// `/Data Sort Reset` — clear data range and all key
+    /// definitions; return to the Sort menu.
+    DataSortReset,
+    /// `/Data Sort Go` — execute the sort using the currently
+    /// configured data range and keys. Refuses (no-op) when the
+    /// data range or primary key is unset.
+    DataSortGo,
+    /// `/Data Sort Quit` — return to READY without executing.
+    DataSortQuit,
+    /// `/Data Sort … Ascending` — bind the in-flight key direction
+    /// to ascending and re-enter the Sort menu.
+    DataSortAscending,
+    /// `/Data Sort … Descending` — bind the in-flight key direction
+    /// to descending and re-enter the Sort menu.
+    DataSortDescending,
+    /// `/Data Sort Extra-Key` — POINT for any cell in a third
+    /// tiebreaker column. Asc/Desc submenu writes the slot.
+    DataSortExtraKey,
+
+    /// `/Data Distribution` — POINT for the values range, then POINT
+    /// for the bin range (single column). Writes a frequency
+    /// distribution into the column immediately right of the bins,
+    /// with one extra row at the bottom for the over-the-largest-bin
+    /// overflow count.
+    DataDistribution,
+
+    /// `/Data Regression X-Range` — POINT for the independent-variable
+    /// column. Univariate today; multivariate (multi-column X) is
+    /// deferred.
+    DataRegressionXRange,
+    /// `/Data Regression Y-Range` — POINT for the dependent-variable
+    /// column. Must be the same length as X-Range to participate in Go.
+    DataRegressionYRange,
+    /// `/Data Regression Output-Range` — POINT for the top-left cell
+    /// of the labeled output table.
+    DataRegressionOutputRange,
+    /// `/Data Regression Intercept Compute` — fit the intercept term
+    /// (default).
+    DataRegressionInterceptCompute,
+    /// `/Data Regression Intercept Zero` — fix the intercept at zero
+    /// (force-through-origin regression).
+    DataRegressionInterceptZero,
+    /// `/Data Regression Reset` — clear all ranges and revert
+    /// intercept to Compute.
+    DataRegressionReset,
+    /// `/Data Regression Go` — compute the regression and write the
+    /// output table at the configured anchor.
+    DataRegressionGo,
+    /// `/Data Regression Quit` — return to READY without executing.
+    DataRegressionQuit,
+
+    /// `/Data Matrix Invert` — POINT a square matrix and an output
+    /// anchor, then write the Gauss-Jordan inverse to the output.
+    DataMatrixInvert,
+    /// `/Data Matrix Multiply` — POINT matrix A, matrix B, and an
+    /// output anchor; write A*B (cols(A) must equal rows(B)).
+    DataMatrixMultiply,
+
+    /// `/Data Parse Input-Column` — POINT for the column of long
+    /// labels to split, including the format-line row at the top.
+    DataParseInputColumn,
+    /// `/Data Parse Output-Range` — POINT for the top-left cell of
+    /// the parsed output rectangle.
+    DataParseOutputRange,
+    /// `/Data Parse Reset` — clear input column and output anchor.
+    DataParseReset,
+    /// `/Data Parse Go` — execute the parse using the configured
+    /// input/output ranges and the in-cell format line.
+    DataParseGo,
+    /// `/Data Parse Quit` — return to READY without executing.
+    DataParseQuit,
+
+    /// `/Data Table 1` — POINT for the table range, then for
+    /// Input cell 1; substitute each variable value in the left
+    /// column into Input cell 1 and fill the body with the
+    /// recalculated top-row formulas.
+    DataTable1,
+    /// `/Data Table 2` — POINT for the table range, then for
+    /// Input cells 1 and 2. The corner cell holds the formula;
+    /// the left column supplies values for Input cell 1 and the
+    /// top row for Input cell 2. Body[i,j] is the formula
+    /// evaluated with both substitutions applied.
+    DataTable2,
+    /// `/Data Table Reset` — return to READY without executing.
+    /// Today the Table executors are stateless one-shots, so this
+    /// is just a clean menu close.
+    DataTableReset,
+    /// `/Data Parse Format-Line Create` — auto-generate a format
+    /// line above the first data row by splitting it on whitespace
+    /// runs (each run becomes an `L` field). Refuses with a
+    /// status-line error when no input column is set.
+    DataParseFormatLineCreate,
+    /// `/Data Parse Format-Line Edit` — open the format-line cell
+    /// (top of the input column) in EDIT mode.
+    DataParseFormatLineEdit,
+
+    /// `/Data Query Input` — POINT for the input range. Top row
+    /// is the field-name header; subsequent rows are records.
+    DataQueryInput,
+    /// `/Data Query Criteria` — POINT for the criteria range.
+    /// Top row holds field-name headers (subset of the input
+    /// header); subsequent rows are criterion records (rows OR'd,
+    /// cells in a row AND'd).
+    DataQueryCriteria,
+    /// `/Data Query Output` — POINT for the output range. If the
+    /// top row contains field names, Extract writes only those
+    /// fields; otherwise all input fields are copied in input
+    /// order.
+    DataQueryOutput,
+    /// `/Data Query Find` — move the pointer to the first record
+    /// in the input range that matches the criteria.
+    DataQueryFind,
+    /// `/Data Query Extract` — copy all matching records into the
+    /// output range below its header row.
+    DataQueryExtract,
+    /// `/Data Query Unique` — like Extract, but skips records whose
+    /// extracted-field tuple duplicates an earlier-extracted one.
+    DataQueryUnique,
+    /// `/Data Query Del` — delete every matching record from the
+    /// input range and shift subsequent records up. The header
+    /// row stays put.
+    DataQueryDel,
+    /// `/Data Query Reset` — clear input, criteria, and output
+    /// settings.
+    DataQueryReset,
+    /// `/Data Query Quit` — return to READY without executing.
+    DataQueryQuit,
+
+    /// `/Data Table 3` — placeholder action that surfaces a
+    /// status-line "not yet implemented" message. The 3D table
+    /// flavor needs multi-sheet POINT plumbing we haven't wired.
+    DataTable3Stub,
+    /// `/Data Table Labeled` — placeholder action; needs the
+    /// lookup-by-named-range table semantics we haven't wired.
+    DataTableLabeledStub,
+    /// `/Data Query Modify` — placeholder action; the
+    /// Extract/Replace/Insert sub-flow isn't wired.
+    DataQueryModifyStub,
+    /// Shared by every `/Data External` leaf — no external
+    /// database driver is configured in L123.
+    DataExternalStub,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -2830,30 +2988,394 @@ const GRAPH_MENU: &[MenuItem] = &[
     },
 ];
 
+const DATA_TABLE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: '1',
+        name: "1",
+        help: "One-variable what-if table",
+        body: MenuBody::Action(Action::DataTable1),
+    },
+    MenuItem {
+        letter: '2',
+        name: "2",
+        help: "Two-variable what-if table",
+        body: MenuBody::Action(Action::DataTable2),
+    },
+    MenuItem {
+        letter: '3',
+        name: "3",
+        help: "Three-variable what-if table (R3+) — not yet implemented",
+        body: MenuBody::Action(Action::DataTable3Stub),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Labeled",
+        help: "Labeled what-if table (R3+) — not yet implemented",
+        body: MenuBody::Action(Action::DataTableLabeledStub),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Clear table ranges and input cells",
+        body: MenuBody::Action(Action::DataTableReset),
+    },
+];
+
+/// Direction submenu shared by the Primary-Key and Secondary-Key
+/// flows. Which slot is being set is tracked on the App, not in the
+/// menu — both leaves resolve to the same Action regardless of which
+/// key invoked them.
+pub const DATA_SORT_DIR_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "Ascending",
+        help: "Sort low-to-high (numbers ascending, labels A→Z)",
+        body: MenuBody::Action(Action::DataSortAscending),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Descending",
+        help: "Sort high-to-low (numbers descending, labels Z→A)",
+        body: MenuBody::Action(Action::DataSortDescending),
+    },
+];
+
+pub const DATA_PARSE_FORMAT_LINE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Create",
+        help: "Auto-create a format line above the input column",
+        body: MenuBody::Action(Action::DataParseFormatLineCreate),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "Edit",
+        help: "Edit the format line in the EDIT-mode buffer",
+        body: MenuBody::Action(Action::DataParseFormatLineEdit),
+    },
+];
+
+pub const DATA_PARSE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'F',
+        name: "Format-Line",
+        help: "Auto-create or edit the format-line label",
+        body: MenuBody::Submenu(DATA_PARSE_FORMAT_LINE_MENU),
+    },
+    MenuItem {
+        letter: 'I',
+        name: "Input-Column",
+        help: "Column of long labels to parse (includes the format-line row)",
+        body: MenuBody::Action(Action::DataParseInputColumn),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Output-Range",
+        help: "Top-left cell for the parsed-out fields",
+        body: MenuBody::Action(Action::DataParseOutputRange),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Clear input and output settings",
+        body: MenuBody::Action(Action::DataParseReset),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Go",
+        help: "Parse each label according to the format line",
+        body: MenuBody::Action(Action::DataParseGo),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::DataParseQuit),
+    },
+];
+
+pub const DATA_REGRESSION_INTERCEPT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Compute",
+        help: "Fit the intercept term (default)",
+        body: MenuBody::Action(Action::DataRegressionInterceptCompute),
+    },
+    MenuItem {
+        letter: 'Z',
+        name: "Zero",
+        help: "Force the intercept to zero (regression through origin)",
+        body: MenuBody::Action(Action::DataRegressionInterceptZero),
+    },
+];
+
+pub const DATA_REGRESSION_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'X',
+        name: "X-Range",
+        help: "Independent variable column",
+        body: MenuBody::Action(Action::DataRegressionXRange),
+    },
+    MenuItem {
+        letter: 'Y',
+        name: "Y-Range",
+        help: "Dependent variable column",
+        body: MenuBody::Action(Action::DataRegressionYRange),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Output-Range",
+        help: "Top-left cell for the labeled output table",
+        body: MenuBody::Action(Action::DataRegressionOutputRange),
+    },
+    MenuItem {
+        letter: 'I',
+        name: "Intercept",
+        help: "Compute or zero the intercept term",
+        body: MenuBody::Submenu(DATA_REGRESSION_INTERCEPT_MENU),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Clear all ranges and revert Intercept to Compute",
+        body: MenuBody::Action(Action::DataRegressionReset),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Go",
+        help: "Run the regression and write the output table",
+        body: MenuBody::Action(Action::DataRegressionGo),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::DataRegressionQuit),
+    },
+];
+
+pub const DATA_SORT_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'D',
+        name: "Data-Range",
+        help: "Range of records to sort",
+        body: MenuBody::Action(Action::DataSortDataRange),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Primary-Key",
+        help: "Primary sort key cell + Ascending/Descending",
+        body: MenuBody::Action(Action::DataSortPrimaryKey),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Secondary-Key",
+        help: "Secondary sort key cell + Ascending/Descending",
+        body: MenuBody::Action(Action::DataSortSecondaryKey),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "Extra-Key",
+        help: "Additional sort key, used as third tiebreaker (R3+)",
+        body: MenuBody::Action(Action::DataSortExtraKey),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Clear all sort settings",
+        body: MenuBody::Action(Action::DataSortReset),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Go",
+        help: "Perform the sort",
+        body: MenuBody::Action(Action::DataSortGo),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::DataSortQuit),
+    },
+];
+
+pub const DATA_QUERY_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'I',
+        name: "Input",
+        help: "Range of records (with field-name header row)",
+        body: MenuBody::Action(Action::DataQueryInput),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Criteria",
+        help: "Range of search criteria",
+        body: MenuBody::Action(Action::DataQueryCriteria),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Output",
+        help: "Range to receive matching records",
+        body: MenuBody::Action(Action::DataQueryOutput),
+    },
+    MenuItem {
+        letter: 'F',
+        name: "Find",
+        help: "Highlight records that match the criteria",
+        body: MenuBody::Action(Action::DataQueryFind),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "Extract",
+        help: "Copy matching records to the output range",
+        body: MenuBody::Action(Action::DataQueryExtract),
+    },
+    MenuItem {
+        letter: 'U',
+        name: "Unique",
+        help: "Extract unique matching records",
+        body: MenuBody::Action(Action::DataQueryUnique),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Del",
+        help: "Delete matching records from the input range",
+        body: MenuBody::Action(Action::DataQueryDel),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Modify",
+        help: "Edit matching records in place — not yet implemented",
+        body: MenuBody::Action(Action::DataQueryModifyStub),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Clear input, criteria, and output ranges",
+        body: MenuBody::Action(Action::DataQueryReset),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::DataQueryQuit),
+    },
+];
+
+const DATA_MATRIX_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'I',
+        name: "Invert",
+        help: "Invert a square matrix (up to 90×90)",
+        body: MenuBody::Action(Action::DataMatrixInvert),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Multiply",
+        help: "Multiply two matrices",
+        body: MenuBody::Action(Action::DataMatrixMultiply),
+    },
+];
+
+const DATA_EXTERNAL_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'U',
+        name: "Use",
+        help: "Connect to an external database driver",
+        body: MenuBody::Action(Action::DataExternalStub),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "List",
+        help: "List available external tables / fields",
+        body: MenuBody::Action(Action::DataExternalStub),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Create",
+        help: "Create an external table",
+        body: MenuBody::Action(Action::DataExternalStub),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Delete",
+        help: "Delete an external table",
+        body: MenuBody::Action(Action::DataExternalStub),
+    },
+    MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "Driver-specific options (Send / Translation)",
+        body: MenuBody::Action(Action::DataExternalStub),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Disconnect all external tables",
+        body: MenuBody::Action(Action::DataExternalStub),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::DataExternalStub),
+    },
+];
+
 const DATA_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'F',
         name: "Fill",
         help: "Fill a range with a sequence",
-        body: MenuBody::NotImplemented("d-fill"),
+        body: MenuBody::Action(Action::DataFill),
     },
     MenuItem {
         letter: 'T',
         name: "Table",
         help: "What-if tables (1, 2, 3, Labeled)",
-        body: MenuBody::NotImplemented("d-table"),
+        body: MenuBody::Submenu(DATA_TABLE_MENU),
     },
     MenuItem {
         letter: 'S',
         name: "Sort",
         help: "Sort a range by keys",
-        body: MenuBody::NotImplemented("d-sort"),
+        body: MenuBody::Submenu(DATA_SORT_MENU),
     },
     MenuItem {
         letter: 'Q',
         name: "Query",
         help: "Database query (find, extract, ...)",
-        body: MenuBody::NotImplemented("d-query"),
+        body: MenuBody::Submenu(DATA_QUERY_MENU),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Distribution",
+        help: "Frequency distribution into bins",
+        body: MenuBody::Action(Action::DataDistribution),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Matrix",
+        help: "Invert / Multiply matrices",
+        body: MenuBody::Submenu(DATA_MATRIX_MENU),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Regression",
+        help: "Linear regression on X and Y ranges",
+        body: MenuBody::Submenu(DATA_REGRESSION_MENU),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Parse",
+        help: "Parse a column of long labels into fields",
+        body: MenuBody::Submenu(DATA_PARSE_MENU),
+    },
+    MenuItem {
+        letter: 'E',
+        name: "External",
+        help: "External database tables (Use, List, ...)",
+        body: MenuBody::Submenu(DATA_EXTERNAL_MENU),
     },
 ];
 
@@ -4099,6 +4621,110 @@ mod tests {
                 MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
                 other => panic!("expected Action for {path:?}, got {other:?}"),
             }
+        }
+    }
+
+    /// /Data top level should expose all nine entries from MENU.md, in
+    /// canonical order, with the first letter of each as accelerator.
+    #[test]
+    fn data_top_level_has_all_nine_entries() {
+        let data = resolve(&['D']).unwrap();
+        let kids = children(data);
+        let names: Vec<&str> = kids.iter().map(|m| m.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Fill",
+                "Table",
+                "Sort",
+                "Query",
+                "Distribution",
+                "Matrix",
+                "Regression",
+                "Parse",
+                "External",
+            ]
+        );
+    }
+
+    /// Every leaf reachable through /Data must be either an Action or a
+    /// NotImplemented placeholder; no Submenu nodes that don't lead to
+    /// a real terminal — the muscle-memory promise (SPEC §10) is that
+    /// every path resolves to *something*, even if it just says "Not
+    /// implemented yet" in line 3.
+    #[test]
+    fn data_subtrees_are_complete_per_menu_md() {
+        // Table → 1, 2, 3, Labeled, Reset
+        for c in ['1', '2', '3', 'L', 'R'] {
+            let n = resolve(&['D', 'T', c]).unwrap_or_else(|| panic!("D T {c}"));
+            assert!(
+                matches!(n.body, MenuBody::NotImplemented(_) | MenuBody::Action(_)),
+                "D T {c} should be a leaf"
+            );
+        }
+        // Sort → Data-Range, Primary-Key, Secondary-Key, Extra-Key,
+        // Reset, Go, Quit
+        for c in ['D', 'P', 'S', 'E', 'R', 'G', 'Q'] {
+            let n = resolve(&['D', 'S', c]).unwrap_or_else(|| panic!("D S {c}"));
+            assert!(
+                matches!(n.body, MenuBody::NotImplemented(_) | MenuBody::Action(_)),
+                "D S {c} should be a leaf"
+            );
+        }
+        // Query → Input, Criteria, Output, Find, Extract, Unique,
+        // Del, Modify, Reset, Quit
+        for c in ['I', 'C', 'O', 'F', 'E', 'U', 'D', 'M', 'R', 'Q'] {
+            let n = resolve(&['D', 'Q', c]).unwrap_or_else(|| panic!("D Q {c}"));
+            assert!(
+                matches!(n.body, MenuBody::NotImplemented(_) | MenuBody::Action(_)),
+                "D Q {c} should be a leaf"
+            );
+        }
+        // Matrix → Invert, Multiply
+        for c in ['I', 'M'] {
+            let n = resolve(&['D', 'M', c]).unwrap_or_else(|| panic!("D M {c}"));
+            assert!(
+                matches!(n.body, MenuBody::NotImplemented(_) | MenuBody::Action(_)),
+                "D M {c} should be a leaf"
+            );
+        }
+        // External → Use, List, Create, Delete, Other, Reset, Quit
+        for c in ['U', 'L', 'C', 'D', 'O', 'R', 'Q'] {
+            let n = resolve(&['D', 'E', c]).unwrap_or_else(|| panic!("D E {c}"));
+            assert!(
+                matches!(n.body, MenuBody::NotImplemented(_) | MenuBody::Action(_)),
+                "D E {c} should be a leaf"
+            );
+        }
+        // Fill, Distribution — single-step leaves at this level
+        // (Regression and Parse have graduated to their own
+        // submenus since M8).
+        for path in [&['D', 'F'][..], &['D', 'D']] {
+            let n = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            assert!(
+                matches!(n.body, MenuBody::NotImplemented(_) | MenuBody::Action(_)),
+                "{path:?} should be a leaf"
+            );
+        }
+        // /Data Regression — sticky submenu (X-Range, Y-Range,
+        // Output-Range, Intercept, Reset, Go, Quit). Spot-check
+        // X-Range and Go to confirm the subtree is wired.
+        for path in [&['D', 'R', 'X'][..], &['D', 'R', 'G']] {
+            let n = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            assert!(
+                matches!(n.body, MenuBody::Action(_)),
+                "{path:?} should be an Action leaf"
+            );
+        }
+        // /Data Parse — sticky submenu (Format-Line, Input-Column,
+        // Output-Range, Reset, Go, Quit). Spot-check Input-Column
+        // and Go.
+        for path in [&['D', 'P', 'I'][..], &['D', 'P', 'G']] {
+            let n = resolve(path).unwrap_or_else(|| panic!("resolve {path:?}"));
+            assert!(
+                matches!(n.body, MenuBody::Action(_)),
+                "{path:?} should be an Action leaf"
+            );
         }
     }
 }

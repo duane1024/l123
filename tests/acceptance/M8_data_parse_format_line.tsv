@@ -1,0 +1,44 @@
+# /Data Parse Format-Line Create + Edit.
+#
+# Create: scan the first data row of the input column, classify each
+# char (digit/sign/dot → V, whitespace → gap, anything else → L),
+# emit a marker per class change and `>` for continuations. Write
+# the result to the cell at the top of the input column.
+#
+# Edit: jump to the format-line cell and open it in EDIT mode so
+# the user can tweak markers before /DPG.
+
+# Seed: A1 stays empty for the format line, A2 = "abc 100".
+# Set the input column FIRST, then run Create.
+DOWN
+KEYS 'abc 100
+ENTER
+
+HOME
+KEY /
+KEY D
+KEY P
+KEY I
+ASSERT_MODE       POINT
+DOWN
+ENTER
+ASSERT_MODE       MENU
+
+# F = Format-Line submenu, C = Create.
+KEY F
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Create
+KEY C
+ASSERT_MODE       MENU
+
+# A1 should now hold the generated format line `|L>> V>>` .
+# Edit jumps the pointer to A1 and opens EDIT — use it to assert.
+KEY F
+KEY E
+ASSERT_MODE       EDIT
+ASSERT_POINTER    A:A1
+ASSERT_PANEL_L2   |L>> V>>
+
+# Cancel out of EDIT.
+ESC
+ASSERT_MODE       READY
