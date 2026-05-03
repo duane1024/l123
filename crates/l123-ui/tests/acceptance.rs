@@ -991,6 +991,8 @@ transcripts! {
     t05_tutorial_graph_setup_view_save => "T05_tutorial_graph_setup_view_save.tsv",
     t06_tutorial_multiple_sheets_group_and_3d => "T06_tutorial_multiple_sheets_group_and_3d.tsv",
     t07_tutorial_file_retrieve_and_open => "T07_tutorial_file_retrieve_and_open.tsv",
+    t08_tutorial_macros               => "T08_tutorial_macros.tsv",
+    t09_tutorial_learn_record         => "T09_tutorial_learn_record.tsv",
     m9_macro_basic_keystrokes => "M9_macro_basic_keystrokes.tsv",
     m9_macro_special_keys     => "M9_macro_special_keys.tsv",
     m9_macro_alt_letter       => "M9_macro_alt_letter.tsv",

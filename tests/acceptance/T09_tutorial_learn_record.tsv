@@ -1,0 +1,65 @@
+# Tutorial Chapter 4: Learn (Record). The user designates a learn
+# range with /Worksheet Learn Range, arms recording with Alt-F5, types
+# real keystrokes (which also take effect in the worksheet), then
+# disarms with Alt-F5 again. The recorded source materializes in the
+# learn range as a label suitable for /Range Name binding to Alt-letter.
+#
+# Lessons covered:
+#   - /WLR opens a POINT prompt for the learn range (the recorder will
+#     deposit captured source here when armed).
+#   - Alt-F5 lights the LEARN status indicator while recording is on.
+#   - Each pressed key is captured AND applied to the worksheet, so the
+#     recording session is a real edit, not a dry run.
+#   - Alt-F5 again disarms; LEARN clears; the captured source is
+#     flushed into the learn range as a label, with `~` for ENTER and
+#     `{KEY}` glyphs for arrow / function / control keys.
+
+ASSERT_POINTER          A:A1
+ASSERT_SCREEN_NOT_CONTAINS LEARN
+
+# --- Pick the learn range (B1..B3). POINT mode is entered after the
+# typed cell is committed; `.` anchors and the second F5 GOTO extends.
+KEY /
+KEY W
+KEY L
+KEY R
+ASSERT_PANEL_L3 Enter range to record into
+F 5
+KEYS B1
+ENTER
+KEY .
+F 5
+KEYS B3
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# --- Reposition to A1 so the recorded keystrokes have a clean origin.
+F 5
+KEYS A1
+ENTER
+
+# --- Arm recording.
+ALT_F 5
+ASSERT_STATUS   LEARN
+
+# --- Capture a tiny editing session: type a label, commit, move down.
+KEYS hi
+ENTER
+DOWN
+
+# --- Disarm. The LEARN indicator clears and B1 receives the recorded
+# source as a label. ENTER → `~`, arrow → `{DOWN}`.
+ALT_F 5
+ASSERT_SCREEN_NOT_CONTAINS LEARN
+
+F 5
+KEYS B1
+ENTER
+ASSERT_PANEL_L1 A:B1: 'hi~{DOWN}
+
+# --- The recorded keystrokes also took effect live: A1 received "hi".
+F 5
+KEYS A1
+ENTER
+ASSERT_PANEL_L1 A:A1: 'hi
