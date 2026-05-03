@@ -663,7 +663,10 @@ mod tests {
         // Otherwise glyph-anchored attributes (underline) drop out
         // at column seams.
         let slots = [
-            label(LabelPrefix::Apostrophe, "INCOME SUMMARY 1991: Sloane Camera and Video"),
+            label(
+                LabelPrefix::Apostrophe,
+                "INCOME SUMMARY 1991: Sloane Camera and Video",
+            ),
             SpillSlot::Empty,
             SpillSlot::Empty,
             SpillSlot::Empty,
@@ -692,10 +695,7 @@ mod tests {
     fn quote_spill_text_bounds_cover_internal_spaces() {
         // Right-aligned spill: leading " " on slot 0 is padding,
         // the internal space inside "hello world" is text.
-        let slots = [
-            SpillSlot::Empty,
-            label(LabelPrefix::Quote, "hello world"),
-        ];
+        let slots = [SpillSlot::Empty, label(LabelPrefix::Quote, "hello world")];
         let got = plan_row_spill(&slots, &[9, 9]);
         // Span = 18, text_len = 11, leading pad = 7.
         // Slot 0: "       he" → text at [7, 9).

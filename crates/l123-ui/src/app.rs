@@ -20,9 +20,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use l123_core::cell_render::{
-    apply_halign_to_rendered, halign_to_label_prefix, label_text_bounds,
-};
+use l123_core::cell_render::{apply_halign_to_rendered, halign_to_label_prefix, label_text_bounds};
 use l123_core::{
     address::col_to_letters, label::is_value_starter, plan_row_spill, render_label,
     render_value_in_cell, Address, Alignment, Border, CellContents, Comment, CurrencyPosition,
@@ -860,6 +858,24 @@ pub struct App {
     /// indicator on the status line; the running macro additionally
     /// shows SST while parked at a step.
     step_mode: bool,
+    /// `/Data Sort` settings — sticky across Sort-menu visits and
+    /// even across separate `/DS` sessions until cleared by Reset.
+    data_sort: DataSortState,
+    /// Which sort-key slot the in-flight Asc/Desc submenu writes
+    /// into, set when `Primary-Key` / `Secondary-Key` POINT commits.
+    pending_sort_key_slot: Option<SortKeySlot>,
+    /// Column of the in-flight sort key, captured from the POINT
+    /// cell that fired the Asc/Desc submenu.
+    pending_sort_key_col: Option<u16>,
+    /// `/Data Regression` settings — sticky across Regression-menu
+    /// visits and across separate `/DR` sessions until cleared.
+    data_regression: DataRegressionState,
+    /// `/Data Parse` settings — sticky across Parse-menu visits and
+    /// across separate `/DP` sessions until cleared by Reset.
+    data_parse: DataParseState,
+    /// `/Data Query` settings — sticky across Query-menu visits and
+    /// across separate `/DQ` sessions until cleared by Reset.
+    data_query: DataQueryState,
 }
 
 /// User-visible identity shown on the startup splash. The renderer
@@ -880,6 +896,60 @@ struct GraphOverlay {
     /// Populated only when the app has a graphical picker — feeds
     /// ratatui-image's `Image` widget at render time.
     img: Option<image::DynamicImage>,
+}
+
+/// `/Data Sort` direction: ascending = low→high, descending = high→low.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortDir {
+    Ascending,
+    Descending,
+}
+
+/// Which key slot a Primary-Key / Secondary-Key / Extra-Key
+/// Asc/Desc submenu is about to write into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortKeySlot {
+    Primary,
+    Secondary,
+    Extra,
+}
+
+/// Persisted `/Data Sort` settings. Sticky across the Sort menu and
+/// across separate `/DS` invocations — Reset is the only way to
+/// clear it short of restarting the session.
+#[derive(Debug, Clone, Copy, Default)]
+struct DataSortState {
+    data_range: Option<Range>,
+    primary: Option<(u16, SortDir)>,
+    secondary: Option<(u16, SortDir)>,
+    extra: Option<(u16, SortDir)>,
+}
+
+/// Persisted `/Data Regression` settings, sticky across the
+/// Regression menu and across separate `/DR` invocations.
+#[derive(Debug, Clone, Copy, Default)]
+struct DataRegressionState {
+    x_range: Option<Range>,
+    y_range: Option<Range>,
+    output_anchor: Option<Address>,
+    intercept_zero: bool,
+}
+
+/// Persisted `/Data Parse` settings — the input column (whose top
+/// row is the format line) and the output anchor.
+#[derive(Debug, Clone, Copy, Default)]
+struct DataParseState {
+    input_range: Option<Range>,
+    output_anchor: Option<Address>,
+}
+
+/// Persisted `/Data Query` settings — three rectangular ranges
+/// that drive Find / Extract / Unique / Del.
+#[derive(Debug, Clone, Copy, Default)]
+struct DataQueryState {
+    input: Option<Range>,
+    criteria: Option<Range>,
+    output: Option<Range>,
 }
 
 /// Which cell kinds `/Range Search` walks.
@@ -1301,6 +1371,25 @@ enum PromptNext {
     MacroGetInput {
         numeric: bool,
     },
+    /// `/Data Fill` — first prompt: starting value of the sequence.
+    /// Default is `0`. After commit, descends to `DataFillStep`.
+    DataFillStart {
+        range: Range,
+    },
+    /// `/Data Fill` — second prompt: per-cell increment. Default is
+    /// `1`. After commit, descends to `DataFillStop`.
+    DataFillStep {
+        range: Range,
+        start: f64,
+    },
+    /// `/Data Fill` — third prompt: clamp value. Default is `2047`
+    /// (R3.4a's documented default). After commit, the sequence is
+    /// written into `range` column-major.
+    DataFillStop {
+        range: Range,
+        start: f64,
+        step: f64,
+    },
 }
 
 /// `/Worksheet Titles` axis selector.  Both freezes the rows above
@@ -1466,6 +1555,12 @@ impl PromptNext {
             | PromptNext::WgdPrinterPgLength => c.is_ascii_digit(),
             PromptNext::WgdPrinterSetup => c != '\n' && c != '\t',
             PromptNext::WgdPrinterName => c.is_ascii_alphanumeric() || c == '_' || c == '-',
+            // /Data Fill takes signed real numbers — digits, decimal
+            // point, and a leading sign. We don't validate placement
+            // here; the commit handler parses with f64::from_str.
+            PromptNext::DataFillStart { .. }
+            | PromptNext::DataFillStep { .. }
+            | PromptNext::DataFillStop { .. } => c.is_ascii_digit() || matches!(c, '.' | '-' | '+'),
         }
     }
 }
@@ -1479,6 +1574,255 @@ fn parse_margin(buffer: &str, prev: u16) -> u16 {
 /// semantics (`/`, period-free submenus). `/` is fine; `.` is fine.
 fn is_path_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/' | '\\' | ' ' | '~')
+}
+
+/// `/Data Query` criterion-vs-input comparator. Numbers compare
+/// numerically; labels and `Value::Text` constants compare
+/// case-insensitively; an empty input cell never matches a
+/// non-empty criterion. Anything else (formula criterion, date,
+/// error) returns `false` — the MVP slice doesn't evaluate
+/// criterion expressions.
+fn cell_values_equal_for_query(crit: &CellContents, input: Option<&CellContents>) -> bool {
+    fn as_text_lower(c: &CellContents) -> Option<String> {
+        match c {
+            CellContents::Label { text, .. } => Some(text.to_ascii_lowercase()),
+            CellContents::Constant(Value::Text(s)) => Some(s.to_ascii_lowercase()),
+            _ => None,
+        }
+    }
+    fn as_number(c: &CellContents) -> Option<f64> {
+        match c {
+            CellContents::Constant(Value::Number(n)) => Some(*n),
+            CellContents::Formula {
+                cached_value: Some(Value::Number(n)),
+                ..
+            } => Some(*n),
+            _ => None,
+        }
+    }
+    match (crit, input) {
+        (_, None) => false,
+        (CellContents::Constant(Value::Number(cn)), Some(in_c)) => as_number(in_c)
+            .map(|n| (n - cn).abs() < 1e-12)
+            .unwrap_or(false),
+        (c, Some(in_c)) => {
+            if let (Some(a), Some(b)) = (as_text_lower(c), as_text_lower(in_c)) {
+                a == b
+            } else {
+                false
+            }
+        }
+    }
+}
+
+/// Auto-generate a `/Data Parse` format line from a sample data
+/// label. Each char is classified (digits + sign + dot → `V`,
+/// whitespace → space gap, anything else → `L`); the first char
+/// of each run emits the marker, subsequent chars in the same run
+/// emit `>`. Whitespace gaps are preserved verbatim so the field
+/// boundaries align character-for-character with the source label.
+fn build_format_line(label: &str) -> String {
+    let mut out = String::from("|");
+    let mut prev_class: Option<char> = None;
+    for c in label.chars() {
+        let class = if c.is_ascii_digit() || matches!(c, '.' | '-' | '+') {
+            'V'
+        } else if c.is_whitespace() {
+            ' '
+        } else {
+            'L'
+        };
+        if Some(class) != prev_class {
+            out.push(class);
+        } else if class == ' ' {
+            out.push(' ');
+        } else {
+            out.push('>');
+        }
+        prev_class = Some(class);
+    }
+    out
+}
+
+/// `/Data Parse` format-line field kind. Each new field marker
+/// (L/V/D/T/S) opens a field that extends through subsequent `>`
+/// continuation chars until the next marker (or end of line).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormatField {
+    Label,
+    Value,
+    Date,
+    Time,
+    Skip,
+}
+
+/// Parse a Lotus-style format line into a list of fields. The
+/// leading `|` is consumed; each marker char (L/V/D/T/S) opens a
+/// new field at the current character position, and each `>`
+/// extends the current field. Returns `(start_char, end_char,
+/// kind)` — half-open byte-position-as-char-index ranges.
+fn parse_format_line(fl: &str) -> Vec<(usize, usize, FormatField)> {
+    let body: Vec<char> = if let Some(rest) = fl.strip_prefix('|') {
+        rest.chars().collect()
+    } else {
+        fl.chars().collect()
+    };
+    let mut fields = Vec::new();
+    let mut current: Option<(usize, FormatField)> = None;
+    for (i, &c) in body.iter().enumerate() {
+        let kind = match c {
+            'L' | 'l' => Some(FormatField::Label),
+            'V' | 'v' => Some(FormatField::Value),
+            'D' | 'd' => Some(FormatField::Date),
+            'T' | 't' => Some(FormatField::Time),
+            'S' | 's' => Some(FormatField::Skip),
+            _ => None,
+        };
+        if let Some(k) = kind {
+            if let Some((start, ty)) = current.take() {
+                fields.push((start, i, ty));
+            }
+            current = Some((i, k));
+        }
+        // `>` and any other char (space, etc.) just extend the
+        // current field; if no field is open, they're ignored.
+    }
+    if let Some((start, ty)) = current.take() {
+        fields.push((start, body.len(), ty));
+    }
+    fields
+}
+
+/// Round `n` to `sig` significant decimal digits — used by the
+/// matrix kernels to suppress IEEE-754 noise (`0.6000000000000001`
+/// → `0.6`) before storing into cells where General-format display
+/// would otherwise leak the trailing junk.
+fn round_to_significant(n: f64, sig: i32) -> f64 {
+    if n == 0.0 || !n.is_finite() {
+        return n;
+    }
+    let magnitude = n.abs().log10().floor() as i32;
+    let factor = 10f64.powi(sig - 1 - magnitude);
+    (n * factor).round() / factor
+}
+
+/// In-place Gauss-Jordan elimination with partial pivoting on the
+/// augmented matrix `[mat | I]`. Returns the inverse, or `None`
+/// when `mat` is singular (no usable pivot found in a column).
+fn gauss_jordan_invert(mut mat: Vec<Vec<f64>>) -> Option<Vec<Vec<f64>>> {
+    let n = mat.len();
+    if n == 0 || mat.iter().any(|r| r.len() != n) {
+        return None;
+    }
+    let mut inv: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            let mut row = vec![0.0_f64; n];
+            row[i] = 1.0;
+            row
+        })
+        .collect();
+    for col in 0..n {
+        let mut pivot = col;
+        for r in col + 1..n {
+            if mat[r][col].abs() > mat[pivot][col].abs() {
+                pivot = r;
+            }
+        }
+        if mat[pivot][col].abs() < 1e-12 {
+            return None;
+        }
+        if pivot != col {
+            mat.swap(col, pivot);
+            inv.swap(col, pivot);
+        }
+        let p = mat[col][col];
+        for c in 0..n {
+            mat[col][c] /= p;
+            inv[col][c] /= p;
+        }
+        for r in 0..n {
+            if r == col {
+                continue;
+            }
+            let factor = mat[r][col];
+            if factor == 0.0 {
+                continue;
+            }
+            for c in 0..n {
+                mat[r][c] -= factor * mat[col][c];
+                inv[r][c] -= factor * inv[col][c];
+            }
+        }
+    }
+    Some(inv)
+}
+
+/// Build an apostrophe-prefixed label cell. Convenience for code
+/// paths (e.g. `/Data Regression` output) that need to write
+/// header strings into the grid.
+fn label_cell(text: &str) -> CellContents {
+    CellContents::Label {
+        prefix: LabelPrefix::Apostrophe,
+        text: text.into(),
+    }
+}
+
+/// Comparator used by `/Data Sort` for two key cells. Numbers
+/// compare numerically, labels lexicographically, and a missing
+/// (empty) cell sorts after any populated cell — matching 1-2-3's
+/// "blanks last in ascending sort" rule. Mixed numeric/label keys
+/// put numbers before labels.
+fn compare_cell_contents(a: Option<&CellContents>, b: Option<&CellContents>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    fn rank(c: Option<&CellContents>) -> u8 {
+        match c {
+            Some(CellContents::Constant(Value::Number(_))) => 0,
+            Some(CellContents::Formula { cached_value, .. }) => match cached_value {
+                Some(Value::Number(_)) => 0,
+                Some(Value::Text(_)) => 1,
+                _ => 2,
+            },
+            Some(CellContents::Label { .. }) | Some(CellContents::Constant(Value::Text(_))) => 1,
+            _ => 2,
+        }
+    }
+    fn number_of(c: Option<&CellContents>) -> Option<f64> {
+        match c {
+            Some(CellContents::Constant(Value::Number(n))) => Some(*n),
+            Some(CellContents::Formula {
+                cached_value: Some(Value::Number(n)),
+                ..
+            }) => Some(*n),
+            _ => None,
+        }
+    }
+    fn text_of(c: Option<&CellContents>) -> Option<String> {
+        match c {
+            Some(CellContents::Label { text, .. }) => Some(text.clone()),
+            Some(CellContents::Constant(Value::Text(s))) => Some(s.clone()),
+            Some(CellContents::Formula {
+                cached_value: Some(Value::Text(s)),
+                ..
+            }) => Some(s.clone()),
+            _ => None,
+        }
+    }
+    let ra = rank(a);
+    let rb = rank(b);
+    if ra != rb {
+        return ra.cmp(&rb);
+    }
+    if ra == 0 {
+        let na = number_of(a).unwrap_or(0.0);
+        let nb = number_of(b).unwrap_or(0.0);
+        return na.partial_cmp(&nb).unwrap_or(Ordering::Equal);
+    }
+    if ra == 1 {
+        let ta = text_of(a).unwrap_or_default();
+        let tb = text_of(b).unwrap_or_default();
+        return ta.cmp(&tb);
+    }
+    Ordering::Equal
 }
 
 /// Resolve which destination anchors a `/Copy` should paste into,
@@ -2075,6 +2419,93 @@ enum PendingCommand {
     /// selected range as the destination for Alt-F5 LEARN
     /// recordings.
     WorksheetLearnRange,
+    /// POINT step of `/Data Fill`. On commit, kick off the
+    /// Start → Step → Stop prompt chain that culminates in the
+    /// sequence write.
+    DataFillRange,
+    /// POINT step of `/Data Sort Data-Range`. On commit, store the
+    /// selected range on `App.data_sort` and re-enter the Sort menu.
+    DataSortDataRange,
+    /// POINT step of `/Data Sort Primary-Key` / `Secondary-Key` —
+    /// the selected cell's column becomes the key column. Which slot
+    /// is being set lives on `App.pending_sort_key_slot`.
+    DataSortKey,
+    /// First POINT of `/Data Distribution` — the values range. On
+    /// commit, descend into [`PendingCommand::DataDistributionBins`]
+    /// to collect the bin column.
+    DataDistributionValues,
+    /// Second POINT of `/Data Distribution` — the bin range. Must
+    /// be a single column; on commit, write the frequency counts to
+    /// the column immediately right of the bins.
+    DataDistributionBins {
+        values: Range,
+    },
+    /// POINT step of `/Data Regression X-Range`.
+    DataRegressionXRange,
+    /// POINT step of `/Data Regression Y-Range`.
+    DataRegressionYRange,
+    /// POINT step of `/Data Regression Output-Range`. Only the
+    /// top-left of the picked range is used as the output anchor.
+    DataRegressionOutputRange,
+    /// First POINT of `/Data Matrix Invert` — square matrix to
+    /// invert. On commit, descend into
+    /// [`PendingCommand::DataMatrixInvertOutput`].
+    DataMatrixInvertInput,
+    /// Output-anchor POINT of `/Data Matrix Invert` — only the
+    /// pointer position is used.
+    DataMatrixInvertOutput {
+        source: Range,
+    },
+    /// First POINT of `/Data Matrix Multiply` — matrix A.
+    DataMatrixMultiplyA,
+    /// Second POINT of `/Data Matrix Multiply` — matrix B
+    /// (`cols(A)` must equal `rows(B)`).
+    DataMatrixMultiplyB {
+        a: Range,
+    },
+    /// Output-anchor POINT of `/Data Matrix Multiply` — only the
+    /// pointer position is used.
+    DataMatrixMultiplyOutput {
+        a: Range,
+        b: Range,
+    },
+    /// POINT step of `/Data Parse Input-Column` — single column
+    /// containing the format-line label at the top and data rows
+    /// below.
+    DataParseInputColumn,
+    /// POINT step of `/Data Parse Output-Range` — only the pointer
+    /// position is used as the output top-left.
+    DataParseOutputRange,
+    /// First POINT of `/Data Table 1` — the rectangular table range.
+    /// Top row is the corner + formulas; left column is the corner +
+    /// variable values; body is filled by the executor.
+    DataTable1Range,
+    /// Second POINT of `/Data Table 1` — Input cell 1. Variable
+    /// values from the table's left column are substituted here
+    /// before each formula re-evaluation.
+    DataTable1Input1 {
+        range: Range,
+    },
+    /// First POINT of `/Data Table 2` — table range. Corner cell
+    /// holds the formula; left column = var-1, top row = var-2.
+    DataTable2Range,
+    /// Second POINT of `/Data Table 2` — Input cell 1 (left-column
+    /// values substitute here).
+    DataTable2Input1 {
+        range: Range,
+    },
+    /// Third POINT of `/Data Table 2` — Input cell 2 (top-row
+    /// values substitute here). On commit, run the executor.
+    DataTable2Input2 {
+        range: Range,
+        input1: Address,
+    },
+    /// POINT step of `/Data Query Input`.
+    DataQueryInput,
+    /// POINT step of `/Data Query Criteria`.
+    DataQueryCriteria,
+    /// POINT step of `/Data Query Output`.
+    DataQueryOutput,
 }
 
 impl PendingCommand {
@@ -2099,6 +2530,29 @@ impl PendingCommand {
             PendingCommand::ColumnRangeResetWidth => "Enter range of columns to reset:",
             PendingCommand::ColumnHide => "Enter range of columns to hide:",
             PendingCommand::ColumnDisplay => "Enter range of columns to display:",
+            PendingCommand::DataFillRange => "Enter fill range:",
+            PendingCommand::DataSortDataRange => "Enter data-range to sort:",
+            PendingCommand::DataSortKey => "Enter cell in primary/secondary key column:",
+            PendingCommand::DataDistributionValues => "Enter values range:",
+            PendingCommand::DataDistributionBins { .. } => "Enter bin range (single column):",
+            PendingCommand::DataRegressionXRange => "Enter X-range (independent variable):",
+            PendingCommand::DataRegressionYRange => "Enter Y-range (dependent variable):",
+            PendingCommand::DataRegressionOutputRange => "Enter output-range top-left:",
+            PendingCommand::DataMatrixInvertInput => "Enter square matrix to invert:",
+            PendingCommand::DataMatrixInvertOutput { .. } => "Enter output-range top-left:",
+            PendingCommand::DataMatrixMultiplyA => "Enter first matrix:",
+            PendingCommand::DataMatrixMultiplyB { .. } => "Enter second matrix:",
+            PendingCommand::DataMatrixMultiplyOutput { .. } => "Enter output-range top-left:",
+            PendingCommand::DataParseInputColumn => "Enter input column (with format-line row):",
+            PendingCommand::DataParseOutputRange => "Enter output-range top-left:",
+            PendingCommand::DataTable1Range => "Enter table range:",
+            PendingCommand::DataTable1Input1 { .. } => "Enter Input cell 1:",
+            PendingCommand::DataTable2Range => "Enter table range:",
+            PendingCommand::DataTable2Input1 { .. } => "Enter Input cell 1:",
+            PendingCommand::DataTable2Input2 { .. } => "Enter Input cell 2:",
+            PendingCommand::DataQueryInput => "Enter input range (with field-name header row):",
+            PendingCommand::DataQueryCriteria => "Enter criteria range:",
+            PendingCommand::DataQueryOutput => "Enter output range:",
             // Free mouse-drag selection has no prompt — line 3 keeps
             // showing the live range, but no command label is shown.
             PendingCommand::MouseSelect => "",
@@ -2215,6 +2669,12 @@ impl App {
             learn_recording: false,
             learn_buffer: String::new(),
             step_mode: false,
+            data_sort: DataSortState::default(),
+            pending_sort_key_slot: None,
+            pending_sort_key_col: None,
+            data_regression: DataRegressionState::default(),
+            data_parse: DataParseState::default(),
+            data_query: DataQueryState::default(),
         }
     }
 
@@ -2947,7 +3407,13 @@ impl App {
                     return false;
                 }
             };
-            let frame = self.macro_state.as_mut().unwrap().frames.last_mut().unwrap();
+            let frame = self
+                .macro_state
+                .as_mut()
+                .unwrap()
+                .frames
+                .last_mut()
+                .unwrap();
             frame.remaining = actions.into_iter().collect();
             frame.pc = next_macro_pc(pc).unwrap_or(pc);
         }
@@ -2993,11 +3459,7 @@ impl App {
                     self.macro_state = None;
                     return false;
                 };
-                if let Some(top) = self
-                    .macro_state
-                    .as_mut()
-                    .and_then(|s| s.frames.last_mut())
-                {
+                if let Some(top) = self.macro_state.as_mut().and_then(|s| s.frames.last_mut()) {
                     top.pc = addr;
                     top.remaining.clear();
                 }
@@ -3014,11 +3476,7 @@ impl App {
             MacroAction::If(expr) => {
                 let truthy = self.eval_macro_condition(&expr);
                 if !truthy {
-                    if let Some(top) = self
-                        .macro_state
-                        .as_mut()
-                        .and_then(|s| s.frames.last_mut())
-                    {
+                    if let Some(top) = self.macro_state.as_mut().and_then(|s| s.frames.last_mut()) {
                         top.remaining.clear();
                     }
                 }
@@ -3277,11 +3735,7 @@ impl App {
         match k.code {
             KeyCode::Esc => self.finish_custom_menu(None),
             KeyCode::Enter => {
-                let idx = self
-                    .custom_menu
-                    .as_ref()
-                    .map(|m| m.highlight)
-                    .unwrap_or(0);
+                let idx = self.custom_menu.as_ref().map(|m| m.highlight).unwrap_or(0);
                 self.finish_custom_menu(Some(idx));
             }
             KeyCode::Left => {
@@ -4987,6 +5441,103 @@ impl App {
             Action::FileCombineSubtractNamed => {
                 self.start_file_combine_prompt(CombineKind::Subtract, false)
             }
+            Action::DataFill => self.begin_point(PendingCommand::DataFillRange),
+            Action::DataSortDataRange => self.begin_point(PendingCommand::DataSortDataRange),
+            Action::DataSortPrimaryKey => {
+                self.pending_sort_key_slot = Some(SortKeySlot::Primary);
+                self.begin_point(PendingCommand::DataSortKey);
+            }
+            Action::DataSortSecondaryKey => {
+                self.pending_sort_key_slot = Some(SortKeySlot::Secondary);
+                self.begin_point(PendingCommand::DataSortKey);
+            }
+            Action::DataSortExtraKey => {
+                self.pending_sort_key_slot = Some(SortKeySlot::Extra);
+                self.begin_point(PendingCommand::DataSortKey);
+            }
+            Action::DataSortReset => {
+                self.data_sort = DataSortState::default();
+                self.pending_sort_key_slot = None;
+                self.enter_data_sort_menu();
+            }
+            Action::DataSortGo => self.execute_data_sort(),
+            Action::DataSortQuit => {
+                self.menu = None;
+                self.mode = Mode::Ready;
+            }
+            Action::DataSortAscending => self.bind_data_sort_dir(SortDir::Ascending),
+            Action::DataSortDescending => self.bind_data_sort_dir(SortDir::Descending),
+            Action::DataDistribution => self.begin_point(PendingCommand::DataDistributionValues),
+            Action::DataRegressionXRange => self.begin_point(PendingCommand::DataRegressionXRange),
+            Action::DataRegressionYRange => self.begin_point(PendingCommand::DataRegressionYRange),
+            Action::DataRegressionOutputRange => {
+                self.begin_point(PendingCommand::DataRegressionOutputRange)
+            }
+            Action::DataRegressionInterceptCompute => {
+                self.data_regression.intercept_zero = false;
+                self.enter_data_regression_menu();
+            }
+            Action::DataRegressionInterceptZero => {
+                self.data_regression.intercept_zero = true;
+                self.enter_data_regression_menu();
+            }
+            Action::DataRegressionReset => {
+                self.data_regression = DataRegressionState::default();
+                self.enter_data_regression_menu();
+            }
+            Action::DataRegressionGo => self.execute_data_regression(),
+            Action::DataRegressionQuit => {
+                self.menu = None;
+                self.mode = Mode::Ready;
+            }
+            Action::DataMatrixInvert => self.begin_point(PendingCommand::DataMatrixInvertInput),
+            Action::DataMatrixMultiply => self.begin_point(PendingCommand::DataMatrixMultiplyA),
+            Action::DataParseInputColumn => self.begin_point(PendingCommand::DataParseInputColumn),
+            Action::DataParseOutputRange => self.begin_point(PendingCommand::DataParseOutputRange),
+            Action::DataParseReset => {
+                self.data_parse = DataParseState::default();
+                self.enter_data_parse_menu();
+            }
+            Action::DataParseGo => self.execute_data_parse(),
+            Action::DataParseQuit => {
+                self.menu = None;
+                self.mode = Mode::Ready;
+            }
+            Action::DataTable1 => self.begin_point(PendingCommand::DataTable1Range),
+            Action::DataTable2 => self.begin_point(PendingCommand::DataTable2Range),
+            Action::DataTableReset => {
+                self.menu = None;
+                self.mode = Mode::Ready;
+            }
+            Action::DataParseFormatLineCreate => self.execute_parse_format_line_create(),
+            Action::DataParseFormatLineEdit => self.execute_parse_format_line_edit(),
+            Action::DataQueryInput => self.begin_point(PendingCommand::DataQueryInput),
+            Action::DataQueryCriteria => self.begin_point(PendingCommand::DataQueryCriteria),
+            Action::DataQueryOutput => self.begin_point(PendingCommand::DataQueryOutput),
+            Action::DataQueryFind => self.execute_data_query_find(),
+            Action::DataQueryExtract => self.execute_data_query_extract(false),
+            Action::DataQueryUnique => self.execute_data_query_extract(true),
+            Action::DataQueryDel => self.execute_data_query_del(),
+            Action::DataQueryReset => {
+                self.data_query = DataQueryState::default();
+                self.enter_data_query_menu();
+            }
+            Action::DataQueryQuit => {
+                self.menu = None;
+                self.mode = Mode::Ready;
+            }
+            Action::DataTable3Stub => {
+                self.set_error("Data Table 3 (3D table): not yet implemented in L123")
+            }
+            Action::DataTableLabeledStub => {
+                self.set_error("Data Table Labeled: not yet implemented in L123")
+            }
+            Action::DataQueryModifyStub => {
+                self.set_error("Data Query Modify: not yet implemented in L123")
+            }
+            Action::DataExternalStub => {
+                self.set_error("Data External: no external-database driver configured")
+            }
         }
     }
 
@@ -6285,8 +6836,7 @@ impl App {
         // from Excel, or saved before this feature landed).
         if let Ok(sources) = l123_io::formula_sources::read_from_xlsx(&path) {
             for (addr, src) in sources {
-                if let Some(CellContents::Formula { expr, .. }) =
-                    self.wb_mut().cells.get_mut(&addr)
+                if let Some(CellContents::Formula { expr, .. }) = self.wb_mut().cells.get_mut(&addr)
                 {
                     *expr = src;
                 }
@@ -7248,6 +7798,98 @@ impl App {
                 self.learn_range = Some(first.normalized());
                 self.mode = Mode::Ready;
             }
+            PendingCommand::DataFillRange => {
+                self.start_data_fill_start_prompt(first.normalized());
+            }
+            PendingCommand::DataSortDataRange => {
+                self.data_sort.data_range = Some(first.normalized());
+                self.enter_data_sort_menu();
+            }
+            PendingCommand::DataSortKey => {
+                self.enter_data_sort_dir_menu(first.start.col);
+            }
+            PendingCommand::DataDistributionValues => {
+                let values = first.normalized();
+                self.transition_point(PendingCommand::DataDistributionBins { values });
+            }
+            PendingCommand::DataDistributionBins { values } => {
+                self.execute_data_distribution(values, first.normalized());
+            }
+            PendingCommand::DataRegressionXRange => {
+                self.data_regression.x_range = Some(first.normalized());
+                self.enter_data_regression_menu();
+            }
+            PendingCommand::DataRegressionYRange => {
+                self.data_regression.y_range = Some(first.normalized());
+                self.enter_data_regression_menu();
+            }
+            PendingCommand::DataRegressionOutputRange => {
+                // Only the cursor position matters for the output
+                // anchor; ignore any extent the highlight picked up
+                // from the prior commit's anchor.
+                self.data_regression.output_anchor = Some(self.wb().pointer);
+                self.enter_data_regression_menu();
+            }
+            PendingCommand::DataMatrixInvertInput => {
+                let source = first.normalized();
+                self.begin_point(PendingCommand::DataMatrixInvertOutput { source });
+            }
+            PendingCommand::DataMatrixInvertOutput { source } => {
+                let anchor = self.wb().pointer;
+                self.execute_matrix_invert(source, anchor);
+            }
+            PendingCommand::DataMatrixMultiplyA => {
+                let a = first.normalized();
+                self.begin_point(PendingCommand::DataMatrixMultiplyB { a });
+            }
+            PendingCommand::DataMatrixMultiplyB { a } => {
+                let b = first.normalized();
+                self.begin_point(PendingCommand::DataMatrixMultiplyOutput { a, b });
+            }
+            PendingCommand::DataMatrixMultiplyOutput { a, b } => {
+                let anchor = self.wb().pointer;
+                self.execute_matrix_multiply(a, b, anchor);
+            }
+            PendingCommand::DataParseInputColumn => {
+                self.data_parse.input_range = Some(first.normalized());
+                self.enter_data_parse_menu();
+            }
+            PendingCommand::DataParseOutputRange => {
+                self.data_parse.output_anchor = Some(self.wb().pointer);
+                self.enter_data_parse_menu();
+            }
+            PendingCommand::DataTable1Range => {
+                let range = first.normalized();
+                self.begin_point(PendingCommand::DataTable1Input1 { range });
+            }
+            PendingCommand::DataTable1Input1 { range } => {
+                let input1 = self.wb().pointer;
+                self.execute_data_table_1(range, input1);
+            }
+            PendingCommand::DataTable2Range => {
+                let range = first.normalized();
+                self.begin_point(PendingCommand::DataTable2Input1 { range });
+            }
+            PendingCommand::DataTable2Input1 { range } => {
+                let input1 = self.wb().pointer;
+                self.begin_point(PendingCommand::DataTable2Input2 { range, input1 });
+            }
+            PendingCommand::DataTable2Input2 { range, input1 } => {
+                let input2 = self.wb().pointer;
+                self.execute_data_table_2(range, input1, input2);
+            }
+            PendingCommand::DataQueryInput => {
+                self.data_query.input = Some(first.normalized());
+                self.enter_data_query_menu();
+            }
+            PendingCommand::DataQueryCriteria => {
+                self.data_query.criteria = Some(first.normalized());
+                self.enter_data_query_menu();
+            }
+            PendingCommand::DataQueryOutput => {
+                self.data_query.output = Some(first.normalized());
+                self.enter_data_query_menu();
+            }
         }
     }
 
@@ -7390,6 +8032,1435 @@ impl App {
     }
 
     // ---------------- command-argument prompt ----------------
+
+    fn enter_data_sort_menu(&mut self) {
+        self.menu = Some(MenuState::rooted_at(menu::DATA_SORT_MENU));
+        self.mode = Mode::Menu;
+    }
+
+    fn enter_data_sort_dir_menu(&mut self, key_col: u16) {
+        self.pending_sort_key_col = Some(key_col);
+        self.menu = Some(MenuState::rooted_at(menu::DATA_SORT_DIR_MENU));
+        self.mode = Mode::Menu;
+    }
+
+    fn bind_data_sort_dir(&mut self, dir: SortDir) {
+        let slot = self.pending_sort_key_slot.take();
+        let col = self.pending_sort_key_col.take();
+        if let (Some(slot), Some(col)) = (slot, col) {
+            match slot {
+                SortKeySlot::Primary => self.data_sort.primary = Some((col, dir)),
+                SortKeySlot::Secondary => self.data_sort.secondary = Some((col, dir)),
+                SortKeySlot::Extra => self.data_sort.extra = Some((col, dir)),
+            }
+        }
+        self.enter_data_sort_menu();
+    }
+
+    /// Sort the configured data range in place by primary (and
+    /// optional secondary) key column. Empty/missing data range or
+    /// missing primary key is a silent no-op back to READY — matches
+    /// 1-2-3's behavior of refusing rather than erroring.
+    fn execute_data_sort(&mut self) {
+        let Some(range) = self.data_sort.data_range else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let Some((primary_col, primary_dir)) = self.data_sort.primary else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let secondary = self.data_sort.secondary;
+        let extra = self.data_sort.extra;
+        let r = range.normalized();
+        let sheet = r.start.sheet;
+        let row_lo = r.start.row;
+        let row_hi = r.end.row;
+        let col_lo = r.start.col;
+        let col_hi = r.end.col;
+
+        // Capture each row as a Vec of (col-offset, contents/format/style).
+        type RowSnapshot = Vec<(u16, Option<CellContents>, Option<Format>, Option<TextStyle>)>;
+        let mut rows: Vec<RowSnapshot> = Vec::with_capacity((row_hi - row_lo + 1) as usize);
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+        for row in row_lo..=row_hi {
+            let mut snap: RowSnapshot = Vec::with_capacity((col_hi - col_lo + 1) as usize);
+            for col in col_lo..=col_hi {
+                let addr = Address::new(sheet, col, row);
+                let c = self.wb().cells.get(&addr).cloned();
+                let f = self.wb().cell_formats.get(&addr).copied();
+                let s = self.wb().cell_text_styles.get(&addr).copied();
+                if let Some(ref cc) = c {
+                    prev_cells.push((addr, cc.clone()));
+                }
+                if let Some(ff) = f {
+                    prev_formats.push((addr, ff));
+                }
+                if let Some(ss) = s {
+                    prev_text_styles.push((addr, ss));
+                }
+                snap.push((col - col_lo, c, f, s));
+            }
+            rows.push(snap);
+        }
+
+        let key_for = |snap: &RowSnapshot, key_col: u16| -> Option<CellContents> {
+            let off = key_col.saturating_sub(col_lo);
+            snap.iter()
+                .find(|(o, _, _, _)| *o == off)
+                .and_then(|(_, c, _, _)| c.clone())
+        };
+
+        rows.sort_by(|a, b| {
+            let pa = key_for(a, primary_col);
+            let pb = key_for(b, primary_col);
+            let mut ord = compare_cell_contents(pa.as_ref(), pb.as_ref());
+            if primary_dir == SortDir::Descending {
+                ord = ord.reverse();
+            }
+            if ord == std::cmp::Ordering::Equal {
+                if let Some((sec_col, sec_dir)) = secondary {
+                    let sa = key_for(a, sec_col);
+                    let sb = key_for(b, sec_col);
+                    let mut sord = compare_cell_contents(sa.as_ref(), sb.as_ref());
+                    if sec_dir == SortDir::Descending {
+                        sord = sord.reverse();
+                    }
+                    ord = sord;
+                }
+            }
+            if ord == std::cmp::Ordering::Equal {
+                if let Some((ex_col, ex_dir)) = extra {
+                    let ea = key_for(a, ex_col);
+                    let eb = key_for(b, ex_col);
+                    let mut eord = compare_cell_contents(ea.as_ref(), eb.as_ref());
+                    if ex_dir == SortDir::Descending {
+                        eord = eord.reverse();
+                    }
+                    ord = eord;
+                }
+            }
+            ord
+        });
+
+        // Write the sorted rows back into the same rectangle.
+        for (i, snap) in rows.iter().enumerate() {
+            let row = row_lo + i as u32;
+            for col in col_lo..=col_hi {
+                let addr = Address::new(sheet, col, row);
+                let off = col - col_lo;
+                let entry = snap.iter().find(|(o, _, _, _)| *o == off);
+                self.wb_mut().cells.remove(&addr);
+                self.wb_mut().cell_formats.remove(&addr);
+                self.wb_mut().cell_text_styles.remove(&addr);
+                let _ = self.wb_mut().engine.clear_cell(addr);
+                if let Some((_, contents, format, style)) = entry {
+                    if let Some(c) = contents {
+                        self.wb_mut().cells.insert(addr, c.clone());
+                        self.push_to_engine_at(addr, c);
+                    }
+                    if let Some(f) = format {
+                        self.wb_mut().cell_formats.insert(addr, *f);
+                    }
+                    if let Some(s) = style {
+                        self.wb_mut().cell_text_styles.insert(addr, *s);
+                    }
+                }
+            }
+        }
+
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.menu = None;
+        self.mode = Mode::Ready;
+    }
+
+    /// `/Data Matrix Invert` — Gauss-Jordan inverse of a square
+    /// matrix read from `source`, written column-major into the
+    /// rectangle anchored at `anchor`. Surfaces a status-line
+    /// error on non-square or singular input.
+    #[allow(clippy::needless_range_loop)]
+    fn execute_matrix_invert(&mut self, source: Range, anchor: Address) {
+        let s = source.normalized();
+        let n_rows = (s.end.row - s.start.row + 1) as usize;
+        let n_cols = (s.end.col - s.start.col + 1) as usize;
+        if n_rows != n_cols {
+            self.set_error("Matrix Invert: source range is not square");
+            return;
+        }
+        let n = n_rows;
+        let mut mat: Vec<Vec<f64>> = vec![vec![0.0; n]; n];
+        for r in 0..n {
+            for c in 0..n {
+                let addr = Address::new(
+                    s.start.sheet,
+                    s.start.col + c as u16,
+                    s.start.row + r as u32,
+                );
+                mat[r][c] = self.numeric_cell_value(addr).unwrap_or(0.0);
+            }
+        }
+        let inv = match gauss_jordan_invert(mat) {
+            Some(m) => m,
+            None => {
+                self.set_error("Matrix Invert: matrix is singular");
+                return;
+            }
+        };
+        self.write_matrix_at(anchor, &inv);
+        self.mode = Mode::Ready;
+    }
+
+    /// `/Data Matrix Multiply` — write A*B into the rectangle
+    /// anchored at `anchor`. Refuses with a status-line error when
+    /// `cols(A) != rows(B)`.
+    #[allow(clippy::needless_range_loop)]
+    fn execute_matrix_multiply(&mut self, a_range: Range, b_range: Range, anchor: Address) {
+        let ar = a_range.normalized();
+        let br = b_range.normalized();
+        let a_rows = (ar.end.row - ar.start.row + 1) as usize;
+        let a_cols = (ar.end.col - ar.start.col + 1) as usize;
+        let b_rows = (br.end.row - br.start.row + 1) as usize;
+        let b_cols = (br.end.col - br.start.col + 1) as usize;
+        if a_cols != b_rows {
+            self.set_error("Matrix Multiply: cols(A) must equal rows(B)");
+            return;
+        }
+        let mut a: Vec<Vec<f64>> = vec![vec![0.0; a_cols]; a_rows];
+        for r in 0..a_rows {
+            for c in 0..a_cols {
+                let addr = Address::new(
+                    ar.start.sheet,
+                    ar.start.col + c as u16,
+                    ar.start.row + r as u32,
+                );
+                a[r][c] = self.numeric_cell_value(addr).unwrap_or(0.0);
+            }
+        }
+        let mut b: Vec<Vec<f64>> = vec![vec![0.0; b_cols]; b_rows];
+        for r in 0..b_rows {
+            for c in 0..b_cols {
+                let addr = Address::new(
+                    br.start.sheet,
+                    br.start.col + c as u16,
+                    br.start.row + r as u32,
+                );
+                b[r][c] = self.numeric_cell_value(addr).unwrap_or(0.0);
+            }
+        }
+        let mut prod: Vec<Vec<f64>> = vec![vec![0.0; b_cols]; a_rows];
+        for i in 0..a_rows {
+            for j in 0..b_cols {
+                let mut acc = 0.0_f64;
+                for k in 0..a_cols {
+                    acc += a[i][k] * b[k][j];
+                }
+                prod[i][j] = acc;
+            }
+        }
+        self.write_matrix_at(anchor, &prod);
+        self.mode = Mode::Ready;
+    }
+
+    /// Write a row-major matrix into the grid anchored at `anchor`.
+    /// Captures previous cell contents so Alt-F4 reverts. Recalcs +
+    /// marks the workbook dirty. Values are rounded to 12 significant
+    /// decimal digits before storage to suppress floating-point noise
+    /// from the linear-algebra kernels — `0.6000000000000001` becomes
+    /// the exact `0.6` users expect to see.
+    fn write_matrix_at(&mut self, anchor: Address, mat: &[Vec<f64>]) {
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+        for (i, row) in mat.iter().enumerate() {
+            for (j, value) in row.iter().enumerate() {
+                let value = round_to_significant(*value, 12);
+                let addr = Address::new(anchor.sheet, anchor.col + j as u16, anchor.row + i as u32);
+                if let Some(c) = self.wb().cells.get(&addr) {
+                    prev_cells.push((addr, c.clone()));
+                }
+                if let Some(f) = self.wb().cell_formats.get(&addr) {
+                    prev_formats.push((addr, *f));
+                }
+                if let Some(s) = self.wb().cell_text_styles.get(&addr) {
+                    prev_text_styles.push((addr, *s));
+                }
+                let s = l123_core::format_number_general(value);
+                let _ = self.wb_mut().engine.set_user_input(addr, &s);
+                self.wb_mut()
+                    .cells
+                    .insert(addr, CellContents::Constant(Value::Number(value)));
+            }
+        }
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+    }
+
+    /// `/Data Table 1` — for each variable value in the left column
+    /// of `range` (rows below the corner), substitute it into
+    /// `input1`, recalc, and copy the resulting top-row formula
+    /// values into the body cells. The original contents of `input1`
+    /// are restored when the loop completes. Refuses degenerate
+    /// (single-row or single-column) table ranges with no body
+    /// cells.
+    /// `/Data Table 2` — for each (var-1 in left column, var-2 in
+    /// top row), substitute into Input cells 1 and 2, recalc, and
+    /// write the value of the corner-cell formula into the body.
+    /// Both Input cells are restored when the loop completes.
+    fn execute_data_table_2(&mut self, range: Range, input1: Address, input2: Address) {
+        let r = range.normalized();
+        if r.start.row == r.end.row || r.start.col == r.end.col {
+            self.set_error("Data Table 2: range must include at least one body cell");
+            return;
+        }
+        let sheet = r.start.sheet;
+        let formula_addr = Address::new(sheet, r.start.col, r.start.row);
+        let original_input1 = self.wb().cells.get(&input1).cloned();
+        let original_input2 = self.wb().cells.get(&input2).cloned();
+
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+        for body_row in (r.start.row + 1)..=r.end.row {
+            let var1_addr = Address::new(sheet, r.start.col, body_row);
+            let Some(var1) = self.numeric_cell_value(var1_addr) else {
+                continue;
+            };
+            let s1 = l123_core::format_number_general(var1);
+            let _ = self.wb_mut().engine.set_user_input(input1, &s1);
+            self.wb_mut()
+                .cells
+                .insert(input1, CellContents::Constant(Value::Number(var1)));
+
+            for body_col in (r.start.col + 1)..=r.end.col {
+                let var2_addr = Address::new(sheet, body_col, r.start.row);
+                let Some(var2) = self.numeric_cell_value(var2_addr) else {
+                    continue;
+                };
+                let s2 = l123_core::format_number_general(var2);
+                let _ = self.wb_mut().engine.set_user_input(input2, &s2);
+                self.wb_mut()
+                    .cells
+                    .insert(input2, CellContents::Constant(Value::Number(var2)));
+                self.wb_mut().engine.recalc();
+                self.refresh_formula_caches();
+
+                let value = self
+                    .wb()
+                    .cells
+                    .get(&formula_addr)
+                    .map(|c| c.value())
+                    .unwrap_or(Value::Empty);
+                let body_addr = Address::new(sheet, body_col, body_row);
+                if let Some(c) = self.wb().cells.get(&body_addr) {
+                    prev_cells.push((body_addr, c.clone()));
+                }
+                if let Some(f) = self.wb().cell_formats.get(&body_addr) {
+                    prev_formats.push((body_addr, *f));
+                }
+                if let Some(s) = self.wb().cell_text_styles.get(&body_addr) {
+                    prev_text_styles.push((body_addr, *s));
+                }
+                if let Value::Number(n) = value {
+                    let s = l123_core::format_number_general(n);
+                    let _ = self.wb_mut().engine.set_user_input(body_addr, &s);
+                    self.wb_mut()
+                        .cells
+                        .insert(body_addr, CellContents::Constant(Value::Number(n)));
+                } else {
+                    self.wb_mut().cells.remove(&body_addr);
+                    let _ = self.wb_mut().engine.clear_cell(body_addr);
+                }
+            }
+        }
+
+        // Restore both Input cells to their pre-call contents.
+        if let Some(orig) = &original_input1 {
+            prev_cells.push((input1, orig.clone()));
+            self.wb_mut().cells.insert(input1, orig.clone());
+            self.push_to_engine_at(input1, orig);
+        } else {
+            self.wb_mut().cells.remove(&input1);
+            let _ = self.wb_mut().engine.clear_cell(input1);
+        }
+        if let Some(orig) = &original_input2 {
+            prev_cells.push((input2, orig.clone()));
+            self.wb_mut().cells.insert(input2, orig.clone());
+            self.push_to_engine_at(input2, orig);
+        } else {
+            self.wb_mut().cells.remove(&input2);
+            let _ = self.wb_mut().engine.clear_cell(input2);
+        }
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.menu = None;
+        self.mode = Mode::Ready;
+    }
+
+    fn execute_data_table_1(&mut self, range: Range, input1: Address) {
+        let r = range.normalized();
+        if r.start.row == r.end.row || r.start.col == r.end.col {
+            self.set_error("Data Table 1: range must include at least one body cell");
+            return;
+        }
+        let sheet = r.start.sheet;
+        let formula_row = r.start.row;
+        let var_col = r.start.col;
+        let original_input1 = self.wb().cells.get(&input1).cloned();
+
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+        for body_row in (formula_row + 1)..=r.end.row {
+            let var_addr = Address::new(sheet, var_col, body_row);
+            let Some(var_value) = self.numeric_cell_value(var_addr) else {
+                continue;
+            };
+            let s = l123_core::format_number_general(var_value);
+            let _ = self.wb_mut().engine.set_user_input(input1, &s);
+            self.wb_mut()
+                .cells
+                .insert(input1, CellContents::Constant(Value::Number(var_value)));
+            self.wb_mut().engine.recalc();
+            self.refresh_formula_caches();
+
+            for body_col in (var_col + 1)..=r.end.col {
+                let formula_addr = Address::new(sheet, body_col, formula_row);
+                let value = match self.wb().cells.get(&formula_addr) {
+                    Some(c) => c.value(),
+                    None => Value::Empty,
+                };
+                let body_addr = Address::new(sheet, body_col, body_row);
+                if let Some(c) = self.wb().cells.get(&body_addr) {
+                    prev_cells.push((body_addr, c.clone()));
+                }
+                if let Some(f) = self.wb().cell_formats.get(&body_addr) {
+                    prev_formats.push((body_addr, *f));
+                }
+                if let Some(s) = self.wb().cell_text_styles.get(&body_addr) {
+                    prev_text_styles.push((body_addr, *s));
+                }
+                if let Value::Number(n) = value {
+                    let s = l123_core::format_number_general(n);
+                    let _ = self.wb_mut().engine.set_user_input(body_addr, &s);
+                    self.wb_mut()
+                        .cells
+                        .insert(body_addr, CellContents::Constant(Value::Number(n)));
+                } else {
+                    self.wb_mut().cells.remove(&body_addr);
+                    let _ = self.wb_mut().engine.clear_cell(body_addr);
+                }
+            }
+        }
+
+        // Capture the input cell's prior state for the journal, then
+        // restore it (so the workbook visually returns to its
+        // pre-/DT 1 state apart from the new body cells).
+        if let Some(orig) = &original_input1 {
+            prev_cells.push((input1, orig.clone()));
+            self.wb_mut().cells.insert(input1, orig.clone());
+            self.push_to_engine_at(input1, orig);
+        } else {
+            self.wb_mut().cells.remove(&input1);
+            let _ = self.wb_mut().engine.clear_cell(input1);
+        }
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.menu = None;
+        self.mode = Mode::Ready;
+    }
+
+    fn enter_data_parse_menu(&mut self) {
+        self.menu = Some(MenuState::rooted_at(menu::DATA_PARSE_MENU));
+        self.mode = Mode::Menu;
+    }
+
+    fn enter_data_query_menu(&mut self) {
+        self.menu = Some(MenuState::rooted_at(menu::DATA_QUERY_MENU));
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Data Query Find` — jump the pointer to the first record
+    /// in the input range that matches the criteria. Silent
+    /// no-op when input or criteria is unset, or when no record
+    /// matches.
+    fn execute_data_query_find(&mut self) {
+        let Some((input, criteria)) = self.data_query.input.zip(self.data_query.criteria) else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let input = input.normalized();
+        let criteria = criteria.normalized();
+        let n_records = input.end.row.saturating_sub(input.start.row);
+        for r in 0..n_records {
+            if self.query_record_matches(input, criteria, r) {
+                let row = input.start.row + 1 + r;
+                self.wb_mut().pointer = Address::new(input.start.sheet, input.start.col, row);
+                self.scroll_into_view();
+                break;
+            }
+        }
+        self.menu = None;
+        self.mode = Mode::Ready;
+    }
+
+    /// `/Data Query Extract` (`unique=false`) and `/Data Query
+    /// Unique` (`unique=true`). Walks the input range, collects
+    /// matching records, and writes them into the output range
+    /// below its header. When the output's row 1 has labels, only
+    /// fields whose names match are copied (in output-header
+    /// order); otherwise every input field is copied.
+    fn execute_data_query_extract(&mut self, unique: bool) {
+        let Some(input) = self.data_query.input else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let Some(criteria) = self.data_query.criteria else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let Some(output) = self.data_query.output else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let input = input.normalized();
+        let criteria = criteria.normalized();
+        let output = output.normalized();
+        let in_field_count = (input.end.col - input.start.col + 1) as usize;
+        let in_field_names: Vec<String> = (0..in_field_count)
+            .map(|i| {
+                let addr = Address::new(
+                    input.start.sheet,
+                    input.start.col + i as u16,
+                    input.start.row,
+                );
+                self.cell_label_lower(addr).unwrap_or_default()
+            })
+            .collect();
+        let out_field_count = (output.end.col - output.start.col + 1) as usize;
+        let out_field_names: Vec<String> = (0..out_field_count)
+            .map(|i| {
+                let addr = Address::new(
+                    output.start.sheet,
+                    output.start.col + i as u16,
+                    output.start.row,
+                );
+                self.cell_label_lower(addr).unwrap_or_default()
+            })
+            .collect();
+        // For each output column, find the matching input column
+        // by header label; or use the same column index when the
+        // output header is empty.
+        let header_present = out_field_names.iter().any(|s| !s.is_empty());
+        let column_map: Vec<Option<usize>> = if header_present {
+            out_field_names
+                .iter()
+                .map(|name| {
+                    if name.is_empty() {
+                        None
+                    } else {
+                        in_field_names.iter().position(|n| n == name)
+                    }
+                })
+                .collect()
+        } else {
+            (0..out_field_count.min(in_field_count))
+                .map(Some)
+                .chain(std::iter::repeat_n(
+                    None,
+                    out_field_count.saturating_sub(in_field_count),
+                ))
+                .collect()
+        };
+
+        let n_records = input.end.row.saturating_sub(input.start.row);
+        let mut emitted: Vec<Vec<Option<CellContents>>> = Vec::new();
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+
+        let max_out_rows = if output.end.row > output.start.row {
+            (output.end.row - output.start.row) as usize
+        } else {
+            0
+        };
+
+        let mut out_row_idx: usize = 0;
+        for r in 0..n_records {
+            if !self.query_record_matches(input, criteria, r) {
+                continue;
+            }
+            let in_row = input.start.row + 1 + r;
+            let row_values: Vec<Option<CellContents>> = column_map
+                .iter()
+                .map(|maybe_in_col| {
+                    maybe_in_col.and_then(|in_col| {
+                        let addr = Address::new(
+                            input.start.sheet,
+                            input.start.col + in_col as u16,
+                            in_row,
+                        );
+                        self.wb().cells.get(&addr).cloned()
+                    })
+                })
+                .collect();
+            if unique && emitted.iter().any(|r| r == &row_values) {
+                continue;
+            }
+            if max_out_rows > 0 && out_row_idx >= max_out_rows {
+                break;
+            }
+            emitted.push(row_values.clone());
+            for (j, contents) in row_values.iter().enumerate() {
+                let out_addr = Address::new(
+                    output.start.sheet,
+                    output.start.col + j as u16,
+                    output.start.row + 1 + out_row_idx as u32,
+                );
+                if let Some(c) = self.wb().cells.get(&out_addr) {
+                    prev_cells.push((out_addr, c.clone()));
+                }
+                if let Some(f) = self.wb().cell_formats.get(&out_addr) {
+                    prev_formats.push((out_addr, *f));
+                }
+                if let Some(s) = self.wb().cell_text_styles.get(&out_addr) {
+                    prev_text_styles.push((out_addr, *s));
+                }
+                if let Some(c) = contents {
+                    self.wb_mut().cells.insert(out_addr, c.clone());
+                    self.push_to_engine_at(out_addr, c);
+                } else {
+                    self.wb_mut().cells.remove(&out_addr);
+                    let _ = self.wb_mut().engine.clear_cell(out_addr);
+                }
+            }
+            out_row_idx += 1;
+        }
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.menu = None;
+        self.mode = Mode::Ready;
+    }
+
+    /// `/Data Query Del` — drop matching records and shift the
+    /// surviving records up so the input range stays compact below
+    /// its header. Trailing rows in the original input range are
+    /// cleared.
+    fn execute_data_query_del(&mut self) {
+        let Some(input) = self.data_query.input else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let Some(criteria) = self.data_query.criteria else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let input = input.normalized();
+        let criteria = criteria.normalized();
+        let n_records = input.end.row.saturating_sub(input.start.row);
+        let n_cols = (input.end.col - input.start.col + 1) as usize;
+        let mut survivors: Vec<Vec<Option<CellContents>>> = Vec::new();
+        for r in 0..n_records {
+            if self.query_record_matches(input, criteria, r) {
+                continue;
+            }
+            let in_row = input.start.row + 1 + r;
+            let row_values: Vec<Option<CellContents>> = (0..n_cols)
+                .map(|c| {
+                    let addr = Address::new(input.start.sheet, input.start.col + c as u16, in_row);
+                    self.wb().cells.get(&addr).cloned()
+                })
+                .collect();
+            survivors.push(row_values);
+        }
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+        for r in 0..n_records {
+            for c in 0..n_cols {
+                let addr = Address::new(
+                    input.start.sheet,
+                    input.start.col + c as u16,
+                    input.start.row + 1 + r,
+                );
+                if let Some(cc) = self.wb().cells.get(&addr) {
+                    prev_cells.push((addr, cc.clone()));
+                }
+                if let Some(f) = self.wb().cell_formats.get(&addr) {
+                    prev_formats.push((addr, *f));
+                }
+                if let Some(s) = self.wb().cell_text_styles.get(&addr) {
+                    prev_text_styles.push((addr, *s));
+                }
+            }
+        }
+        for (i, row) in survivors.iter().enumerate() {
+            for (c, contents) in row.iter().enumerate() {
+                let addr = Address::new(
+                    input.start.sheet,
+                    input.start.col + c as u16,
+                    input.start.row + 1 + i as u32,
+                );
+                if let Some(cc) = contents {
+                    self.wb_mut().cells.insert(addr, cc.clone());
+                    self.push_to_engine_at(addr, cc);
+                } else {
+                    self.wb_mut().cells.remove(&addr);
+                    let _ = self.wb_mut().engine.clear_cell(addr);
+                }
+            }
+        }
+        for r in survivors.len()..(n_records as usize) {
+            for c in 0..n_cols {
+                let addr = Address::new(
+                    input.start.sheet,
+                    input.start.col + c as u16,
+                    input.start.row + 1 + r as u32,
+                );
+                self.wb_mut().cells.remove(&addr);
+                let _ = self.wb_mut().engine.clear_cell(addr);
+            }
+        }
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.menu = None;
+        self.mode = Mode::Ready;
+    }
+
+    /// True if record `r` (zero-based, below the input header)
+    /// satisfies any of the criteria rows. A criterion row matches
+    /// when every non-empty criterion cell in that row matches the
+    /// corresponding input field. Field-name matching is
+    /// case-insensitive label equality. Numeric criteria match by
+    /// equality. Empty criterion cells impose no constraint. Any
+    /// other criterion type (formula, date, ...) is treated as
+    /// "no match" for this MVP slice.
+    fn query_record_matches(&self, input: Range, criteria: Range, record_idx: u32) -> bool {
+        let in_row = input.start.row + 1 + record_idx;
+        let n_input_cols = (input.end.col - input.start.col + 1) as usize;
+        let input_field_names: Vec<String> = (0..n_input_cols)
+            .map(|i| {
+                let addr = Address::new(
+                    input.start.sheet,
+                    input.start.col + i as u16,
+                    input.start.row,
+                );
+                self.cell_label_lower(addr).unwrap_or_default()
+            })
+            .collect();
+        let n_crit_cols = (criteria.end.col - criteria.start.col + 1) as usize;
+        let n_crit_rows = criteria.end.row.saturating_sub(criteria.start.row);
+        if n_crit_rows == 0 {
+            return false;
+        }
+        for cr in 0..n_crit_rows {
+            let crit_row = criteria.start.row + 1 + cr;
+            let mut all_match = true;
+            let mut any_constraint = false;
+            for cc in 0..n_crit_cols {
+                let crit_addr = Address::new(
+                    criteria.start.sheet,
+                    criteria.start.col + cc as u16,
+                    crit_row,
+                );
+                let Some(crit_contents) = self.wb().cells.get(&crit_addr) else {
+                    continue;
+                };
+                if matches!(crit_contents, CellContents::Empty) {
+                    continue;
+                }
+                any_constraint = true;
+                let crit_field_name_addr = Address::new(
+                    criteria.start.sheet,
+                    criteria.start.col + cc as u16,
+                    criteria.start.row,
+                );
+                let Some(field_name) = self.cell_label_lower(crit_field_name_addr) else {
+                    all_match = false;
+                    break;
+                };
+                let Some(in_col_offset) = input_field_names.iter().position(|n| n == &field_name)
+                else {
+                    all_match = false;
+                    break;
+                };
+                let in_addr = Address::new(
+                    input.start.sheet,
+                    input.start.col + in_col_offset as u16,
+                    in_row,
+                );
+                let in_contents = self.wb().cells.get(&in_addr);
+                if !cell_values_equal_for_query(crit_contents, in_contents) {
+                    all_match = false;
+                    break;
+                }
+            }
+            if all_match && any_constraint {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Read a cell's label text, lowercased, for case-insensitive
+    /// header / field-name matching. Returns `None` for non-label
+    /// cells.
+    fn cell_label_lower(&self, addr: Address) -> Option<String> {
+        match self.wb().cells.get(&addr)? {
+            CellContents::Label { text, .. } => Some(text.to_ascii_lowercase()),
+            CellContents::Constant(Value::Text(s)) => Some(s.to_ascii_lowercase()),
+            _ => None,
+        }
+    }
+
+    /// `/Data Parse Format-Line Create` — read the first non-empty
+    /// label below the input column's top row and emit a format
+    /// line classifying each char run (digits/sign/dot → `V`,
+    /// whitespace gaps stay as spaces, anything else → `L`).
+    /// Writes the result as an apostrophe-prefixed label into the
+    /// top of the input column. Refuses with a status-line error
+    /// when no input column is set or the data row isn't a label.
+    fn execute_parse_format_line_create(&mut self) {
+        let Some(input) = self.data_parse.input_range else {
+            self.set_error("Parse Format-Line: set Input-Column first");
+            return;
+        };
+        let r = input.normalized();
+        let sheet = r.start.sheet;
+        let col = r.start.col;
+        let fl_addr = Address::new(sheet, col, r.start.row);
+        let mut data_text: Option<String> = None;
+        for row in (r.start.row + 1)..=r.end.row {
+            let addr = Address::new(sheet, col, row);
+            if let Some(CellContents::Label { text, .. }) = self.wb().cells.get(&addr) {
+                if !text.is_empty() {
+                    data_text = Some(text.clone());
+                    break;
+                }
+            }
+        }
+        let Some(text) = data_text else {
+            self.set_error("Parse Format-Line: no label data row to derive from");
+            return;
+        };
+        let fl = build_format_line(&text);
+        let prev = self.wb().cells.get(&fl_addr).cloned();
+        let new_cell = label_cell(&fl);
+        self.wb_mut().cells.insert(fl_addr, new_cell.clone());
+        self.push_to_engine_at(fl_addr, &new_cell);
+        if self.undo_enabled {
+            let mut prev_cells = Vec::new();
+            if let Some(c) = prev {
+                prev_cells.push((fl_addr, c));
+            }
+            if !prev_cells.is_empty() {
+                self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                    cells: prev_cells,
+                    formats: Vec::new(),
+                    text_styles: Vec::new(),
+                });
+            }
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.enter_data_parse_menu();
+    }
+
+    /// `/Data Parse Format-Line Edit` — move the pointer to the
+    /// format-line cell (top of the input column) and open it in
+    /// EDIT mode. Refuses with a status-line error when no input
+    /// column is set.
+    fn execute_parse_format_line_edit(&mut self) {
+        let Some(input) = self.data_parse.input_range else {
+            self.set_error("Parse Format-Line: set Input-Column first");
+            return;
+        };
+        let r = input.normalized();
+        let fl_addr = Address::new(r.start.sheet, r.start.col, r.start.row);
+        self.wb_mut().pointer = fl_addr;
+        self.scroll_into_view();
+        self.menu = None;
+        self.begin_edit();
+    }
+
+    /// `/Data Parse Go` — split each label in `input_range` (rows
+    /// 2..N; row 1 holds the format-line label) according to the
+    /// fields encoded in the format line, and write the parsed
+    /// fields starting at `output_anchor`. Silent no-op when the
+    /// input range or output anchor is unset, when the format-line
+    /// row isn't a label starting with `|`, or when the format
+    /// line declares zero non-skip fields.
+    fn execute_data_parse(&mut self) {
+        let Some(input) = self.data_parse.input_range else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let Some(anchor) = self.data_parse.output_anchor else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let r = input.normalized();
+        let sheet = r.start.sheet;
+        let col = r.start.col;
+        let fl_row = r.start.row;
+        let fl_addr = Address::new(sheet, col, fl_row);
+        let fl_text = match self.wb().cells.get(&fl_addr) {
+            Some(CellContents::Label { text, .. }) if text.starts_with('|') => text.clone(),
+            _ => {
+                self.set_error("Parse: top of input column must be a `|`-prefixed format line");
+                return;
+            }
+        };
+        let fields = parse_format_line(&fl_text);
+        if fields.is_empty() {
+            self.set_error("Parse: format line declares no fields");
+            return;
+        }
+
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+        let mut data_row_idx: u32 = 0;
+        for in_row in (fl_row + 1)..=r.end.row {
+            let in_addr = Address::new(sheet, col, in_row);
+            let label_text = match self.wb().cells.get(&in_addr) {
+                Some(CellContents::Label { text, .. }) => text.clone(),
+                _ => {
+                    data_row_idx += 1;
+                    continue;
+                }
+            };
+            let chars: Vec<char> = label_text.chars().collect();
+            let mut out_col_idx: u16 = 0;
+            for &(start, end, kind) in &fields {
+                if kind == FormatField::Skip {
+                    out_col_idx += 1;
+                    continue;
+                }
+                let slice: String = chars
+                    .iter()
+                    .skip(start)
+                    .take(end.saturating_sub(start))
+                    .collect();
+                let trimmed = slice.trim();
+                let out_addr =
+                    Address::new(sheet, anchor.col + out_col_idx, anchor.row + data_row_idx);
+                if !trimmed.is_empty() {
+                    if let Some(c) = self.wb().cells.get(&out_addr) {
+                        prev_cells.push((out_addr, c.clone()));
+                    }
+                    if let Some(f) = self.wb().cell_formats.get(&out_addr) {
+                        prev_formats.push((out_addr, *f));
+                    }
+                    if let Some(s) = self.wb().cell_text_styles.get(&out_addr) {
+                        prev_text_styles.push((out_addr, *s));
+                    }
+                    let contents = match kind {
+                        FormatField::Value => match trimmed.parse::<f64>() {
+                            Ok(n) => CellContents::Constant(Value::Number(n)),
+                            Err(_) => label_cell(trimmed),
+                        },
+                        FormatField::Label | FormatField::Date | FormatField::Time => {
+                            label_cell(trimmed)
+                        }
+                        FormatField::Skip => unreachable!(),
+                    };
+                    self.wb_mut().cells.insert(out_addr, contents.clone());
+                    self.push_to_engine_at(out_addr, &contents);
+                }
+                out_col_idx += 1;
+            }
+            data_row_idx += 1;
+        }
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.menu = None;
+        self.mode = Mode::Ready;
+    }
+
+    fn enter_data_regression_menu(&mut self) {
+        self.menu = Some(MenuState::rooted_at(menu::DATA_REGRESSION_MENU));
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Data Regression` — univariate ordinary least-squares
+    /// linear regression. Reads numeric values from the configured
+    /// X and Y ranges (must be the same length), computes
+    /// `y = a + b*x`, and writes a labeled output table at
+    /// `output_anchor`. Silent no-op when X, Y, or output anchor
+    /// is unset, or when the ranges have fewer than 2 numeric
+    /// points (degrees of freedom would be non-positive).
+    fn execute_data_regression(&mut self) {
+        let Some(x_range) = self.data_regression.x_range else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let Some(y_range) = self.data_regression.y_range else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+        let Some(anchor) = self.data_regression.output_anchor else {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        };
+
+        let xs = self.collect_numeric_column(x_range);
+        let ys = self.collect_numeric_column(y_range);
+        let n = xs.len().min(ys.len());
+        if n < 2 {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        }
+        let nf = n as f64;
+        let sum_x: f64 = xs.iter().take(n).sum();
+        let sum_y: f64 = ys.iter().take(n).sum();
+        let mean_x = sum_x / nf;
+        let mean_y = sum_y / nf;
+        let mut sxx = 0.0_f64;
+        let mut syy = 0.0_f64;
+        let mut sxy = 0.0_f64;
+        for i in 0..n {
+            let dx = xs[i] - mean_x;
+            let dy = ys[i] - mean_y;
+            sxx += dx * dx;
+            syy += dy * dy;
+            sxy += dx * dy;
+        }
+        let force_zero = self.data_regression.intercept_zero;
+        let (b, a) = if force_zero {
+            let sxx_raw: f64 = xs.iter().take(n).map(|x| x * x).sum();
+            let sxy_raw: f64 = (0..n).map(|i| xs[i] * ys[i]).sum();
+            (sxy_raw / sxx_raw, 0.0_f64)
+        } else if sxx == 0.0 {
+            (0.0_f64, mean_y)
+        } else {
+            let b = sxy / sxx;
+            (b, mean_y - b * mean_x)
+        };
+        let r_squared = if syy == 0.0 || sxx == 0.0 {
+            1.0
+        } else {
+            (sxy * sxy) / (sxx * syy)
+        };
+        let mut rss = 0.0_f64;
+        for i in 0..n {
+            let pred = a + b * xs[i];
+            let r = ys[i] - pred;
+            rss += r * r;
+        }
+        let df = if force_zero {
+            n - 1
+        } else {
+            n.saturating_sub(2)
+        };
+        let dff = df.max(1) as f64;
+        let s_y_est = (rss / dff).sqrt();
+        let se_b = if sxx > 0.0 {
+            (s_y_est * s_y_est / sxx).sqrt()
+        } else {
+            0.0
+        };
+
+        let sheet = anchor.sheet;
+        let label_col = anchor.col;
+        let value_col = anchor.col + 1;
+        let r0 = anchor.row;
+        let writes: Vec<(Address, CellContents)> = vec![
+            (
+                Address::new(sheet, label_col, r0),
+                label_cell("Regression Output:"),
+            ),
+            (
+                Address::new(sheet, label_col, r0 + 2),
+                label_cell("Constant"),
+            ),
+            (
+                Address::new(sheet, value_col, r0 + 2),
+                CellContents::Constant(Value::Number(a)),
+            ),
+            (
+                Address::new(sheet, label_col, r0 + 3),
+                label_cell("Std Err of Y Est"),
+            ),
+            (
+                Address::new(sheet, value_col, r0 + 3),
+                CellContents::Constant(Value::Number(s_y_est)),
+            ),
+            (
+                Address::new(sheet, label_col, r0 + 4),
+                label_cell("R Squared"),
+            ),
+            (
+                Address::new(sheet, value_col, r0 + 4),
+                CellContents::Constant(Value::Number(r_squared)),
+            ),
+            (
+                Address::new(sheet, label_col, r0 + 5),
+                label_cell("No. of Observations"),
+            ),
+            (
+                Address::new(sheet, value_col, r0 + 5),
+                CellContents::Constant(Value::Number(n as f64)),
+            ),
+            (
+                Address::new(sheet, label_col, r0 + 6),
+                label_cell("Degrees of Freedom"),
+            ),
+            (
+                Address::new(sheet, value_col, r0 + 6),
+                CellContents::Constant(Value::Number(df as f64)),
+            ),
+            (
+                Address::new(sheet, label_col, r0 + 8),
+                label_cell("X Coefficient(s)"),
+            ),
+            (
+                Address::new(sheet, value_col, r0 + 8),
+                CellContents::Constant(Value::Number(b)),
+            ),
+            (
+                Address::new(sheet, label_col, r0 + 9),
+                label_cell("Std Err of Coef."),
+            ),
+            (
+                Address::new(sheet, value_col, r0 + 9),
+                CellContents::Constant(Value::Number(se_b)),
+            ),
+        ];
+
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+        for (addr, contents) in &writes {
+            if let Some(c) = self.wb().cells.get(addr) {
+                prev_cells.push((*addr, c.clone()));
+            }
+            if let Some(f) = self.wb().cell_formats.get(addr) {
+                prev_formats.push((*addr, *f));
+            }
+            if let Some(s) = self.wb().cell_text_styles.get(addr) {
+                prev_text_styles.push((*addr, *s));
+            }
+            self.wb_mut().cells.insert(*addr, contents.clone());
+            self.push_to_engine_at(*addr, contents);
+        }
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.menu = None;
+        self.mode = Mode::Ready;
+    }
+
+    /// Walk a range column-major and collect every numeric cell value.
+    /// Used by /Data Regression to build its X / Y vectors.
+    fn collect_numeric_column(&self, range: Range) -> Vec<f64> {
+        let r = range.normalized();
+        let mut out = Vec::new();
+        for col in r.start.col..=r.end.col {
+            for row in r.start.row..=r.end.row {
+                let addr = Address::new(r.start.sheet, col, row);
+                if let Some(n) = self.numeric_cell_value(addr) {
+                    out.push(n);
+                }
+            }
+        }
+        out
+    }
+
+    /// `/Data Distribution` — count how many cells in `values`
+    /// fall into each bin defined by ascending thresholds in
+    /// `bins` (must be a single column). Writes counts to the
+    /// column immediately right of the bins, plus one extra row
+    /// at the bottom for the over-the-largest-bin overflow count.
+    /// Multi-column bins are silently treated as their first
+    /// column to match 1-2-3's "use the leftmost cell" behavior.
+    /// Journals overwritten cells for Alt-F4.
+    fn execute_data_distribution(&mut self, values: Range, bins: Range) {
+        let v = values.normalized();
+        let b = bins.normalized();
+        let bin_col = b.start.col;
+        let out_col = bin_col + 1;
+        let bin_sheet = b.start.sheet;
+        let val_sheet = v.start.sheet;
+
+        let mut bin_thresholds: Vec<(u32, f64)> = Vec::new();
+        for row in b.start.row..=b.end.row {
+            let addr = Address::new(bin_sheet, bin_col, row);
+            if let Some(n) = self.numeric_cell_value(addr) {
+                bin_thresholds.push((row, n));
+            }
+        }
+        if bin_thresholds.is_empty() {
+            self.menu = None;
+            self.mode = Mode::Ready;
+            return;
+        }
+
+        let mut samples: Vec<f64> = Vec::new();
+        for row in v.start.row..=v.end.row {
+            for col in v.start.col..=v.end.col {
+                let addr = Address::new(val_sheet, col, row);
+                if let Some(n) = self.numeric_cell_value(addr) {
+                    samples.push(n);
+                }
+            }
+        }
+
+        let mut counts: Vec<u64> = vec![0; bin_thresholds.len() + 1];
+        for s in &samples {
+            let mut placed = false;
+            for (i, (_, thr)) in bin_thresholds.iter().enumerate() {
+                if *s <= *thr {
+                    counts[i] += 1;
+                    placed = true;
+                    break;
+                }
+            }
+            if !placed {
+                let last = counts.len() - 1;
+                counts[last] += 1;
+            }
+        }
+
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+        let mut write = |app: &mut Self, addr: Address, count: u64| {
+            if let Some(c) = app.wb().cells.get(&addr) {
+                prev_cells.push((addr, c.clone()));
+            }
+            if let Some(f) = app.wb().cell_formats.get(&addr) {
+                prev_formats.push((addr, *f));
+            }
+            if let Some(s) = app.wb().cell_text_styles.get(&addr) {
+                prev_text_styles.push((addr, *s));
+            }
+            let s = count.to_string();
+            let _ = app.wb_mut().engine.set_user_input(addr, &s);
+            app.wb_mut()
+                .cells
+                .insert(addr, CellContents::Constant(Value::Number(count as f64)));
+        };
+        for (i, (row, _)) in bin_thresholds.iter().enumerate() {
+            let addr = Address::new(bin_sheet, out_col, *row);
+            write(self, addr, counts[i]);
+        }
+        let overflow_row = bin_thresholds.last().unwrap().0 + 1;
+        let overflow_addr = Address::new(bin_sheet, out_col, overflow_row);
+        let overflow_count = *counts.last().unwrap();
+        write(self, overflow_addr, overflow_count);
+
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.mode = Mode::Ready;
+    }
+
+    /// Numeric value at `addr` for /Data Distribution / Sort —
+    /// reads from `cells` and unwraps cached formula values too.
+    /// Returns `None` for blanks, labels, errors, and unevaluated
+    /// formulas.
+    fn numeric_cell_value(&self, addr: Address) -> Option<f64> {
+        match self.wb().cells.get(&addr)? {
+            CellContents::Constant(Value::Number(n)) => Some(*n),
+            CellContents::Formula {
+                cached_value: Some(Value::Number(n)),
+                ..
+            } => Some(*n),
+            _ => None,
+        }
+    }
+
+    fn start_data_fill_start_prompt(&mut self, range: Range) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter Start value:".into(),
+            buffer: "0".into(),
+            next: PromptNext::DataFillStart { range },
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_data_fill_step_prompt(&mut self, range: Range, start: f64) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter Step value:".into(),
+            buffer: "1".into(),
+            next: PromptNext::DataFillStep { range, start },
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_data_fill_stop_prompt(&mut self, range: Range, start: f64, step: f64) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter Stop value:".into(),
+            buffer: "2047".into(),
+            next: PromptNext::DataFillStop { range, start, step },
+            fresh: true,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// Write `start, start+step, start+2*step, ...` into `range`
+    /// column-major (down each column, then to the next column),
+    /// stopping at either the end of the range or when the next
+    /// computed value would cross `stop`. Captures previous cell
+    /// contents into a `RangeRestore` journal entry so Alt-F4 reverts.
+    fn execute_data_fill(&mut self, range: Range, start: f64, step: f64, stop: f64) {
+        let r = range.normalized();
+        let sheet = r.start.sheet;
+        let mut prev_cells: Vec<(Address, CellContents)> = Vec::new();
+        let mut prev_formats: Vec<(Address, Format)> = Vec::new();
+        let mut prev_text_styles: Vec<(Address, TextStyle)> = Vec::new();
+        let mut value = start;
+        'outer: for col in r.start.col..=r.end.col {
+            for row in r.start.row..=r.end.row {
+                if step >= 0.0 && value > stop {
+                    break 'outer;
+                }
+                if step < 0.0 && value < stop {
+                    break 'outer;
+                }
+                let addr = Address::new(sheet, col, row);
+                if let Some(c) = self.wb().cells.get(&addr) {
+                    prev_cells.push((addr, c.clone()));
+                }
+                if let Some(f) = self.wb().cell_formats.get(&addr) {
+                    prev_formats.push((addr, *f));
+                }
+                if let Some(s) = self.wb().cell_text_styles.get(&addr) {
+                    prev_text_styles.push((addr, *s));
+                }
+                let s = l123_core::format_number_general(value);
+                let _ = self.wb_mut().engine.set_user_input(addr, &s);
+                self.wb_mut()
+                    .cells
+                    .insert(addr, CellContents::Constant(Value::Number(value)));
+                value += step;
+            }
+        }
+        if self.undo_enabled
+            && (!prev_cells.is_empty() || !prev_formats.is_empty() || !prev_text_styles.is_empty())
+        {
+            self.wb_mut().journal.push(JournalEntry::RangeRestore {
+                cells: prev_cells,
+                formats: prev_formats,
+                text_styles: prev_text_styles,
+            });
+        }
+        self.wb_mut().engine.recalc();
+        self.refresh_formula_caches();
+        self.wb_mut().dirty = true;
+        self.mode = Mode::Ready;
+    }
 
     fn start_decimals_prompt(&mut self, kind: FormatKind) {
         self.menu = None;
@@ -7784,6 +9855,18 @@ impl App {
                 let n: u16 = p.buffer.parse().unwrap_or(current).clamp(1, 50);
                 self.recalc_iterations = n;
                 self.mode = Mode::Ready;
+            }
+            PromptNext::DataFillStart { range } => {
+                let start: f64 = p.buffer.parse().unwrap_or(0.0);
+                self.start_data_fill_step_prompt(range, start);
+            }
+            PromptNext::DataFillStep { range, start } => {
+                let step: f64 = p.buffer.parse().unwrap_or(1.0);
+                self.start_data_fill_stop_prompt(range, start, step);
+            }
+            PromptNext::DataFillStop { range, start, step } => {
+                let stop: f64 = p.buffer.parse().unwrap_or(2047.0);
+                self.execute_data_fill(range, start, step, stop);
             }
             PromptNext::RangeNameCreate => {
                 if p.buffer.is_empty() {
@@ -8308,17 +10391,22 @@ impl App {
     fn transition_point(&mut self, next: PendingCommand) {
         let source_tl = match next {
             PendingCommand::CopyTo { source } | PendingCommand::MoveTo { source } => source.start,
+            // /Data Distribution: spring back to the values-range
+            // top-left so the user navigates from a familiar landmark
+            // to the bin column.
+            PendingCommand::DataDistributionBins { values } => values.start,
             _ => self.wb_mut().pointer,
         };
         self.wb_mut().pointer = source_tl;
         self.scroll_into_view();
-        // Copy/Move TO start with no anchor so the user's pointer
-        // movement defaults to a single-cell destination (matches the
-        // M3 single-anchor flow). Pressing `.` anchors a multi-cell TO,
-        // which is what the Lotus tutorial "single source → fill multi
-        // destination" replicate flow needs.
+        // Copy/Move TO and DataDistribution Bins start with no anchor
+        // so the user can freely navigate to the destination/bin
+        // location. Pressing `.` anchors for a multi-cell extent
+        // (the standard 1-2-3 POINT muscle memory).
         let anchor = match next {
-            PendingCommand::CopyTo { .. } | PendingCommand::MoveTo { .. } => None,
+            PendingCommand::CopyTo { .. }
+            | PendingCommand::MoveTo { .. }
+            | PendingCommand::DataDistributionBins { .. } => None,
             _ => Some(self.wb().pointer),
         };
         self.point = Some(PointState {
@@ -8463,7 +10551,9 @@ impl App {
                 let names = self.wb_mut().engine.all_sheet_names();
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
                 let cfg = parse_config_from(&self.wb().international);
-                let excel = l123_parse::to_engine_source_with_config(expr, &names_ref, &cfg);
+                let expanded = l123_parse::expand_cellpointer(expr, addr);
+                let excel =
+                    l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
                 self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
@@ -8624,7 +10714,9 @@ impl App {
                 let names = self.wb_mut().engine.all_sheet_names();
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
                 let cfg = parse_config_from(&self.wb().international);
-                let excel = l123_parse::to_engine_source_with_config(expr, &names_ref, &cfg);
+                let expanded = l123_parse::expand_cellpointer(expr, addr);
+                let excel =
+                    l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
                 self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
@@ -10696,46 +12788,43 @@ impl App {
                         .get(&m.anchor)
                         .map(|a| a.horizontal)
                         .unwrap_or(HAlign::General);
-                    let (painted_text, anchor_text_start, anchor_text_end) = match self
-                        .wb()
-                        .cells
-                        .get(&m.anchor)
-                    {
-                        None | Some(CellContents::Empty) => {
-                            (" ".repeat(span_w as usize), 0usize, 0usize)
-                        }
-                        Some(CellContents::Label { prefix, text }) => {
-                            let eff_prefix = effective_label_prefix(*prefix, halign);
-                            let painted = render_label(eff_prefix, text, span_w as usize);
-                            let (s, e) = label_text_bounds(
-                                eff_prefix,
-                                text.chars().count(),
-                                span_w as usize,
-                            );
-                            (painted, s, e)
-                        }
-                        Some(other) => {
-                            let fmt = self.format_for_cell(m.anchor);
-                            let s = render_own_width(
-                                other,
-                                span_w as usize,
-                                fmt,
-                                &self.wb().international,
-                            );
-                            let painted = apply_halign_to_rendered(&s, halign, span_w as usize);
-                            // Rendered values (numbers, formulas) have
-                            // no internal whitespace runs, so trimming
-                            // captures the text region exactly.
-                            let chars: Vec<char> = painted.chars().collect();
-                            let first = chars.iter().position(|c| *c != ' ');
-                            let last = chars.iter().rposition(|c| *c != ' ');
-                            let (ts, te) = match (first, last) {
-                                (Some(a), Some(b)) => (a, b + 1),
-                                _ => (0, 0),
-                            };
-                            (painted, ts, te)
-                        }
-                    };
+                    let (painted_text, anchor_text_start, anchor_text_end) =
+                        match self.wb().cells.get(&m.anchor) {
+                            None | Some(CellContents::Empty) => {
+                                (" ".repeat(span_w as usize), 0usize, 0usize)
+                            }
+                            Some(CellContents::Label { prefix, text }) => {
+                                let eff_prefix = effective_label_prefix(*prefix, halign);
+                                let painted = render_label(eff_prefix, text, span_w as usize);
+                                let (s, e) = label_text_bounds(
+                                    eff_prefix,
+                                    text.chars().count(),
+                                    span_w as usize,
+                                );
+                                (painted, s, e)
+                            }
+                            Some(other) => {
+                                let fmt = self.format_for_cell(m.anchor);
+                                let s = render_own_width(
+                                    other,
+                                    span_w as usize,
+                                    fmt,
+                                    &self.wb().international,
+                                );
+                                let painted = apply_halign_to_rendered(&s, halign, span_w as usize);
+                                // Rendered values (numbers, formulas) have
+                                // no internal whitespace runs, so trimming
+                                // captures the text region exactly.
+                                let chars: Vec<char> = painted.chars().collect();
+                                let first = chars.iter().position(|c| *c != ' ');
+                                let last = chars.iter().rposition(|c| *c != ' ');
+                                let (ts, te) = match (first, last) {
+                                    (Some(a), Some(b)) => (a, b + 1),
+                                    _ => (0, 0),
+                                };
+                                (painted, ts, te)
+                            }
+                        };
                     // Build the anchor's full visual style — same
                     // layering as the cell-paint loop: pointer
                     // suppresses fill/font; text-style modifiers
@@ -14567,7 +16656,7 @@ mod tests {
 
         let buf = app.render_to_buffer(80, 25);
         let neighbor = Address::new(SheetId::A, 1, 2); // B3
-        // First two B3 columns hold the spilled "ld" tail — underlined.
+                                                       // First two B3 columns hold the spilled "ld" tail — underlined.
         let l = buf_cell_at(&app, &buf, neighbor, 0);
         assert_eq!(l.symbol(), "l");
         assert!(l.style().add_modifier.contains(Modifier::UNDERLINED));
@@ -14622,9 +16711,9 @@ mod tests {
 
         let buf = app.render_to_buffer(120, 25);
         let neighbor = Address::new(SheetId::A, 1, 2); // B3
-        // First column of B3 is the boundary space — it's the
-        // internal " " of "...1991: Sloane..." and must stay
-        // underlined for the run to read continuously.
+                                                       // First column of B3 is the boundary space — it's the
+                                                       // internal " " of "...1991: Sloane..." and must stay
+                                                       // underlined for the run to read continuously.
         let boundary = buf_cell_at(&app, &buf, neighbor, 0);
         assert_eq!(boundary.symbol(), " ");
         assert!(

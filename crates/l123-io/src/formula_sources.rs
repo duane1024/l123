@@ -86,8 +86,8 @@ pub fn write_to_xlsx(path: &Path, sources: &HashMap<Address, String>) -> io::Res
                 return Err(io::Error::other(e));
             }
         }
-        let opts = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         if let Err(e) = out_zip.start_file(SIDECAR_PATH, opts) {
             return Err(io::Error::other(e));
         }
