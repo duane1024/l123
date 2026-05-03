@@ -105,3 +105,57 @@ KEYS (C1)
 ENTER
 ASSERT_CELL       A:D1  hello
 ASSERT_PANEL_L1   A:D1: (G) @@(C1)
+
+# @D360 → DAYS360: days between two dates on a 360-day-year basis.
+# 2024-01-01 to 2025-01-01 → 360.
+F 5
+KEYS B8
+ENTER
+KEY @
+KEYS D360(@DATE(2024,1,1),@DATE(2025,1,1))
+ENTER
+ASSERT_CELL       A:B8  360
+ASSERT_PANEL_L1   A:B8: (G) @D360(@DATE(2024,1,1),@DATE(2025,1,1))
+
+# @DGET → DGET: extract a single value from a database where criteria
+# matches. Database in F1..G3 (header row + two records); criteria in
+# I1..I2 ("name = alice"); field 2 (age column) → 30.
+F 5
+KEYS F1
+ENTER
+KEY '
+KEYS name
+DOWN
+KEY '
+KEYS alice
+DOWN
+KEY '
+KEYS bob
+ENTER
+F 5
+KEYS G1
+ENTER
+KEY '
+KEYS age
+DOWN
+KEYS 30
+DOWN
+KEYS 25
+ENTER
+F 5
+KEYS I1
+ENTER
+KEY '
+KEYS name
+DOWN
+KEY '
+KEYS alice
+ENTER
+F 5
+KEYS B9
+ENTER
+KEY @
+KEYS DGET(F1..G3,2,I1..I2)
+ENTER
+ASSERT_CELL       A:B9  30
+ASSERT_PANEL_L1   A:B9: (G) @DGET(F1..G3,2,I1..I2)

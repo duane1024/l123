@@ -286,6 +286,7 @@ const FN_RENAMES_BACK: &[(&str, &str)] = &[
     ("DVARP", "DVAR"),
     ("DVAR", "DVARS"),
     ("UNICODE", "CODE"),
+    ("DAYS360", "D360"),
 ];
 
 fn lookup_reverse_rename(upper_name: &str) -> Option<&'static str> {
@@ -429,6 +430,7 @@ const FN_RENAMES: &[(&str, &str)] = &[
     // IronCalc 0.7.1 ships only `UNICODE`, which is identical for
     // ASCII; close-enough mapping until/unless a `CODE` shim lands.
     ("CODE", "UNICODE"),
+    ("D360", "DAYS360"),
 ];
 
 /// 1-2-3 niladic functions — written without parens in 1-2-3, but
@@ -564,6 +566,7 @@ fn try_arg_fix(
         "CTERM" => rewrite_cterm(&translated)?,
         "TERM" => rewrite_term(&translated)?,
         "SUMPRODUCT" => rewrite_sumproduct(&translated)?,
+        "REPLACE" => rewrite_replace(&translated)?,
         _ => return None,
     };
     Some((emitted, close + 1))
@@ -619,6 +622,23 @@ fn rewrite_sumproduct(args: &[String]) -> Option<String> {
     }
     let parts: Vec<String> = args.iter().map(|a| format!("({a})")).collect();
     Some(format!("SUM({})", parts.join("*")))
+}
+
+/// `@REPLACE(s, start, n, new)` — IronCalc 0.7.1 has `SUBSTITUTE` but
+/// not `REPLACE`, and the two have different semantics (substring
+/// match vs. fixed-position). Emulate via composition:
+///   `LEFT(s, start) & new & MID(s, start+n+1, LEN(s))`
+/// 1-2-3's `start` is 0-based, so `LEFT(s, start)` keeps the first
+/// `start` chars verbatim. The MID tail at `start+n+1` skips the
+/// replaced span and converts to Excel's 1-based MID index.
+fn rewrite_replace(args: &[String]) -> Option<String> {
+    if args.len() != 4 {
+        return None;
+    }
+    let (s, start, n, new) = (&args[0], &args[1], &args[2], &args[3]);
+    Some(format!(
+        "LEFT({s},{start})&{new}&MID({s},({start})+({n})+1,LEN({s}))"
+    ))
 }
 
 /// `@STRING(n, decimals)` → Excel `TEXT(n, fmt)`. When `decimals` is
@@ -1313,6 +1333,45 @@ mod tests {
         assert_eq!(to_engine_source("@CODE(A1)", &[]), "=UNICODE(A1)");
     }
 
+    #[test]
+    fn rename_d360_to_days360() {
+        // 1-2-3 @D360(start, end) → Excel DAYS360(start, end). Same
+        // semantics (days between dates on a 360-day-year basis); just
+        // a name swap.
+        assert_eq!(
+            to_engine_source("@D360(A1,B1)", &[]),
+            "=DAYS360(A1,B1)"
+        );
+    }
+
+    #[test]
+    fn dget_passes_through() {
+        // @DGET → DGET. IronCalc has DGET; the leading `@` is the only
+        // edit needed. Same multi-input caveat applies as the rest of
+        // the database family.
+        assert_eq!(
+            to_engine_source("@DGET(A1..C5,2,E1..E2)", &[]),
+            "=DGET(A1:C5,2,E1:E2)"
+        );
+    }
+
+    #[test]
+    fn replace_emulated_via_left_mid() {
+        // @REPLACE(s, start, n, new) — 1-2-3 `start` is 0-based.
+        // IronCalc 0.7.1 has SUBSTITUTE but no REPLACE, so emulate via
+        //   LEFT(s, start) & new & MID(s, start+n+1, LEN(s))
+        // The MID `start+n+1` term: skip `start+n` chars (0-based), then
+        // +1 to convert to Excel's 1-based MID index.
+        assert_eq!(
+            to_engine_source("@REPLACE(\"ABCDEF\",2,3,\"X\")", &[]),
+            "=LEFT(\"ABCDEF\",2)&\"X\"&MID(\"ABCDEF\",(2)+(3)+1,LEN(\"ABCDEF\"))"
+        );
+        assert_eq!(
+            to_engine_source("@REPLACE(A1,B1,C1,D1)", &[]),
+            "=LEFT(A1,B1)&D1&MID(A1,(B1)+(C1)+1,LEN(A1))"
+        );
+    }
+
     // ---- Reverse translator: Excel body → 1-2-3 source form ----
     //
     // The forward translator turns user-typed `@AVG(A1..A5)` into the
@@ -1335,6 +1394,7 @@ mod tests {
         assert_eq!(to_lotus_source("COLUMNS(A1:E1)", &[]), "@COLS(A1..E1)");
         assert_eq!(to_lotus_source("COUNTA(A1:A5)", &[]), "@COUNT(A1..A5)");
         assert_eq!(to_lotus_source("UNICODE(A1)", &[]), "@CODE(A1)");
+        assert_eq!(to_lotus_source("DAYS360(A1,B1)", &[]), "@D360(A1,B1)");
     }
 
     #[test]
@@ -1478,6 +1538,8 @@ mod tests {
             "@PI",
             "@@(B5)",
             "@COLS(A1..E1)",
+            "@D360(A1,B1)",
+            "@DGET(A1..C5,2,E1..E2)",
         ] {
             let excel = to_engine_source(lotus, &[]);
             let body = excel.strip_prefix('=').unwrap();

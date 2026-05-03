@@ -23,7 +23,7 @@ Shipped in `l123-parse` (covered by parse unit tests + acceptance
 transcripts under `tests/acceptance/function_*.tsv`):
 
 - **Renames**: `@AVG @COUNT @STD @STDS @VAR @VARS @ISSTRING @LENGTH
-  @REPEAT @COLS @CODE`, the database family
+  @REPEAT @COLS @CODE @D360`, the database family
   `@DAVG @DSTD @DSTDS @DVAR @DVARS`, and `@@`.
 - **Niladic-paren completion** for `@PI @NOW @TODAY @RAND @NA @TRUE
   @FALSE` (1-2-3 omits `()`; Excel requires it).
@@ -32,7 +32,13 @@ transcripts under `tests/acceptance/function_*.tsv`):
   (static for literal `decimals`, dynamic via `IF`/`REPT` otherwise).
 - **Emulations**: `@ERR` → `#VALUE!` literal, `@CTERM` and `@TERM` to
   log compositions, `@SUMPRODUCT` → `SUM` with array broadcast
-  (verified IronCalc 0.7.1 `SUM` accepts `(A1:A3)*(B1:B3)`).
+  (verified IronCalc 0.7.1 `SUM` accepts `(A1:A3)*(B1:B3)`),
+  `@REPLACE` → `LEFT(s,start) & new & MID(s,start+n+1,LEN(s))`
+  composition (IronCalc has `SUBSTITUTE` but not `REPLACE`).
+- **Passthroughs** that need no rename or rewrite (the `@`-strip is
+  enough): `@DGET` (R3 multi-input form deviates from Excel's
+  single-range `DGET` — same caveat as the rest of the database
+  family).
 
 Deferred, with rationale:
 
@@ -204,12 +210,18 @@ Limitations:
 | `@STRING`     | `TEXT`   | rename  | 1-2-3 `@STRING(n, decimals)` → `TEXT(n, "0.000…")` — must build the Excel format string from the decimal count. |
 | `@VALUE`      | `VALUE`  | 1:1     |       |
 | `@CHAR`       | —        | emulate | IronCalc 0.7.1 lacks `CHAR`/`UNICHAR`. Shim required. |
-| `@CODE`       | —        | emulate | IronCalc has `UNICODE` (returns codepoint of first char) — close, but `@CODE` is LICS in R3 and ASCII elsewhere; pick one. |
+| `@CODE`       | `UNICODE` | rename | 1-2-3 `@CODE` is LICS in R3 and ASCII elsewhere; IronCalc only ships `UNICODE`, which agrees for ASCII input. Revisit if a transcript surfaces a divergence. |
+| `@REPLACE`    | —        | emulate | IronCalc 0.7.1 has `SUBSTITUTE` (substring-match) but not `REPLACE` (fixed-position). Composed as `LEFT(s,p) & new & MID(s,p+n+1,LEN(s))` with 0-based `p`. |
 
-### Date/Time — all 1:1
+### Date/Time
 
 `@DATE @DATEVALUE @DAY @MONTH @YEAR @NOW @TODAY @TIME @TIMEVALUE
-@HOUR @MINUTE @SECOND` all map to identically named IronCalc functions.
+@HOUR @MINUTE @SECOND` all map to identically named IronCalc functions
+(1:1).
+
+| @-name   | IronCalc   | Status  | Notes |
+|----------|------------|---------|-------|
+| `@D360`  | `DAYS360`  | rename  | Day count between two dates on a 360-day-year basis (12 × 30-day months). |
 
 Caveat: 1-2-3 epoch is **1900-01-01 = 1**; Excel epoch is the same but
 treats 1900 as a leap year (the legacy `Feb 29 1900` bug). IronCalc
@@ -259,6 +271,7 @@ for numbers) against Excel's `range_lookup` arg in transcripts.
 | `@DSUM`       | `DSUM`        | 1:1     |       |
 | `@DCOUNT`     | `DCOUNT`      | 1:1     |       |
 | `@DAVG`       | `DAVERAGE`    | rename  |       |
+| `@DGET`       | `DGET`        | 1:1     | Verified IronCalc 0.7.1 ships `DGET`. R3's multi-input form `@DGET(input1,...,inputn,field,criteria)` follows the same divergence as the rest of the database family — single-input usage matches Excel. |
 | `@DMAX`       | `DMAX`        | 1:1     |       |
 | `@DMIN`       | `DMIN`        | 1:1     |       |
 | `@DSTD`       | `DSTDEVP`     | rename  | Population. |
@@ -268,7 +281,7 @@ for numbers) against Excel's `range_lookup` arg in transcripts.
 | `@SUMPRODUCT` | —             | emulate | Not in IronCalc 0.7.1. |
 | `@VDB`        | —             | emulate | Not in IronCalc. |
 | `@INFO`       | `INFO`        | 1:1     | Only a subset of `info_type` keywords are implemented in IronCalc — verify each. |
-| `@N`          | `N`           | arg-fix | 1-2-3 `@N(range)` returns the number in the **top-left cell** of the range; Excel `N(value)` coerces a single value. Wrap arg with `INDEX(.., 1, 1)` if it's a range. |
+| `@N`          | `N`           | 1:1\*   | \*Doc-bug deferred: 1-2-3 `@N(range)` returns the number in the **top-left cell** of the range; Excel `N(value)` coerces a single value. In practice IronCalc's `N` accepts a range and silently picks the first cell, so the no-op translation matches 1-2-3 closely. Revisit (rewrite to `INDEX(.., 1, 1)`) if a transcript surfaces a divergence. |
 | `@S`          | —             | emulate | String form of `@N`; same top-left semantics. No Excel equivalent. |
 | `@DQUERY`     | —             | emulate | External-DB hook; out of scope for L123. Emit `#NAME?`. |
 | `@ISRANGE`    | —             | emulate | `ISREF` is close but checks for any reference, not range-shape specifically. |

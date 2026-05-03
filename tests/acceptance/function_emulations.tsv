@@ -73,3 +73,35 @@ KEY @
 KEYS CODE("A")
 ENTER
 ASSERT_CELL       A:A5  65
+
+# @REPLACE(s, start, n, new) — IronCalc 0.7.1 has SUBSTITUTE but no
+# REPLACE. Emulated as `LEFT(s,start) & new & MID(s,start+n+1,LEN(s))`.
+# 1-2-3 start is 0-based.
+#
+# Replace 3 chars at position 2: "ABCDEF" → "AB" + "X" + "F" = "ABXF".
+F 5
+KEYS A6
+ENTER
+KEY @
+KEYS REPLACE("ABCDEF",2,3,"X")
+ENTER
+ASSERT_CELL       A:A6  ABXF
+ASSERT_PANEL_L1   A:A6: (G) @REPLACE("ABCDEF",2,3,"X")
+
+# Insert at position (n=0): @REPLACE("ABDEF", 2, 0, "C") → "ABCDEF".
+F 5
+KEYS A7
+ENTER
+KEY @
+KEYS REPLACE("ABDEF",2,0,"C")
+ENTER
+ASSERT_CELL       A:A7  ABCDEF
+
+# Full replace from start (n=LEN): @REPLACE("hello", 0, 5, "world") → "world".
+F 5
+KEYS A8
+ENTER
+KEY @
+KEYS REPLACE("hello",0,5,"world")
+ENTER
+ASSERT_CELL       A:A8  world
