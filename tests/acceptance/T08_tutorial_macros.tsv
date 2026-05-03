@@ -1,0 +1,110 @@
+# Tutorial Chapter 4: macros — record macro source as a label, name
+# the range with the `\letter` convention so 1-2-3 binds it to
+# Alt-letter, run it, then exercise STEP (Alt-F2) single-step debug.
+#
+# Lessons covered:
+#   - Macro source stored as a label cell, leading apostrophe forces
+#     LABEL mode so `{` and `~` survive as literal data.
+#   - /Range Name Create with `\M` reserves Alt-M as the launch key.
+#   - Alt-M runs the named macro; F5 GOTO inside the macro repositions
+#     the pointer; `~` commits the entry.
+#   - Alt-F2 toggles STEP mode; the SST status indicator confirms a
+#     paused macro; SPACE single-steps; Esc aborts; Alt-F2 again
+#     restores normal run.
+
+ASSERT_POINTER  A:A1
+
+# --- Author the macro as a label in A1.
+# The leading apostrophe keeps {GOTO}, ~, and Hello~ as label text
+# rather than treating them as live entry directives.
+KEY '
+KEYS {GOTO}C5~Hello~
+ENTER
+ASSERT_PANEL_L1 A:A1: '{GOTO}C5~Hello~
+
+HOME
+ASSERT_POINTER  A:A1
+
+# --- Bind the macro to Alt-M with /Range Name Create \M.
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ASSERT_MODE     POINT
+ENTER
+ASSERT_MODE     READY
+
+# --- Alt-M runs the macro: GOTO C5, then commit "Hello".
+ALT m
+ASSERT_POINTER  A:C5
+ASSERT_PANEL_L1 A:C5: 'Hello
+ASSERT_MODE     READY
+
+# --- Reset for the STEP demonstration.
+HOME
+KEY /
+KEY R
+KEY E
+ENTER
+ASSERT_MODE     READY
+
+# Re-author a small two-action macro: write 1 to E1, 2 to E2, then
+# {QUIT}. Three discrete actions makes the SST pause boundary easy to
+# observe.
+KEY '
+KEYS {LET E1, 1}{LET E2, 2}{QUIT}
+ENTER
+HOME
+
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS \M
+ENTER
+ENTER
+ASSERT_MODE     READY
+
+# --- Toggle STEP mode (Alt-F2). The status line lights STEP.
+ALT_F 2
+ASSERT_STATUS   STEP
+
+# --- Fire the macro. STEP parks before the first action — neither
+# E1 nor E2 has a value yet. Status line shows SST ("step single-step").
+ALT m
+ASSERT_STATUS   SST
+
+F 5
+KEYS E1
+ENTER
+ASSERT_PANEL_L1 A:E1:
+
+# --- SPACE advances exactly one action: {LET E1, 1} fires, then
+# the macro re-pauses ahead of {LET E2, 2}.
+SPACE
+ASSERT_STATUS   SST
+
+F 5
+KEYS E1
+ENTER
+ASSERT_PANEL_L1 A:E1: (G) 1
+
+F 5
+KEYS E2
+ENTER
+ASSERT_PANEL_L1 A:E2:
+
+# --- Esc aborts the paused macro before E2 ever gets written.
+ESC
+ASSERT_SCREEN_NOT_CONTAINS SST
+
+F 5
+KEYS E2
+ENTER
+ASSERT_PANEL_L1 A:E2:
+
+# --- Toggle STEP off so a future macro run completes normally.
+ALT_F 2
+ASSERT_SCREEN_NOT_CONTAINS STEP
