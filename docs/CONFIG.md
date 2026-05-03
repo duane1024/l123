@@ -138,6 +138,31 @@ Enable|Disable`.
   (case-insensitive)
 - **Default:** `true`
 
+### `theme`
+
+Chrome theme. Affects the status line, menu / F1-help selection
+highlights, splash field, mode indicator, and the dim gridline glyph
+painted by `:Display Options Grid Yes`. Cell colors that come from
+the document — `:Format Color`, xlsx fills/fonts, sheet tab tints —
+are unaffected; the theme only paints chrome, never data.
+
+- **Env:** `L123_THEME`
+- **CLI:** `--theme <name>` (overrides env / file for the run)
+- **Accepted values:**
+  - `dos` (default) — classic 1-2-3 R3.4a DOS look.
+  - `wysiwyg` — R3.4a WYSIWYG paper look (magenta gridlines, blue
+    selection).
+  - `amber` — CRT amber phosphor.
+  - `green` — CRT green phosphor.
+  - Aliases: `default` / `classic` → `dos`; `paper` → `wysiwyg`.
+- **Bad values:** silently ignored in `L123_THEME` and the config
+  file (the next-lower tier applies). The CLI surfaces typos as a
+  usage error and exits 2.
+- **Default:** `dos`
+
+There is no runtime command for switching themes mid-session — set
+the value before launching.
+
 Examples:
 
 - `info` — everything at info level and above
@@ -170,4 +195,5 @@ Any env var beats the file, so one-off runs are easy:
 ```bash
 L123_LOG=/tmp/debug.log RUST_LOG=l123=trace l123 sheet.xlsx
 L123_USER="Demo Account" l123
+l123 --theme amber sheet.xlsx
 ```

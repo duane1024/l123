@@ -715,7 +715,6 @@ label prefixes verbatim (since IronCalc would re-parse).
 - Wysiwyg-style add-in layer (fonts/shading); limited in terminal, could
   target Kitty image protocol
 - Lotus-era print drivers → replaced with `lp` / PDF export
-- CRT themes (green, amber)
 - `.wk3` write
 - Multi-user `/File Admin Reservation` over a shared filesystem
 

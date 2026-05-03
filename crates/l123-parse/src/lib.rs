@@ -1726,10 +1726,7 @@ mod tests {
         // accept the divergence — it favors reasonable behavior on
         // the common path.
         assert_eq!(to_engine_source("@ISRANGE(A1)", &[]), "=ISREF(A1)");
-        assert_eq!(
-            to_engine_source("@ISRANGE(A1..C5)", &[]),
-            "=ISREF(A1:C5)"
-        );
+        assert_eq!(to_engine_source("@ISRANGE(A1..C5)", &[]), "=ISREF(A1:C5)");
         assert_eq!(to_engine_source("@ISRANGE(SALES)", &[]), "=ISREF(SALES)");
     }
 
@@ -1745,10 +1742,7 @@ mod tests {
             to_engine_source("@S(A1..C5)", &[]),
             "=IF(ISTEXT(INDEX(A1:C5,1,1)),INDEX(A1:C5,1,1),\"\")"
         );
-        assert_eq!(
-            to_engine_source("@S(A1)", &[]),
-            "=IF(ISTEXT(A1),A1,\"\")"
-        );
+        assert_eq!(to_engine_source("@S(A1)", &[]), "=IF(ISTEXT(A1),A1,\"\")");
     }
 
     #[test]

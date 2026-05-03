@@ -899,6 +899,11 @@ pub struct App {
     /// `/Data Query` settings — sticky across Query-menu visits and
     /// across separate `/DQ` sessions until cleared by Reset.
     data_query: DataQueryState,
+    /// Resolved chrome palette. Defaults to [`Theme::DOS`] so existing
+    /// transcripts and snapshots see no change; the CLI/config/env
+    /// pipeline overrides via [`App::set_theme`] before the event loop
+    /// starts.
+    theme: crate::theme::Theme,
 }
 
 /// User-visible identity shown on the startup splash. The renderer
@@ -2228,12 +2233,20 @@ fn link_row_for_focus(rows: &[HelpRow<'_>], focus: usize) -> Option<usize> {
 
 /// Paint a help body row into `buf`. The row is left-padded by one
 /// space (matches the existing overlay) and clipped to `width`.
-fn render_help_row(buf: &mut Buffer, x: u16, y: u16, width: u16, row: &HelpRow<'_>, focus: usize) {
+fn render_help_row(
+    buf: &mut Buffer,
+    x: u16,
+    y: u16,
+    width: u16,
+    row: &HelpRow<'_>,
+    focus: usize,
+    theme: &crate::theme::Theme,
+) {
     let normal = Style::default();
-    let link_style = Style::default().fg(Color::Green);
+    let link_style = Style::default().fg(theme.help_link_fg.color());
     let focus_style = Style::default()
-        .fg(Color::Black)
-        .bg(Color::Cyan)
+        .fg(theme.selection_fg.color())
+        .bg(theme.selection_bg.color())
         .add_modifier(Modifier::BOLD);
 
     let buf_left = buf.area.x;
@@ -2967,7 +2980,21 @@ impl App {
             data_regression: DataRegressionState::default(),
             data_parse: DataParseState::default(),
             data_query: DataQueryState::default(),
+            theme: crate::theme::Theme::DOS,
         }
+    }
+
+    /// Override the chrome palette. Called once at startup from the
+    /// CLI / config / env pipeline; mid-session theme switching is not
+    /// supported (would require a redraw, no command surface for it
+    /// yet).
+    pub fn set_theme(&mut self, theme: crate::theme::Theme) {
+        self.theme = theme;
+    }
+
+    /// Currently active palette. Test surface only.
+    pub fn theme(&self) -> &crate::theme::Theme {
+        &self.theme
     }
 
     /// Construct an app with the startup splash active. Normal
@@ -3129,10 +3156,20 @@ impl App {
         Self::run_with_file(None)
     }
 
+    /// Convenience entry point — same as [`run_with_file_themed`] with
+    /// no CLI override, leaving the theme to the config/env pipeline.
+    pub fn run_with_file(path: Option<PathBuf>) -> anyhow::Result<()> {
+        Self::run_with_file_themed(path, None)
+    }
+
     /// CLI entry point. When `path` is set the app opens that workbook
     /// and skips the splash; when `None` it greets the user with the
-    /// licensing block until the first keypress.
-    pub fn run_with_file(path: Option<PathBuf>) -> anyhow::Result<()> {
+    /// licensing block until the first keypress. `theme_override`
+    /// comes from `--theme` and beats the config/env tier when set.
+    pub fn run_with_file_themed(
+        path: Option<PathBuf>,
+        theme_override: Option<crate::theme::ThemeName>,
+    ) -> anyhow::Result<()> {
         let mut stdout = io::stdout();
         enable_raw_mode()?;
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -3145,6 +3182,8 @@ impl App {
             None => App::new_with_splash(cfg.user.value.clone(), cfg.organization.value.clone()),
         };
         app.set_beep_enabled(cfg.error_beep_enabled());
+        let theme_name = theme_override.unwrap_or_else(|| cfg.theme());
+        app.set_theme(theme_name.palette());
         app.probe_image_picker();
         let result = app.event_loop(&mut terminal);
 
@@ -3340,13 +3379,14 @@ impl App {
     /// Read back the rendered fg color of the sheet-letter cell on
     /// the status line, as `(r, g, b)`.  Returns `None` when the
     /// workbook has only one sheet (so no letter is shown), or when
-    /// the letter renders in the default `DarkGray` (i.e. the sheet
-    /// has no tab color).  Used by the acceptance harness's
-    /// `ASSERT_STATUS_SHEET_FG` directive.
+    /// the letter renders in the active theme's default status color
+    /// (i.e. the sheet has no tab color of its own).  Used by the
+    /// acceptance harness's `ASSERT_STATUS_SHEET_FG` directive.
     pub fn status_sheet_letter_fg(&self, buf: &Buffer) -> Option<(u8, u8, u8)> {
         if self.wb().engine.sheet_count() <= 1 {
             return None;
         }
+        let default_fg = self.theme.status_fg;
         // The status line is the last row of the rendered buffer.
         let y = buf.area.height.saturating_sub(1);
         // Locate the `[` that opens the sheet-indicator and read the
@@ -3354,6 +3394,11 @@ impl App {
         for x in 0..buf.area.width {
             if buf[(x, y)].symbol() == "[" && x + 1 < buf.area.width {
                 match buf[(x + 1, y)].fg {
+                    Color::Rgb(r, g, b)
+                        if (r, g, b) == (default_fg.r, default_fg.g, default_fg.b) =>
+                    {
+                        return None;
+                    }
                     Color::Rgb(r, g, b) => return Some((r, g, b)),
                     _ => return None,
                 }
@@ -11630,8 +11675,7 @@ impl App {
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
                 let cfg = parse_config_from(&self.wb().international);
                 let expanded = l123_parse::expand_cellpointer(expr, addr);
-                let excel =
-                    l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
+                let excel = l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
                 self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
@@ -11793,8 +11837,7 @@ impl App {
                 let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
                 let cfg = parse_config_from(&self.wb().international);
                 let expanded = l123_parse::expand_cellpointer(expr, addr);
-                let excel =
-                    l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
+                let excel = l123_parse::to_engine_source_with_config(&expanded, &names_ref, &cfg);
                 self.wb_mut().engine.set_user_input(addr, &excel)
             }
         };
@@ -12023,22 +12066,21 @@ impl App {
     }
 
     fn render_splash(&self, area: Rect, buf: &mut Buffer, info: &SplashInfo) {
-        // Classic DOS VGA "cyan" (palette index 3) is #00AAAA — the
-        // shade the 1-2-3 R3.4a welcome screen fills its field with.
-        // Using explicit RGB triples keeps the colors stable across
-        // terminals that remap their ANSI slots.
-        const TEAL: Color = Color::Rgb(0, 170, 170);
-        const BLACK: Color = Color::Rgb(0, 0, 0);
-        let teal_bg = Style::default().bg(TEAL);
+        // The classic DOS palette (cyan field, white-on-black banner,
+        // yellow accents) is preserved as the `dos` theme; other themes
+        // override here so the splash matches the rest of the chrome.
+        let field = self.theme.splash_bg.color();
+        let banner_bg = self.theme.mono_overlay_bg.color();
+        let field_bg = Style::default().bg(field);
         for y in 0..area.height {
             for x in 0..area.width {
-                buf[(area.x + x, area.y + y)].set_style(teal_bg);
+                buf[(area.x + x, area.y + y)].set_style(field_bg);
             }
         }
 
         let title_style = Style::default()
-            .bg(BLACK)
-            .fg(Color::White)
+            .bg(banner_bg)
+            .fg(self.theme.splash_fg.color())
             .add_modifier(Modifier::BOLD);
         let banner = [
             Line::from(""),
@@ -12064,7 +12106,7 @@ impl App {
         let banner_x = area.x + (area.width - banner_w) / 2;
         let banner_y = area.y + 2;
         let banner_rect = Rect::new(banner_x, banner_y, banner_w, banner_h);
-        let body_style = Style::default().bg(BLACK).fg(TEAL);
+        let body_style = Style::default().bg(banner_bg).fg(field);
         let banner_block = Block::default().borders(Borders::ALL).style(body_style);
         let banner_inner = banner_block.inner(banner_rect);
         banner_block.render(banner_rect, buf);
@@ -12103,17 +12145,17 @@ impl App {
         let heading = Paragraph::new(Line::from(Span::styled(
             HEADING,
             Style::default()
-                .bg(TEAL)
-                .fg(Color::Yellow)
+                .bg(field)
+                .fg(self.theme.accent_fg.color())
                 .add_modifier(Modifier::BOLD),
         )))
         .alignment(ratatui::layout::Alignment::Center);
         heading.render(Rect::new(block_x, licensing_y, block_w, 1), buf);
 
-        let label_style = Style::default().bg(TEAL).fg(BLACK);
+        let label_style = Style::default().bg(field).fg(self.theme.status_fg.color());
         let value_style = Style::default()
-            .bg(TEAL)
-            .fg(Color::Yellow)
+            .bg(field)
+            .fg(self.theme.accent_fg.color())
             .add_modifier(Modifier::BOLD);
         let rows = [
             Line::from(vec![
@@ -12135,7 +12177,7 @@ impl App {
             return;
         }
         let footer = Paragraph::new(FOOTER.iter().map(|s| Line::from(*s)).collect::<Vec<_>>())
-            .style(Style::default().bg(TEAL).fg(BLACK));
+            .style(Style::default().bg(field).fg(self.theme.status_fg.color()));
         footer.render(Rect::new(block_x, footer_y, block_w, 3), buf);
     }
 
@@ -12557,16 +12599,18 @@ impl App {
             self.render_defaults_overlay(area, buf);
             return;
         }
-        // Monochrome CRT look: green-on-black, like the R3.4a status
-        // page. Explicit RGB so terminals that remap their ANSI green
-        // slot don't lose the effect.
-        const GREEN: Color = Color::Rgb(0, 170, 85);
-        const BLACK: Color = Color::Rgb(0, 0, 0);
-        let text_style = Style::default().bg(BLACK).fg(GREEN);
+        // Monochrome CRT look: phosphor-on-black, like the R3.4a
+        // status page. Pulled from the active theme so the overlay
+        // doesn't fight the rest of the chrome (amber/green sit in
+        // their own phosphor; dos and wysiwyg keep the original
+        // green-on-black).
+        let bg = self.theme.mono_overlay_bg.color();
+        let fg = self.theme.mono_overlay_fg.color();
+        let text_style = Style::default().bg(bg).fg(fg);
 
         for y in 0..area.height {
             for x in 0..area.width {
-                buf[(area.x + x, area.y + y)].set_style(Style::default().bg(BLACK));
+                buf[(area.x + x, area.y + y)].set_style(Style::default().bg(bg));
             }
         }
 
@@ -12735,13 +12779,13 @@ impl App {
     }
 
     fn render_defaults_overlay(&self, area: Rect, buf: &mut Buffer) {
-        const GREEN: Color = Color::Rgb(0, 170, 85);
-        const BLACK: Color = Color::Rgb(0, 0, 0);
-        let text_style = Style::default().bg(BLACK).fg(GREEN);
+        let bg = self.theme.mono_overlay_bg.color();
+        let fg = self.theme.mono_overlay_fg.color();
+        let text_style = Style::default().bg(bg).fg(fg);
 
         for y in 0..area.height {
             for x in 0..area.width {
-                buf[(area.x + x, area.y + y)].set_style(Style::default().bg(BLACK));
+                buf[(area.x + x, area.y + y)].set_style(Style::default().bg(bg));
             }
         }
 
@@ -12950,7 +12994,7 @@ impl App {
             Span::styled(
                 mode_str,
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(self.theme.accent_fg.color())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -13198,10 +13242,12 @@ impl App {
             return;
         }
         let header_style = Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
+            .fg(self.theme.selection_fg.color())
+            .bg(self.theme.selection_bg.color())
             .add_modifier(Modifier::BOLD);
-        let footer_style = Style::default().fg(Color::Black).bg(Color::Cyan);
+        let footer_style = Style::default()
+            .fg(self.theme.selection_fg.color())
+            .bg(self.theme.selection_bg.color());
 
         // Top header: " <Title>                                       HELP "
         let title = state.page.title.as_str();
@@ -13246,6 +13292,7 @@ impl App {
                 body_width,
                 row,
                 state.focus,
+                &self.theme,
             );
         }
         // Blank out remaining body rows.
@@ -13768,7 +13815,7 @@ impl App {
                     let gx = x + w - 1;
                     if buf[(gx, y)].symbol() == " " {
                         let mut g_style = pad_style;
-                        g_style = g_style.fg(Color::DarkGray);
+                        g_style = g_style.fg(self.theme.gridline_fg.color());
                         buf[(gx, y)].set_char('┊').set_style(g_style);
                     }
                 }
@@ -13843,7 +13890,7 @@ impl App {
                 let bg = buf[(bx, y)].bg;
                 buf[(bx, y)]
                     .set_char(COMMENT_MARKER)
-                    .set_style(Style::default().bg(bg).fg(Color::Red));
+                    .set_style(Style::default().bg(bg).fg(self.theme.alert_fg.color()));
             }
 
             // Fourth pass: merge anchor expansion.  For each merge
@@ -14061,7 +14108,7 @@ impl App {
         for (i, ch) in line.chars().enumerate().take(area.width as usize) {
             let fg = match (letter_abs_col, letter_color) {
                 (Some(pos), Some(rgb)) if i == pos => rgb,
-                _ => Color::DarkGray,
+                _ => self.theme.status_fg.color(),
             };
             buf[(area.x + i as u16, area.y)]
                 .set_char(ch)
@@ -14522,6 +14569,115 @@ fn is_iterm2_compatible_env(term_program: Option<&str>, lc_terminal: Option<&str
 mod tests {
     use super::*;
     use std::path::Path;
+
+    use crate::theme::{Theme, ThemeName};
+
+    /// Read the bg color of cell `(x, y)` from the rendered buffer.
+    fn cell_bg(buf: &Buffer, x: u16, y: u16) -> Color {
+        buf[(x, y)].bg
+    }
+
+    /// Read the fg color of cell `(x, y)` from the rendered buffer.
+    fn cell_fg(buf: &Buffer, x: u16, y: u16) -> Color {
+        buf[(x, y)].fg
+    }
+
+    #[test]
+    fn default_app_uses_dos_theme() {
+        let app = App::new();
+        assert_eq!(app.theme().name, ThemeName::Dos);
+    }
+
+    #[test]
+    fn set_theme_swaps_palette() {
+        let mut app = App::new();
+        app.set_theme(Theme::AMBER);
+        assert_eq!(app.theme().name, ThemeName::Amber);
+    }
+
+    #[test]
+    fn splash_field_paints_themed_background() {
+        let user = "Tester".to_string();
+        let org = "L123".to_string();
+
+        // DOS theme: classic teal field.
+        let mut app = App::new_with_splash(user.clone(), org.clone());
+        app.set_theme(Theme::DOS);
+        let buf = app.render_to_buffer(80, 25);
+        let dos_bg = Theme::DOS.splash_bg;
+        assert_eq!(
+            cell_bg(&buf, 0, 0),
+            Color::Rgb(dos_bg.r, dos_bg.g, dos_bg.b),
+            "dos splash bg should be teal"
+        );
+
+        // Amber theme: black field.
+        let mut app = App::new_with_splash(user.clone(), org.clone());
+        app.set_theme(Theme::AMBER);
+        let buf = app.render_to_buffer(80, 25);
+        let amber_bg = Theme::AMBER.splash_bg;
+        assert_eq!(
+            cell_bg(&buf, 0, 0),
+            Color::Rgb(amber_bg.r, amber_bg.g, amber_bg.b),
+            "amber splash bg should be black"
+        );
+    }
+
+    #[test]
+    fn mode_indicator_uses_theme_accent_color() {
+        // Dos: yellow accent. Wysiwyg: blue accent.
+        let mut app = App::new();
+        app.set_theme(Theme::DOS);
+        let buf = app.render_to_buffer(80, 25);
+        let mode = "READY";
+        // The mode string sits at the right edge of the control panel
+        // (y=0). Find it and check the fg of its first character.
+        let line = App::line_text(&buf, 0);
+        let pos = line.find(mode).expect("READY indicator on first line");
+        let dos_accent = Theme::DOS.accent_fg;
+        assert_eq!(
+            cell_fg(&buf, pos as u16, 0),
+            Color::Rgb(dos_accent.r, dos_accent.g, dos_accent.b),
+        );
+
+        let mut app = App::new();
+        app.set_theme(Theme::WYSIWYG);
+        let buf = app.render_to_buffer(80, 25);
+        let line = App::line_text(&buf, 0);
+        let pos = line.find(mode).expect("READY indicator on first line");
+        let wys_accent = Theme::WYSIWYG.accent_fg;
+        assert_eq!(
+            cell_fg(&buf, pos as u16, 0),
+            Color::Rgb(wys_accent.r, wys_accent.g, wys_accent.b),
+        );
+    }
+
+    #[test]
+    fn gridline_glyph_uses_theme_color() {
+        // Wysiwyg uses magenta gridlines; the dos theme keeps the dim
+        // gray that shipped before themes existed.
+        let mut app = App::new();
+        app.set_theme(Theme::WYSIWYG);
+        app.show_gridlines = true;
+        let buf = app.render_to_buffer(80, 25);
+        // Find a gridline glyph (┊) in the grid area — its fg should
+        // match the wysiwyg gridline color.
+        let want = Theme::WYSIWYG.gridline_fg;
+        let mut found = false;
+        for y in 1..buf.area.height {
+            for x in 0..buf.area.width {
+                if buf[(x, y)].symbol() == "┊" {
+                    assert_eq!(
+                        buf[(x, y)].fg,
+                        Color::Rgb(want.r, want.g, want.b),
+                        "gridline at ({x},{y})"
+                    );
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "no gridline glyph rendered");
+    }
 
     #[test]
     fn wgd_update_writes_cnf_block_and_preserves_other_lines() {

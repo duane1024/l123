@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::theme::ThemeName;
+
 /// Origin of a resolved setting — shown by `l123 config` so users can
 /// tell *why* a value is what it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +56,10 @@ pub struct Config {
     /// invalid input, etc.) is active. Stored as a canonical
     /// `"true"`/`"false"` string — see [`Config::error_beep_enabled`].
     pub error_beep: Setting,
+    /// Selected chrome [`ThemeName`]. Stored as the canonical lowercase
+    /// name (`dos`, `wysiwyg`, `amber`, `green`); see
+    /// [`Config::theme`] for the typed accessor.
+    pub theme: Setting,
     /// Path that was searched for the config file (always reported,
     /// even if the file doesn't exist).
     pub file_path: Option<PathBuf>,
@@ -93,6 +99,11 @@ pub const KEYS: &[KeyInfo] = &[
         key: "error_beep",
         env_var: Some("L123_BEEP"),
         description: "Soft terminal bell on edge collisions (true/false).",
+    },
+    KeyInfo {
+        key: "theme",
+        env_var: Some("L123_THEME"),
+        description: "Chrome theme: dos (default), wysiwyg, amber, green.",
     },
 ];
 
@@ -177,6 +188,7 @@ impl Config {
         let log_file = pick(src, "L123_LOG", file.log_file.as_deref(), "");
         let log_filter = pick(src, "RUST_LOG", file.log_filter.as_deref(), "");
         let error_beep = pick_bool(src, "L123_BEEP", file.error_beep, true);
+        let theme = pick_theme(src, "L123_THEME", file.theme);
 
         Config {
             user,
@@ -184,6 +196,7 @@ impl Config {
             log_file,
             log_filter,
             error_beep,
+            theme,
             file_path,
             file_found,
         }
@@ -193,6 +206,13 @@ impl Config {
     /// behavior of 1-2-3 R3, which always beeped on edge collisions.
     pub fn error_beep_enabled(&self) -> bool {
         parse_bool(&self.error_beep.value).unwrap_or(true)
+    }
+
+    /// Resolved theme name. The stored value is always one of the
+    /// canonical names (validated at parse time), so the `expect` here
+    /// can never fire.
+    pub fn theme(&self) -> ThemeName {
+        ThemeName::parse(&self.theme.value).expect("theme value is canonical")
     }
 
     /// Effective value for `log_file`, or `None` when unset.
@@ -241,6 +261,7 @@ impl Config {
             "log_file" => Some(&self.log_file),
             "log_filter" => Some(&self.log_filter),
             "error_beep" => Some(&self.error_beep),
+            "theme" => Some(&self.theme),
             _ => None,
         }
     }
@@ -287,6 +308,32 @@ fn pick_bool(src: &dyn ConfigSource, env_var: &str, file: Option<bool>, default:
     }
     Setting {
         value: canonical_bool(default),
+        source: Source::Default,
+    }
+}
+
+/// Like `pick`, but the value is typed as a [`ThemeName`]. Unknown
+/// names in env vars or config files are ignored (we'd rather fall
+/// through to the next tier than panic on a typo). The CLI flag uses
+/// `ThemeName::parse` directly and surfaces typos as a usage error;
+/// here we deliberately stay quiet.
+fn pick_theme(src: &dyn ConfigSource, env_var: &str, file: Option<ThemeName>) -> Setting {
+    if let Some(raw) = src.var(env_var).filter(|s| !s.is_empty()) {
+        if let Some(t) = ThemeName::parse(&raw) {
+            return Setting {
+                value: t.as_str().to_string(),
+                source: Source::Env,
+            };
+        }
+    }
+    if let Some(t) = file {
+        return Setting {
+            value: t.as_str().to_string(),
+            source: Source::File,
+        };
+    }
+    Setting {
+        value: ThemeName::default().as_str().to_string(),
         source: Source::Default,
     }
 }
@@ -357,6 +404,10 @@ pub struct ConfigFile {
     /// `Some(true|false)` when the user wrote a recognized boolean;
     /// `None` when the key was absent or the value couldn't be parsed.
     pub error_beep: Option<bool>,
+    /// `Some(ThemeName)` when the user wrote a recognized theme name;
+    /// `None` when the key was absent or the value didn't match any
+    /// known theme. Typos fall through to the next resolution tier.
+    pub theme: Option<ThemeName>,
 }
 
 /// Parse `key = value` lines. Accepts `"..."`, `'...'`, or bare values.
@@ -383,6 +434,7 @@ pub fn parse_config_body(body: &str) -> ConfigFile {
             "log_file" | "log" => out.log_file = Some(value),
             "log_filter" | "rust_log" => out.log_filter = Some(value),
             "error_beep" | "beep" => out.error_beep = parse_bool(&value),
+            "theme" => out.theme = ThemeName::parse(&value),
             _ => {}
         }
     }
@@ -419,6 +471,16 @@ pub const SAMPLE_CNF: &str = "\
 # behavior. Accepts true/false, on/off, yes/no, 1/0. Default: true.
 # Env: L123_BEEP. (alias: beep)
 # error_beep = true
+
+# Chrome theme. Affects status line, menu/help highlights, splash
+# field, and the dim gridline glyph; never overrides cell colors set
+# via :Format Color or imported from .xlsx. Choices:
+#   dos      — classic 1-2-3 R3.4a DOS look (default)
+#   wysiwyg  — R3.4a WYSIWYG paper look (magenta gridlines)
+#   amber    — CRT amber phosphor
+#   green    — CRT green phosphor
+# A bad value is silently ignored. Env: L123_THEME. CLI: --theme.
+# theme = dos
 ";
 
 #[cfg(test)]
@@ -683,6 +745,69 @@ mod tests {
         let cfg = Config::resolve_with(&src);
         assert_eq!(cfg.error_beep.value, "false");
         assert_eq!(cfg.error_beep.source, Source::File);
+    }
+
+    #[test]
+    fn theme_defaults_to_dos() {
+        let src = MockSource::new();
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme.value, "dos");
+        assert_eq!(cfg.theme.source, Source::Default);
+        assert_eq!(cfg.theme(), ThemeName::Dos);
+    }
+
+    #[test]
+    fn theme_from_file() {
+        let src = MockSource::new().with_file("theme = wysiwyg\n");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme.value, "wysiwyg");
+        assert_eq!(cfg.theme.source, Source::File);
+        assert_eq!(cfg.theme(), ThemeName::Wysiwyg);
+    }
+
+    #[test]
+    fn theme_from_env_beats_file() {
+        let src = MockSource::new()
+            .with_file("theme = wysiwyg\n")
+            .with_var("L123_THEME", "amber");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme(), ThemeName::Amber);
+        assert_eq!(cfg.theme.source, Source::Env);
+    }
+
+    #[test]
+    fn theme_unknown_env_falls_through_to_file() {
+        let src = MockSource::new()
+            .with_file("theme = green\n")
+            .with_var("L123_THEME", "solarized");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme(), ThemeName::Green);
+        assert_eq!(cfg.theme.source, Source::File);
+    }
+
+    #[test]
+    fn theme_unknown_in_file_falls_through_to_default() {
+        let src = MockSource::new().with_file("theme = solarized\n");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme(), ThemeName::Dos);
+        assert_eq!(cfg.theme.source, Source::Default);
+    }
+
+    #[test]
+    fn theme_alias_paper_resolves_to_wysiwyg() {
+        let src = MockSource::new().with_file("theme = paper\n");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme(), ThemeName::Wysiwyg);
+        // The stored value is the canonical name, not the alias.
+        assert_eq!(cfg.theme.value, "wysiwyg");
+    }
+
+    #[test]
+    fn render_table_lists_theme_row() {
+        let src = MockSource::new().with_var("L123_THEME", "amber");
+        let out = Config::resolve_with(&src).render_table();
+        assert!(out.contains("theme"), "missing theme row: {out}");
+        assert!(out.contains("amber"), "missing amber value: {out}");
     }
 
     #[test]

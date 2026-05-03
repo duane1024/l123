@@ -263,7 +263,10 @@ quarterly ranges; F10 shows a bar chart.
   current screen (MENU → help for the highlighted item; READY → general
   help; ERROR → help for the last error).
 - Compose key (Alt-F1) for LMBCS characters.
-- CRT themes (green, amber, classic blue-on-black) as `--theme` flag.
+- ✅ Chrome themes (`dos` (default), `wysiwyg`, `amber`, `green`) as
+  `--theme` flag, `theme` config key, and `L123_THEME` env var.
+  Touches chrome only — `:Format Color`, xlsx fills/fonts, and sheet
+  tab tints flow through unchanged. See `docs/CONFIG.md`.
 - Documentation pass on `docs/AT_FUNCTIONS.md`, `docs/MENU.md`, README.
 
 (Read-only `.wk3` import landed earlier via `ironcalc_lotus`; saving

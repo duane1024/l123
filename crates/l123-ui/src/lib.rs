@@ -6,7 +6,9 @@ pub mod config;
 pub mod help;
 pub mod identity;
 pub mod sysinfo;
+pub mod theme;
 
 pub use app::App;
 pub use config::Config;
 pub use identity::Identity;
+pub use theme::{Theme, ThemeName};
