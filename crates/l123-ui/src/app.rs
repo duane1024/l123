@@ -691,6 +691,16 @@ pub struct App {
     /// movement is restricted to unprotected cells inside `range`.
     /// Esc clears it.
     input_range: Option<Range>,
+    /// §4.7 — pending long-running file op. Queued when the user
+    /// commits a `/File Retrieve` filename; mode flips to Wait while
+    /// it's Some. Drained by `tick()`, which the production event
+    /// loop calls each iteration. Ctrl-Break clears it without
+    /// running.
+    pending_async_op: Option<PendingAsyncOp>,
+    /// §4.7 acceptance hook. While true, `tick()` skips the drain so
+    /// transcripts can observe mid-flight WAIT mode. Cleared by
+    /// `test_resume_async_op` or by Ctrl-Break.
+    block_next_async_op: bool,
     /// 1-2-3 GROUP mode: when true, format and row/col operations
     /// propagate across all sheets of the active file. Toggled by
     /// `/Worksheet Global Group Enable|Disable`. Lights the GROUP
@@ -1286,6 +1296,27 @@ struct PromptState {
     /// first printable keystroke clears it (1-2-3 "typed input replaces
     /// the default" convention).
     fresh: bool,
+}
+
+/// §4.7 — a long-running file op queued while WAIT mode is active.
+/// `tick()` consumes the variant and runs the actual work.
+#[derive(Debug, Clone)]
+enum PendingAsyncOp {
+    /// `/File Retrieve` — the path is dispatched by extension.
+    FileRetrieve(PathBuf),
+}
+
+impl PendingAsyncOp {
+    /// Filename rendered on control-panel line 3 in `Loading <basename>…`.
+    fn display_basename(&self) -> String {
+        match self {
+            PendingAsyncOp::FileRetrieve(path) => path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2883,6 +2914,8 @@ impl App {
             zero_display: ZeroDisplay::No,
             global_protection: false,
             input_range: None,
+            pending_async_op: None,
+            block_next_async_op: false,
             group_mode: false,
             undo_enabled: true,
             clock_display: ClockDisplay::default(),
@@ -3039,6 +3072,59 @@ impl App {
         self.wb().dirty
     }
 
+    /// §4.7 acceptance hook: park the next async file op so a
+    /// transcript can observe mid-flight WAIT mode. Sticky until
+    /// `test_resume_async_op` or Ctrl-Break clears it.
+    pub fn test_block_next_async_op(&mut self) {
+        self.block_next_async_op = true;
+    }
+
+    /// §4.7 acceptance hook: clear the block and drain the parked op.
+    pub fn test_resume_async_op(&mut self) {
+        self.block_next_async_op = false;
+        self.tick();
+    }
+
+    /// §4.7 — drain a queued long-running op. The production event
+    /// loop calls this each iteration after rendering, which keeps
+    /// the WAIT frame visible for one terminal repaint before the
+    /// op runs and mode pops back to READY. Gated by
+    /// `block_next_async_op` so tests can hold the queue indefinitely.
+    pub fn tick(&mut self) {
+        if self.block_next_async_op {
+            return;
+        }
+        let Some(op) = self.pending_async_op.take() else {
+            return;
+        };
+        match op {
+            PendingAsyncOp::FileRetrieve(path) => self.retrieve_by_extension(path),
+        }
+        if matches!(self.mode, Mode::Wait) {
+            self.mode = Mode::Ready;
+        }
+    }
+
+    /// Queue a long-running file op and flip into WAIT mode. The
+    /// next `tick()` (driven by the event loop) actually runs it.
+    fn queue_async_op(&mut self, op: PendingAsyncOp) {
+        self.pending_async_op = Some(op);
+        self.mode = Mode::Wait;
+    }
+
+    /// SPEC §7 / §4.7: Ctrl-Break aborts an in-flight long op,
+    /// dropping any queued work and returning to READY without
+    /// committing partial state. Returns true when an op was cancelled.
+    fn cancel_pending_async_op(&mut self) -> bool {
+        if self.pending_async_op.take().is_some() {
+            self.block_next_async_op = false;
+            self.mode = Mode::Ready;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn run() -> anyhow::Result<()> {
         Self::run_with_file(None)
     }
@@ -3090,6 +3176,10 @@ impl App {
                 suspend_to_shell(terminal)?;
                 continue;
             }
+            // §4.7 — drain any queued long-running op. The render
+            // above already showed the WAIT frame for this iteration;
+            // the next render after the drain shows READY.
+            self.tick();
             if event::poll(Duration::from_millis(100))? {
                 match event::read()? {
                     Event::Key(k) if k.kind == KeyEventKind::Press => self.handle_key(k),
@@ -3351,6 +3441,16 @@ impl App {
     // ---------------- key handling ----------------
 
     pub fn handle_key(&mut self, k: KeyEvent) {
+        // §4.7 / SPEC §7: Ctrl-Break aborts an in-flight long op,
+        // dropping the queued work and returning to READY. This
+        // takes precedence over splash/help/menus so a runaway load
+        // is always escapable.
+        if matches!(k.code, KeyCode::Pause)
+            && k.modifiers.contains(KeyModifiers::CONTROL)
+            && self.cancel_pending_async_op()
+        {
+            return;
+        }
         // Startup splash consumes the first keystroke and drops to
         // READY without dispatching — matches the 1-2-3 R3.4a behavior
         // where any key clears the welcome screen.
@@ -10892,7 +10992,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                self.retrieve_by_extension(PathBuf::from(&p.buffer));
+                self.queue_async_op(PendingAsyncOp::FileRetrieve(PathBuf::from(&p.buffer)));
             }
             PromptNext::FileXtractFilename { kind } => {
                 if p.buffer.is_empty() {
@@ -12884,6 +12984,13 @@ impl App {
             match self.mode {
                 Mode::Menu => self.render_menu_lines(),
                 Mode::Point => self.render_point_lines(),
+                Mode::Wait => {
+                    let l3 = match self.pending_async_op.as_ref() {
+                        Some(op) => Line::from(format!(" Loading {}…", op.display_basename())),
+                        None => Line::from(""),
+                    };
+                    (Line::from(""), l3)
+                }
                 _ => {
                     let l2 = match self.entry.as_ref() {
                         Some(e) => render_entry_l2(e),
@@ -15766,6 +15873,7 @@ mod tests {
             app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app2.tick();
 
         assert_eq!(app2.mode, Mode::Ready);
         let stored =
@@ -15806,6 +15914,7 @@ mod tests {
             app2.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app2.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app2.tick();
 
         assert!(!app2.is_dirty(), "successful /FR should clear dirty bit");
 

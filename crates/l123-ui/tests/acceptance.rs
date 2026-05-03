@@ -77,6 +77,11 @@ fn run_transcript(path: &Path) {
             continue;
         }
         let (directive, rest) = split_directive(line);
+        // §4.7 — drain any queued async op before the next directive
+        // runs, mirroring the production event loop's per-iteration
+        // tick. Gated by `block_next_async_op` so tests that assert
+        // mid-flight WAIT state stay deterministic.
+        app.tick();
         match directive {
             // ---- keystrokes ----
             "KEY" => press_char(&mut app, rest, line_no, path),
@@ -118,6 +123,18 @@ fn run_transcript(path: &Path) {
                 let n: u8 = rest.parse().expect("ALT_F directive needs number");
                 app.handle_key(KeyEvent::new(KeyCode::F(n), KeyModifiers::ALT));
             }
+            // SPEC §7: Ctrl-Break is the canonical abort key. Crossterm
+            // models the Pause/Break key as KeyCode::Pause; the CONTROL
+            // modifier disambiguates Break from a plain Pause.
+            "CTRL_BREAK" => {
+                app.handle_key(KeyEvent::new(KeyCode::Pause, KeyModifiers::CONTROL));
+            }
+            // §4.7 test hooks. The next async file op the App spawns
+            // will park itself until RESUME_OP fires, letting the
+            // transcript observe mid-flight WAIT state. No-op outside
+            // tests; production ops drain on their own schedule.
+            "BLOCK_NEXT_OP" => app.test_block_next_async_op(),
+            "RESUME_OP" => app.test_resume_async_op(),
             "MACRO" => app.run_macro_text(rest),
 
             // ---- assertions ----
@@ -910,6 +927,8 @@ transcripts! {
     m4_file_list_active => "M4_file_list_active.tsv",
     m4_file_list_other => "M4_file_list_other.tsv",
     m4_file_list_worksheet => "M4_file_list_worksheet.tsv",
+    m4_wait_progress       => "M4_wait_progress.tsv",
+    m4_wait_ctrl_break     => "M4_wait_ctrl_break.tsv",
     m5_insert_sheet    => "M5_insert_sheet.tsv",
     m5_delete_sheet    => "M5_delete_sheet.tsv",
     m5_delete_file     => "M5_delete_file.tsv",

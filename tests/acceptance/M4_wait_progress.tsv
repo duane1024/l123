@@ -1,0 +1,53 @@
+# §4.7 — Long file load runs on a background task; user sees WAIT
+# mode + a "Loading <basename>" hint on line 3 while it runs; on
+# completion, mode returns to READY. Atomic-journal undo of a
+# wholesale /File Retrieve is intentionally out of scope per
+# §4.3 ("file ops are NOT undone, consistent with 1-2-3"); that
+# guarantee belongs to M11 /File Import where the load writes into
+# a range rather than swapping the workbook.
+
+SIZE 100 25
+
+RM_FILE $TMPDIR/m4_wait_progress.xlsx
+
+# Seed a workbook with a known cell and save it to disk.
+KEYS 42
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m4_wait_progress.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Dirty A1 in-memory so we can prove the retrieve actually pulled
+# from disk.
+HOME
+KEYS 99
+ENTER
+ASSERT_CELL      A:A1  99
+
+# Park the next async op so the transcript can observe mid-flight
+# WAIT state. In production this is the natural state of any load
+# that takes longer than one render tick.
+BLOCK_NEXT_OP
+
+# /FR <path><ENTER> — queues the load and returns immediately.
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/m4_wait_progress.xlsx
+ENTER
+
+# Mid-flight: WAIT indicator is visible, line 3 names the file
+# being loaded, and the in-memory state is untouched.
+ASSERT_MODE      WAIT
+ASSERT_PANEL_L3  Loading m4_wait_progress.xlsx
+ASSERT_CELL      A:A1  99
+
+# Drain the parked op to completion.
+RESUME_OP
+
+# Mode pops back to READY and A1 is the saved 42 again.
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1  42

@@ -1,0 +1,43 @@
+# §4.7 — Ctrl-Break aborts an in-flight long operation, returns the
+# app to READY, and leaves no partial state. Per SPEC §7, Ctrl-Break
+# is the canonical abort key (Ctrl-C is intentionally inert).
+
+SIZE 100 25
+
+RM_FILE $TMPDIR/m4_wait_cancel.xlsx
+
+# Seed and save.
+KEYS 42
+ENTER
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m4_wait_cancel.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Dirty A1 to a sentinel; the cancelled retrieve must NOT overwrite
+# this with the on-disk 42.
+HOME
+KEYS 99
+ENTER
+ASSERT_CELL      A:A1  99
+
+BLOCK_NEXT_OP
+
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/m4_wait_cancel.xlsx
+ENTER
+
+ASSERT_MODE      WAIT
+ASSERT_PANEL_L3  Loading m4_wait_cancel.xlsx
+
+# Ctrl-Break cancels the in-flight op.
+CTRL_BREAK
+
+# Mode returns to READY; in-memory state is unchanged (A1 still 99,
+# not the on-disk 42). No journal entry was committed.
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1  99
