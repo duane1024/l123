@@ -1394,7 +1394,7 @@ dependencies = [
 
 [[package]]
 name = "l123"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "crossterm 0.28.1",
@@ -1412,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "l123-cmd"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "l123-core",
  "l123-engine",
@@ -1421,14 +1421,14 @@ dependencies = [
 
 [[package]]
 name = "l123-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "l123-engine"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "ironcalc",
@@ -1440,7 +1440,7 @@ dependencies = [
 
 [[package]]
 name = "l123-graph"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "image 0.25.10",
  "l123-core",
@@ -1451,11 +1451,11 @@ dependencies = [
 
 [[package]]
 name = "l123-help"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "l123-io"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "l123-core",
  "l123-engine",
@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "l123-macro"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "l123-cmd",
  "l123-core",
@@ -1474,14 +1474,14 @@ dependencies = [
 
 [[package]]
 name = "l123-menu"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "l123-core",
 ]
 
 [[package]]
 name = "l123-parse"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "l123-core",
  "thiserror 2.0.18",
@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "l123-print"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "l123-core",
  "pdf-writer",
@@ -1497,7 +1497,7 @@ dependencies = [
 
 [[package]]
 name = "l123-ui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "crossterm 0.28.1",
