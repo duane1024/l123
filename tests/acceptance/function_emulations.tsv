@@ -105,3 +105,76 @@ KEY @
 KEYS REPLACE("hello",0,5,"world")
 ENTER
 ASSERT_CELL       A:A8  world
+
+# @S(range) — IronCalc 0.7.1 has no @S equivalent. Emulated as
+# IF(ISTEXT(INDEX(range,1,1)),INDEX(range,1,1),"").
+# Seed D1 with a label, D2 with a number; @S on each tells them apart.
+# (B1..B3 are already seeded with 1,2,3 by the SUMPRODUCT test above.)
+F 5
+KEYS D1
+ENTER
+KEY '
+KEYS hello
+ENTER
+F 5
+KEYS D2
+ENTER
+KEYS 42
+ENTER
+
+# @S(D1) returns "hello" (D1 is a label).
+F 5
+KEYS A9
+ENTER
+KEY @
+KEYS S(D1)
+ENTER
+ASSERT_CELL       A:A9  hello
+
+# @S(D2) returns "" (D2 is a number — empty label).
+F 5
+KEYS A10
+ENTER
+KEY @
+KEYS S(D2)
+ENTER
+ASSERT_CELL       A:A10
+
+# @S on a multi-cell range returns the top-left cell's text.
+F 5
+KEYS A11
+ENTER
+KEY @
+KEYS S(D1..D2)
+ENTER
+ASSERT_CELL       A:A11  hello
+
+# @CELLPOINTER("row") — should reflect the cell holding the formula.
+# Place the call at A12; @CELLPOINTER("row") rewrites to @CELL("row",A12)
+# which evaluates to 12.
+F 5
+KEYS A12
+ENTER
+KEY @
+KEYS CELLPOINTER("row")
+ENTER
+ASSERT_CELL       A:A12  12
+
+# @CELLPOINTER("col") at C13 → 3.
+F 5
+KEYS C13
+ENTER
+KEY @
+KEYS CELLPOINTER("col")
+ENTER
+ASSERT_CELL       A:C13  3
+
+# @CELLPOINTER("sheet") rewrites through @CELL("sheet",addr) → SHEET(addr).
+# On the default sheet (A) → 1.
+F 5
+KEYS A14
+ENTER
+KEY @
+KEYS CELLPOINTER("sheet")
+ENTER
+ASSERT_CELL       A:A14  1
