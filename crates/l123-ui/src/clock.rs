@@ -1,9 +1,9 @@
 //! Date/time formatting for the status line and status overlay.
 //!
-//! `libc::localtime_r` converts a UNIX timestamp into a broken-down
-//! local time. That's the lightest way to get the user's local date
-//! without pulling in a full-fat time crate; we only need to render
-//! `DD-MMM-YYYY HH:MM`, not to do date arithmetic.
+//! POSIX exposes `localtime_r`; the MSVC CRT only has `localtime_s`,
+//! with swapped args and an `errno_t` return. We cfg-gate the call so
+//! both platforms build without pulling in a full-fat time crate — we
+//! only need to render `DD-MMM-YYYY HH:MM`, not do date arithmetic.
 
 use std::mem::MaybeUninit;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -29,7 +29,11 @@ pub fn local_from_unix(secs: i64) -> DateTime {
     let t: libc::time_t = secs as libc::time_t;
     unsafe {
         let mut tm: MaybeUninit<libc::tm> = MaybeUninit::zeroed();
-        if libc::localtime_r(&t, tm.as_mut_ptr()).is_null() {
+        #[cfg(unix)]
+        let ok = !libc::localtime_r(&t, tm.as_mut_ptr()).is_null();
+        #[cfg(windows)]
+        let ok = libc::localtime_s(tm.as_mut_ptr(), &t) == 0;
+        if !ok {
             return DateTime {
                 year: 1970,
                 month: 1,
@@ -190,9 +194,10 @@ mod tests {
         }
     }
 
-    // Sanity check that libc::localtime_r gives us something
-    // plausible. We can't assert an exact result — the test machine's
-    // timezone is whatever it is — but the year should be >= 1970.
+    // Sanity check that the platform localtime call gives us
+    // something plausible. We can't assert an exact result — the test
+    // machine's timezone is whatever it is — but the year should be
+    // >= 1970.
     #[test]
     fn local_now_is_plausible() {
         let dt = local_now();
