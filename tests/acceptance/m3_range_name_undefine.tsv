@@ -1,0 +1,52 @@
+# /Range Name Undefine — drop a name AND rewrite formulas referencing
+# it to use the literal range, preserving the cells' computed values.
+
+# A1=10, A2=20, name "tot" → A1..A2
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+HOME
+
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS tot
+ENTER
+DOWN
+ENTER
+ASSERT_MODE       READY
+
+# B1 = @SUM(tot) → 30
+HOME
+RIGHT
+KEY @
+KEYS SUM(tot)
+ENTER
+ASSERT_CELL       A:B1  30
+
+# /RNU drops the name, rewrites the formula in B1.
+KEY /
+KEY R
+KEY N
+KEY U
+ASSERT_PANEL_L3   undefine
+KEYS tot
+ENTER
+ASSERT_MODE       READY
+
+# Value still 30 (formula was rewritten with literal range).
+ASSERT_CELL       A:B1  30
+
+# Reusing "tot" via /RNC succeeds — the name was actually dropped.
+LEFT
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS tot
+ENTER
+ENTER
+ASSERT_MODE       READY

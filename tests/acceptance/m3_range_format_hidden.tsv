@@ -1,0 +1,17 @@
+# /Range Format Hidden — display blank, value preserved.
+
+KEYS 42
+ENTER
+HOME
+ASSERT_CELL       A:A1  42
+
+KEY /
+KEY R
+KEY F
+KEY H
+ENTER
+ASSERT_MODE       READY
+
+# Cell now displays blank but the value is still 42.
+ASSERT_CELL       A:A1
+ASSERT_PANEL_L1   42

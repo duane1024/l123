@@ -1,0 +1,48 @@
+# /Range Trans — transpose rows and columns. Per R3.4a, formulas
+# collapse to their cached values at the new orientation.
+
+# A 2x3 block:  A1=1 B1=2 C1=3
+#               A2=4 B2=5 C2=6
+KEYS 1
+ENTER
+HOME
+RIGHT
+KEYS 2
+ENTER
+RIGHT
+KEYS 3
+ENTER
+HOME
+DOWN
+KEYS 4
+ENTER
+RIGHT
+KEYS 5
+ENTER
+RIGHT
+KEYS 6
+ENTER
+HOME
+
+# /RT → POINT for source A1..C2, POINT for destination A4.
+KEY /
+KEY R
+KEY T
+ASSERT_PANEL_L3   TRANSPOSE FROM
+KEYS A1..C2
+ENTER
+ASSERT_PANEL_L3   TRANSPOSE TO
+KEYS A4
+ENTER
+ASSERT_MODE       READY
+
+# Result is 3x2 at A4..B6:
+#   A4=1 B4=4
+#   A5=2 B5=5
+#   A6=3 B6=6
+ASSERT_CELL       A:A4  1
+ASSERT_CELL       A:B4  4
+ASSERT_CELL       A:A5  2
+ASSERT_CELL       A:B5  5
+ASSERT_CELL       A:A6  3
+ASSERT_CELL       A:B6  6

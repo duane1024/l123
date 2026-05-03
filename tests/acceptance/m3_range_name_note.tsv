@@ -1,0 +1,67 @@
+# /Range Name Note — annotate a named range; the note appears in the
+# /Range Name Note Table dump.
+
+# Define name "rate" → A1.
+KEYS 5
+ENTER
+HOME
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS rate
+ENTER
+ENTER
+ASSERT_MODE       READY
+
+# /RNNC rate → enter note body.
+KEY /
+KEY R
+KEY N
+KEY N
+KEY C
+ASSERT_PANEL_L3   annotate
+KEYS rate
+ENTER
+ASSERT_PANEL_L3   note text
+KEYS hello
+ENTER
+ASSERT_MODE       READY
+
+# /RNNT writes (name, range, note) triples to a 3-col block anchored
+# at C1.
+KEY /
+KEY R
+KEY N
+KEY N
+KEY T
+ASSERT_PANEL_L3   notes table
+KEYS C1
+ENTER
+ASSERT_MODE       READY
+
+ASSERT_CELL       A:C1  rate
+ASSERT_CELL       A:D1  A:A1..A1
+ASSERT_CELL       A:E1  hello
+
+# /RNND rate strips the note (the name itself is preserved).
+KEY /
+KEY R
+KEY N
+KEY N
+KEY D
+KEYS rate
+ENTER
+ASSERT_MODE       READY
+
+# Re-dump: note column is empty.
+KEY /
+KEY R
+KEY N
+KEY N
+KEY T
+KEYS C5
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:C5  rate
+ASSERT_CELL       A:E5

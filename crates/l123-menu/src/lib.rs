@@ -238,6 +238,54 @@ pub enum Action {
     RangeLabelCenter,
     RangeNameCreate,
     RangeNameDelete,
+    /// `/Range Name Reset` — drop every named range in the active
+    /// file. Undo-aware: the previous map is captured as a single
+    /// journal entry.
+    RangeNameReset,
+    /// `/Range Name Labels Right|Down|Left|Up` — for each label in
+    /// the picked range, define a 1-cell range name (the label's
+    /// text) pointing at the adjacent cell in the chosen direction.
+    /// Labels that violate the name rules (>15 chars, non-letter
+    /// first char, embedded whitespace) are skipped silently.
+    RangeNameLabelsRight,
+    RangeNameLabelsDown,
+    RangeNameLabelsLeft,
+    RangeNameLabelsUp,
+    /// `/Range Name Table` — dump the active file's named-range
+    /// table to a 2-column block starting at the picked cell.
+    /// Column 1 is the name; column 2 is the range as a string.
+    RangeNameTable,
+    /// `/Range Name Note Create|Delete|Reset|Table` — manage notes
+    /// on named-range definitions. Names with notes show them in
+    /// the F3 NAMES picker.
+    RangeNameNoteCreate,
+    RangeNameNoteDelete,
+    RangeNameNoteReset,
+    RangeNameNoteTable,
+    /// `/Range Name Undefine` — drop a name AND rewrite formulas
+    /// that referenced it to use the literal range, preserving
+    /// computed values across the deletion.
+    RangeNameUndefine,
+    /// `/Range Prot` — re-protect a range (default state). Effective
+    /// when /WGP Enable is on.
+    RangeProtect,
+    /// `/Range Unprot` — mark a range as writable even when
+    /// /WGP Enable is on.
+    RangeUnprotect,
+    /// `/Range Input` — restrict the pointer to unprotected cells
+    /// within a range until the user presses Esc.
+    RangeInput,
+    /// `/Range Justify` — word-wrap a long label into a column
+    /// block at the cell's column width.
+    RangeJustify,
+    /// `/Range Value` — copy a range, replacing formulas with their
+    /// cached values at the destination.
+    RangeValue,
+    /// `/Range Trans` — transpose a rectangular range. Per R3.4a,
+    /// formulas with relative references collapse to their cached
+    /// values at the new orientation; absolute references travel
+    /// unchanged.
+    RangeTrans,
     RangeFormatFixed,
     RangeFormatScientific,
     RangeFormatCurrency,
@@ -250,6 +298,11 @@ pub enum Action {
     RangeFormatDateLongIntl,
     RangeFormatDateShortIntl,
     RangeFormatText,
+    RangeFormatHidden,
+    RangeFormatTimeHmsAmPm,
+    RangeFormatTimeHmAmPm,
+    RangeFormatTimeLongIntl,
+    RangeFormatTimeShortIntl,
     RangeFormatReset,
     /// `/Worksheet Global Format` leaves — set the workbook-wide default
     /// cell format that cells without a per-cell `/RF` override inherit.
@@ -1689,7 +1742,7 @@ const RANGE_FORMAT_MENU: &[MenuItem] = &[
         letter: 'H',
         name: "Hidden",
         help: "Hide the cell display",
-        body: MenuBody::NotImplemented("rf-hidden"),
+        body: MenuBody::Action(Action::RangeFormatHidden),
     },
     MenuItem {
         letter: 'R',
@@ -1734,7 +1787,34 @@ const RANGE_FORMAT_DATE_MENU: &[MenuItem] = &[
         letter: 'T',
         name: "Time",
         help: "Time format (D6..D9)",
-        body: MenuBody::NotImplemented("rf-date-time"),
+        body: MenuBody::Submenu(RANGE_FORMAT_TIME_MENU),
+    },
+];
+
+const RANGE_FORMAT_TIME_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: '1',
+        name: "1",
+        help: "HH:MM:SS AM/PM (D6)",
+        body: MenuBody::Action(Action::RangeFormatTimeHmsAmPm),
+    },
+    MenuItem {
+        letter: '2',
+        name: "2",
+        help: "HH:MM AM/PM (D7)",
+        body: MenuBody::Action(Action::RangeFormatTimeHmAmPm),
+    },
+    MenuItem {
+        letter: '3',
+        name: "3",
+        help: "Long international time (D8)",
+        body: MenuBody::Action(Action::RangeFormatTimeLongIntl),
+    },
+    MenuItem {
+        letter: '4',
+        name: "4",
+        help: "Short international time (D9)",
+        body: MenuBody::Action(Action::RangeFormatTimeShortIntl),
     },
 ];
 
@@ -1899,6 +1979,60 @@ pub const RANGE_SEARCH_FIND_REPLACE_MENU: &[MenuItem] = &[
     },
 ];
 
+const RANGE_NAME_LABELS_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'R',
+        name: "Right",
+        help: "Names point one cell to the right of each label",
+        body: MenuBody::Action(Action::RangeNameLabelsRight),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Down",
+        help: "Names point one cell below each label",
+        body: MenuBody::Action(Action::RangeNameLabelsDown),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Left",
+        help: "Names point one cell to the left of each label",
+        body: MenuBody::Action(Action::RangeNameLabelsLeft),
+    },
+    MenuItem {
+        letter: 'U',
+        name: "Up",
+        help: "Names point one cell above each label",
+        body: MenuBody::Action(Action::RangeNameLabelsUp),
+    },
+];
+
+const RANGE_NAME_NOTE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Create",
+        help: "Attach a note to a named range",
+        body: MenuBody::Action(Action::RangeNameNoteCreate),
+    },
+    MenuItem {
+        letter: 'D',
+        name: "Delete",
+        help: "Remove a named range's note",
+        body: MenuBody::Action(Action::RangeNameNoteDelete),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Remove every named-range note",
+        body: MenuBody::Action(Action::RangeNameNoteReset),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Table",
+        help: "Dump names + notes to a 3-column block",
+        body: MenuBody::Action(Action::RangeNameNoteTable),
+    },
+];
+
 const RANGE_NAME_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'C',
@@ -1916,31 +2050,31 @@ const RANGE_NAME_MENU: &[MenuItem] = &[
         letter: 'L',
         name: "Labels",
         help: "Create range names from adjacent labels",
-        body: MenuBody::NotImplemented("rn-labels"),
+        body: MenuBody::Submenu(RANGE_NAME_LABELS_MENU),
     },
     MenuItem {
         letter: 'R',
         name: "Reset",
         help: "Delete all range names",
-        body: MenuBody::NotImplemented("rn-reset"),
+        body: MenuBody::Action(Action::RangeNameReset),
     },
     MenuItem {
         letter: 'T',
         name: "Table",
         help: "Write a table of range names to the sheet",
-        body: MenuBody::NotImplemented("rn-table"),
+        body: MenuBody::Action(Action::RangeNameTable),
     },
     MenuItem {
         letter: 'U',
         name: "Undefine",
-        help: "Remove a range name but preserve formulas",
-        body: MenuBody::NotImplemented("rn-undefine"),
+        help: "Remove a range name but preserve formula values",
+        body: MenuBody::Action(Action::RangeNameUndefine),
     },
     MenuItem {
         letter: 'N',
         name: "Note",
-        help: "Cell notes attached to ranges",
-        body: MenuBody::NotImplemented("rn-note"),
+        help: "Notes attached to named ranges",
+        body: MenuBody::Submenu(RANGE_NAME_NOTE_MENU),
     },
 ];
 
@@ -1973,37 +2107,37 @@ const RANGE_MENU: &[MenuItem] = &[
         letter: 'J',
         name: "Justify",
         help: "Word-wrap long labels into a block",
-        body: MenuBody::NotImplemented("r-justify"),
+        body: MenuBody::Action(Action::RangeJustify),
     },
     MenuItem {
         letter: 'P',
         name: "Prot",
         help: "Re-protect a range on a protected sheet",
-        body: MenuBody::NotImplemented("r-prot"),
+        body: MenuBody::Action(Action::RangeProtect),
     },
     MenuItem {
         letter: 'U',
         name: "Unprot",
         help: "Mark a range as writable",
-        body: MenuBody::NotImplemented("r-unprot"),
+        body: MenuBody::Action(Action::RangeUnprotect),
     },
     MenuItem {
         letter: 'I',
         name: "Input",
         help: "Form input limited to unprotected cells",
-        body: MenuBody::NotImplemented("r-input"),
+        body: MenuBody::Action(Action::RangeInput),
     },
     MenuItem {
         letter: 'V',
         name: "Value",
         help: "Copy a range converting formulas to values",
-        body: MenuBody::NotImplemented("r-value"),
+        body: MenuBody::Action(Action::RangeValue),
     },
     MenuItem {
         letter: 'T',
         name: "Trans",
         help: "Transpose rows and columns",
-        body: MenuBody::NotImplemented("r-trans"),
+        body: MenuBody::Action(Action::RangeTrans),
     },
     MenuItem {
         letter: 'S',

@@ -1,0 +1,48 @@
+# /Range Format Date Time submenu (D6/D7/D8/D9). Each leaf paints a
+# time format on the picked range; we verify only the panel-line tag.
+
+# A1 = 0.5 (noon as a fractional day).
+KEYS .5
+ENTER
+HOME
+
+# /RFD T 1 → D6 (HH:MM:SS AM/PM).
+KEY /
+KEY R
+KEY F
+KEY D
+KEY T
+KEY 1
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   (D6)
+
+# /RFD T 2 → D7.
+KEY /
+KEY R
+KEY F
+KEY D
+KEY T
+KEY 2
+ENTER
+ASSERT_PANEL_L1   (D7)
+
+# D8.
+KEY /
+KEY R
+KEY F
+KEY D
+KEY T
+KEY 3
+ENTER
+ASSERT_PANEL_L1   (D8)
+
+# D9.
+KEY /
+KEY R
+KEY F
+KEY D
+KEY T
+KEY 4
+ENTER
+ASSERT_PANEL_L1   (D9)

@@ -268,6 +268,9 @@ pub fn render_value_in_cell(
     format: Format,
     intl: &crate::International,
 ) -> Option<String> {
+    if matches!(format.kind, FormatKind::Hidden) {
+        return Some(" ".repeat(width));
+    }
     match v {
         Value::Number(n) => {
             let s = crate::format_number(*n, format, intl);
