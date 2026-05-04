@@ -32,6 +32,14 @@ pub fn parse(raw: &str) -> Option<Format> {
     // Excel splits positive;negative;zero;text — the positive section
     // dictates the kind. The other sections are purely cosmetic.
     let positive = trimmed.split(';').next().unwrap_or("");
+
+    // Date/time detection runs first because m/d/y/h/s glyphs do not
+    // appear in numeric formats — once we've matched a date or time,
+    // we don't fall through to the currency/scientific classifier.
+    if let Some(kind) = classify_datetime(positive) {
+        return Some(Format { kind, decimals: 0 });
+    }
+
     let stripped = strip_cosmetic(positive);
     if stripped.is_empty() {
         return None;
@@ -89,19 +97,21 @@ pub fn to_num_fmt(format: Format) -> String {
         FormatKind::Currency => format!("\"$\"{}", zeros_with_decimals("#,##0", d)),
         FormatKind::Comma => zeros_with_decimals("#,##0", d),
         FormatKind::Percent => format!("{}%", zeros_with_decimals("0", d)),
+        // Date / time kinds round-trip via canonical Excel format
+        // strings that classify_datetime() will recognize on re-load.
+        FormatKind::DateDmy => "dd-mmm-yy".to_string(),
+        FormatKind::DateDm => "dd-mmm".to_string(),
+        FormatKind::DateMy => "mmm-yy".to_string(),
+        FormatKind::DateLongIntl => "m/d/yy".to_string(),
+        FormatKind::DateShortIntl => "m/d".to_string(),
+        FormatKind::TimeLongIntl => "h:mm:ss".to_string(),
+        FormatKind::TimeShortIntl => "h:mm".to_string(),
         // Kinds we don't yet render to Excel fall back to General so the
         // cell at least opens without an error in Excel.
         FormatKind::General
         | FormatKind::PlusMinus
-        | FormatKind::DateDmy
-        | FormatKind::DateDm
-        | FormatKind::DateMy
-        | FormatKind::DateLongIntl
-        | FormatKind::DateShortIntl
         | FormatKind::TimeHmsAmPm
         | FormatKind::TimeHmAmPm
-        | FormatKind::TimeLongIntl
-        | FormatKind::TimeShortIntl
         | FormatKind::Text
         | FormatKind::Hidden
         | FormatKind::Automatic
@@ -121,6 +131,106 @@ fn zeros_with_decimals(integer_pattern: &str, decimals: usize) -> String {
             s.push('0');
         }
         s
+    }
+}
+
+/// Detect a date or time format by scanning unquoted `m`, `d`, `y`,
+/// `h`, `s` glyphs in the positive section.
+///
+/// 1-2-3 has five date kinds (D1..D5) and four time kinds (D6..D9).
+/// Excel's format strings carry more variation than that — we collapse:
+///
+/// * Any format containing `h` or `s` → **time**
+///   (`TimeLongIntl` if `s` is present, else `TimeShortIntl`).
+/// * Date with year + month + day:
+///   * letter month (`mmm`/`mmmm`) → `DateDmy` (D1)
+///   * numeric month → `DateLongIntl` (D4)
+/// * Date with month + day, no year:
+///   * letter month → `DateDm` (D2)
+///   * numeric month → `DateShortIntl` (D5)
+/// * Date with month + year, no day → `DateMy` (D3)
+fn classify_datetime(positive: &str) -> Option<l123_core::FormatKind> {
+    use l123_core::FormatKind;
+
+    let mut has_y = false;
+    let mut has_d = false;
+    let mut has_h = false;
+    let mut has_s = false;
+    let mut has_m = false;
+    let mut has_mmm = false;
+
+    let mut chars = positive.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // Quoted literal — skip the inner chars entirely so a
+            // literal "moon" doesn't trigger month detection.
+            '"' => {
+                for inner in chars.by_ref() {
+                    if inner == '"' {
+                        break;
+                    }
+                }
+            }
+            // Backslash-escape consumes the next char literally.
+            '\\' => {
+                chars.next();
+            }
+            // Width-spacer / fill-repeat — drop the next char.
+            '_' | '*' => {
+                chars.next();
+            }
+            // `[Red]`, `[h]`, `[$-409]` — cosmetic / locale tags. We
+            // skip the entire bracketed run; the contents do not count
+            // as date glyphs.
+            '[' => {
+                for inner in chars.by_ref() {
+                    if inner == ']' {
+                        break;
+                    }
+                }
+            }
+            'm' | 'M' => {
+                let mut run = 1;
+                while matches!(chars.peek(), Some('m') | Some('M')) {
+                    chars.next();
+                    run += 1;
+                }
+                has_m = true;
+                if run >= 3 {
+                    has_mmm = true;
+                }
+            }
+            'd' | 'D' => has_d = true,
+            'y' | 'Y' => has_y = true,
+            'h' | 'H' => has_h = true,
+            's' | 'S' => has_s = true,
+            _ => {}
+        }
+    }
+
+    // Time wins over date. `[h]:mm:ss` (elapsed time) hides `h` inside
+    // brackets — `s` alone is enough to mark it as time.
+    if has_h || has_s {
+        return Some(if has_s {
+            FormatKind::TimeLongIntl
+        } else {
+            FormatKind::TimeShortIntl
+        });
+    }
+
+    match (has_y, has_m, has_d) {
+        (true, true, true) => Some(if has_mmm {
+            FormatKind::DateDmy
+        } else {
+            FormatKind::DateLongIntl
+        }),
+        (false, true, true) => Some(if has_mmm {
+            FormatKind::DateDm
+        } else {
+            FormatKind::DateShortIntl
+        }),
+        (true, true, false) => Some(FormatKind::DateMy),
+        _ => None,
     }
 }
 
@@ -281,6 +391,152 @@ mod tests {
     fn negative_section_ignored() {
         // Positive;negative;zero;text — kind is decided by the first section.
         assert_eq!(parse("$#,##0.00_);($#,##0.00)"), Some(Format::currency(2)));
+    }
+
+    #[test]
+    fn date_my_for_month_year_formats() {
+        // The atlas-model.xlsx fixture uses these three forms.
+        assert_eq!(
+            parse("m/yyyy"),
+            Some(Format {
+                kind: FormatKind::DateMy,
+                decimals: 0
+            })
+        );
+        assert_eq!(
+            parse("mmm-yyyy"),
+            Some(Format {
+                kind: FormatKind::DateMy,
+                decimals: 0
+            })
+        );
+        assert_eq!(
+            parse("mmm yyyy"),
+            Some(Format {
+                kind: FormatKind::DateMy,
+                decimals: 0
+            })
+        );
+        assert_eq!(
+            parse("mmm-yy"),
+            Some(Format {
+                kind: FormatKind::DateMy,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn date_dmy_for_letter_month_full_dates() {
+        assert_eq!(
+            parse("dd-mmm-yy"),
+            Some(Format {
+                kind: FormatKind::DateDmy,
+                decimals: 0
+            })
+        );
+        assert_eq!(
+            parse("d-mmm-yyyy"),
+            Some(Format {
+                kind: FormatKind::DateDmy,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn date_dm_for_letter_month_no_year() {
+        assert_eq!(
+            parse("d-mmm"),
+            Some(Format {
+                kind: FormatKind::DateDm,
+                decimals: 0
+            })
+        );
+        assert_eq!(
+            parse("dd-mmm"),
+            Some(Format {
+                kind: FormatKind::DateDm,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn date_long_intl_for_numeric_full_dates() {
+        // Built-in numFmtId 14 = "m/d/yyyy"; 22 = "m/d/yyyy h:mm" (handled
+        // separately as time). All-numeric dates map to D4.
+        assert_eq!(
+            parse("m/d/yyyy"),
+            Some(Format {
+                kind: FormatKind::DateLongIntl,
+                decimals: 0
+            })
+        );
+        assert_eq!(
+            parse("m/d/yy"),
+            Some(Format {
+                kind: FormatKind::DateLongIntl,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn date_short_intl_for_numeric_no_year() {
+        assert_eq!(
+            parse("m/d"),
+            Some(Format {
+                kind: FormatKind::DateShortIntl,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn time_long_intl_for_h_m_s() {
+        assert_eq!(
+            parse("h:mm:ss"),
+            Some(Format {
+                kind: FormatKind::TimeLongIntl,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn time_short_intl_for_h_m_no_seconds() {
+        assert_eq!(
+            parse("h:mm"),
+            Some(Format {
+                kind: FormatKind::TimeShortIntl,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn quoted_letters_do_not_trigger_date_detection() {
+        // Quoted "m" is a literal, not a month token. Should fall through
+        // to None (or, here, to currency since the format also has $).
+        assert_eq!(parse("\"month\" 0"), Some(Format::fixed(0)));
+    }
+
+    #[test]
+    fn date_round_trips_via_to_num_fmt() {
+        for kind in [
+            FormatKind::DateDmy,
+            FormatKind::DateDm,
+            FormatKind::DateMy,
+            FormatKind::DateLongIntl,
+            FormatKind::DateShortIntl,
+            FormatKind::TimeLongIntl,
+            FormatKind::TimeShortIntl,
+        ] {
+            let f = Format { kind, decimals: 0 };
+            let s = to_num_fmt(f);
+            assert_eq!(parse(&s), Some(f), "round-trip for {f:?} via {s:?}");
+        }
     }
 
     #[test]

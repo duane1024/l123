@@ -157,10 +157,12 @@ pub fn format_number(n: f64, format: Format, intl: &International) -> String {
         DateShortIntl => format_date_intl(n, intl.date_intl, false),
         TimeLongIntl => format_time_intl(n, intl.time_intl, true),
         TimeShortIntl => format_time_intl(n, intl.time_intl, false),
-        // D1/D2/D3 (DateDmy/DateDm/DateMy) and D6/D7 (TimeHmsAmPm/
-        // HmAmPm): not yet wired. Display the underlying number until
-        // their milestones land.
-        DateDmy | DateDm | DateMy | TimeHmsAmPm | TimeHmAmPm | Text | Hidden | LabelOnly => {
+        DateDmy => format_date_letter_month(n, true, true),
+        DateDm => format_date_letter_month(n, false, true),
+        DateMy => format_date_letter_month(n, true, false),
+        // D6/D7 (TimeHmsAmPm/HmAmPm) not yet wired. Display the
+        // underlying number until their milestones land.
+        TimeHmsAmPm | TimeHmAmPm | Text | Hidden | LabelOnly => {
             swap_decimal(crate::contents::format_number_general(n), dec)
         }
     }
@@ -240,6 +242,26 @@ fn format_time_intl(serial: f64, intl: TimeIntl, long: bool) -> String {
         (TimeIntl::B, false) => format!("{h:02}.{m:02}"),
         (TimeIntl::C, true) => format!("{h:02},{m:02},{s:02}"),
         (TimeIntl::C, false) => format!("{h:02},{m:02}"),
+    }
+}
+
+const MONTH_ABBREV_UPPER: [&str; 12] = [
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+];
+
+/// Render `serial` using a 1-2-3 letter-month date kind:
+/// * `with_year && with_day` → D1 (`DD-MMM-YY`)
+/// * `with_year && !with_day` → D3 (`MMM-YY`)
+/// * `!with_year && with_day` → D2 (`DD-MMM`)
+fn format_date_letter_month(serial: f64, with_year: bool, with_day: bool) -> String {
+    let (y, m, d) = serial_to_ymd(serial);
+    let mon = MONTH_ABBREV_UPPER[(m.saturating_sub(1) as usize).min(11)];
+    let yy = (y % 100).unsigned_abs();
+    match (with_day, with_year) {
+        (true, true) => format!("{d:02}-{mon}-{yy:02}"),
+        (true, false) => format!("{d:02}-{mon}"),
+        (false, true) => format!("{mon}-{yy:02}"),
+        (false, false) => mon.to_string(),
     }
 }
 
@@ -638,6 +660,49 @@ mod format_number_tests {
         // Serial 73050 = 2099-12-31 (just under the wrap to 2100).
         let i = intl_with_date(DateIntl::A);
         assert_eq!(format_number(73050.0, fmt_d4(), &i), "12/31/99");
+    }
+
+    fn fmt_d1() -> Format {
+        Format {
+            kind: FormatKind::DateDmy,
+            decimals: 0,
+        }
+    }
+    fn fmt_d2() -> Format {
+        Format {
+            kind: FormatKind::DateDm,
+            decimals: 0,
+        }
+    }
+    fn fmt_d3() -> Format {
+        Format {
+            kind: FormatKind::DateMy,
+            decimals: 0,
+        }
+    }
+
+    #[test]
+    fn date_dmy_renders_dd_mmm_yy_uppercase() {
+        let i = intl_default();
+        // Serial 36540 = 2000-01-15.
+        assert_eq!(format_number(36540.0, fmt_d1(), &i), "15-JAN-00");
+        // Serial 45931 = 2025-10-01 — atlas-model.xlsx Cost Model B1.
+        assert_eq!(format_number(45931.0, fmt_d1(), &i), "01-OCT-25");
+    }
+
+    #[test]
+    fn date_dm_renders_dd_mmm_no_year() {
+        let i = intl_default();
+        assert_eq!(format_number(36540.0, fmt_d2(), &i), "15-JAN");
+        assert_eq!(format_number(45931.0, fmt_d2(), &i), "01-OCT");
+    }
+
+    #[test]
+    fn date_my_renders_mmm_yy_no_day() {
+        let i = intl_default();
+        assert_eq!(format_number(36540.0, fmt_d3(), &i), "JAN-00");
+        // Atlas-model.xlsx Cost Model B1 has format `m/yyyy` → DateMy.
+        assert_eq!(format_number(45931.0, fmt_d3(), &i), "OCT-25");
     }
 
     use crate::international::TimeIntl;
