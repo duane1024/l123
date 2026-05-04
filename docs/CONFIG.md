@@ -146,6 +146,26 @@ Examples:
 
 [env-filter]: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html
 
+### `theme`
+
+Chrome theme. Today this only controls the colors of the column-letter
+strip across the top of the grid and the row-number gutter on the
+left; cell content, `:Format Color`, xlsx fills, and the rest of the
+chrome are unaffected.
+
+- **Env:** `L123_THEME`
+- **CLI override:** `--theme <name>` (wins over env and file)
+- **Recognized values:** `default`, `dos` (case-insensitive)
+- **Default:** `default`
+
+`default` keeps the terminal's reversed look. `dos` paints the
+row/column labels black-on-cyan to match the Lotus 1-2-3 R3.4a DOS
+chrome.
+
+Unknown values fall through to the next tier (CLI errors loudly with
+exit code 2; env / file values silently fall through), so a typo in
+`L123.CNF` won't break the app.
+
 ---
 
 ## ✦ File location

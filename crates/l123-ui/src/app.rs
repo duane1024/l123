@@ -817,6 +817,12 @@ pub struct App {
     /// dispatching. Always `None` for `App::new()` so existing
     /// transcripts aren't blocked on a dismiss keystroke.
     splash: Option<SplashInfo>,
+    /// Active chrome theme. Today this only colors the column-letter
+    /// row and the row-number gutter; cell content, `:Format Color`,
+    /// and xlsx fills are all unaffected. Seeded at startup from
+    /// `--theme` > `L123_THEME` > `L123.CNF` `theme=` > built-in
+    /// default.
+    theme: crate::Theme,
     /// When true, the pointer-edge collision path fires a soft
     /// terminal bell (BEL, `\x07`). Toggled at runtime by
     /// `/Worksheet Global Default Other Beep Enable|Disable`; the
@@ -3113,6 +3119,7 @@ impl App {
             last_grid_area: Cell::new(None),
             drag_anchor: None,
             splash: None,
+            theme: crate::Theme::default(),
             beep_enabled: true,
             beep_count: 0,
             beep_pending: false,
@@ -3558,13 +3565,24 @@ impl App {
     }
 
     pub fn run() -> anyhow::Result<()> {
-        Self::run_with_file(None)
+        Self::run_with(None, None)
     }
 
     /// CLI entry point. When `path` is set the app opens that workbook
     /// and skips the splash; when `None` it greets the user with the
     /// licensing block until the first keypress.
     pub fn run_with_file(path: Option<PathBuf>) -> anyhow::Result<()> {
+        Self::run_with(path, None)
+    }
+
+    /// Full entry point — accepts an optional file and an optional
+    /// `--theme` override that wins over env / config-file. The
+    /// override is `Some` when the user passed `--theme`; `None` lets
+    /// the resolved [`crate::Config`] decide.
+    pub fn run_with(
+        path: Option<PathBuf>,
+        theme_override: Option<crate::Theme>,
+    ) -> anyhow::Result<()> {
         let mut stdout = io::stdout();
         enable_raw_mode()?;
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -3577,6 +3595,7 @@ impl App {
             None => App::new_with_splash(cfg.user.value.clone(), cfg.organization.value.clone()),
         };
         app.set_beep_enabled(cfg.error_beep_enabled());
+        app.set_theme(theme_override.unwrap_or_else(|| cfg.theme()));
         app.probe_image_picker();
         let result = app.event_loop(&mut terminal);
 
@@ -12319,6 +12338,18 @@ impl App {
         self.beep_enabled = enabled;
     }
 
+    /// Active chrome theme.
+    pub fn theme(&self) -> crate::Theme {
+        self.theme
+    }
+
+    /// Seed the chrome theme — called once at startup after resolving
+    /// `Config` and the `--theme` CLI override. Safe to call later
+    /// (tests use it).
+    pub fn set_theme(&mut self, theme: crate::Theme) {
+        self.theme = theme;
+    }
+
     /// Returns true if a beep has been requested since the last call,
     /// and clears the pending flag. The event loop reads this once per
     /// iteration to emit a single BEL no matter how many requests piled
@@ -13024,15 +13055,16 @@ impl App {
         outer.render(area, buf);
 
         // Upper band: two side-by-side sub-boxes (Recalculation + Cell
-        // display). Mid band: International box. Lower band: the
-        // environment readout. Heights chosen so the whole overlay
-        // fits inside an 80x30 terminal (the standard transcript size).
+        // display). Lower band: the environment readout — the same
+        // flat list the R3.4a status page used (memory, processor,
+        // protection, circular reference). International settings
+        // belong on `/Worksheet Global Default Other International`,
+        // not here; the original DOS status page never showed them.
         let band = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(6),
                 Constraint::Length(1),
-                Constraint::Length(7),
                 Constraint::Min(1),
             ])
             .split(outer_inner);
@@ -13082,52 +13114,6 @@ impl App {
         .style(text_style)
         .render(cell_inner, buf);
 
-        let intl_box = Block::default()
-            .borders(Borders::ALL)
-            .border_style(text_style)
-            .title("International")
-            .style(text_style);
-        let intl_inner = intl_box.inner(band[2]);
-        intl_box.render(band[2], buf);
-        let intl = &self.wb().international;
-        let currency_display = match intl.currency.position {
-            CurrencyPosition::Prefix => format!("{}n", intl.currency.symbol),
-            CurrencyPosition::Suffix => format!("n{}", intl.currency.symbol),
-        };
-        Paragraph::new(vec![
-            Line::from(format!(
-                "Punctuation: {} (decimal {} arg {} thousands {})",
-                intl.punctuation.label(),
-                intl.punctuation.decimal_char(),
-                intl.punctuation.argument_sep(),
-                if intl.punctuation.thousands_sep() == ' ' {
-                    "(space)".to_string()
-                } else {
-                    intl.punctuation.thousands_sep().to_string()
-                },
-            )),
-            Line::from(format!(
-                "Date:        {} ({} long, {} short)",
-                intl.date_intl.label(),
-                intl.date_intl.long_label(),
-                intl.date_intl.short_label(),
-            )),
-            Line::from(format!(
-                "Time:        {} ({} long, {} short)",
-                intl.time_intl.label(),
-                intl.time_intl.long_label(),
-                intl.time_intl.short_label(),
-            )),
-            Line::from(format!("Negative:    {}", intl.negative_style.label())),
-            Line::from(format!(
-                "Currency:    {} ({})",
-                currency_display,
-                intl.currency.position.label()
-            )),
-        ])
-        .style(text_style)
-        .render(intl_inner, buf);
-
         let info = crate::sysinfo::SysInfo::probe();
         let mem_free = info
             .memory_free
@@ -13175,7 +13161,7 @@ impl App {
             )),
         ])
         .style(text_style)
-        .render(band[3], buf);
+        .render(band[2], buf);
     }
 
     fn render_defaults_overlay(&self, area: Rect, buf: &mut Buffer) {
@@ -14020,18 +14006,31 @@ impl App {
         let layout = self.visible_column_layout(content_width);
         let visible_rows = area.height - 1;
 
-        // Column header row
-        let header_style = Style::default().add_modifier(Modifier::REVERSED);
+        // Column header row. The column / row containing the active
+        // pointer wears `header_active_style`; everything else wears
+        // the resting `header_style`. In the default theme both are
+        // identical so today's uniform look is preserved.
+        let header_style = self.theme.header_style();
+        let header_active = self.theme.header_active_style();
+        let active_col = self.wb().pointer.col;
+        let active_row = self.wb().pointer.row;
         for &(col_idx, x_off, w) in &layout {
             let letters = col_to_letters(col_idx);
             let x = area.x + ROW_GUTTER + x_off;
-            write_centered(buf, x, area.y, w, &letters, header_style);
+            let style = if col_idx == active_col {
+                header_active
+            } else {
+                header_style
+            };
+            write_centered(buf, x, area.y, w, &letters, style);
         }
-        // Top-left gutter corner
+        // Top-left gutter corner — sheet-identity area; wears the
+        // active style so DOS paints the corner CGA blue alongside
+        // the active column header and active row gutter.
         for k in 0..ROW_GUTTER {
             buf[(area.x + k, area.y)]
                 .set_char(' ')
-                .set_style(header_style);
+                .set_style(header_active);
         }
 
         // Body rows: frozen rows pinned at the top, then scrolling
@@ -14042,7 +14041,11 @@ impl App {
             let y = area.y + 1 + r;
             // Row number gutter
             let label = format!("{:>width$}", row_idx + 1, width = (ROW_GUTTER - 1) as usize);
-            let style = Style::default().add_modifier(Modifier::REVERSED);
+            let style = if row_idx == active_row {
+                header_active
+            } else {
+                header_style
+            };
             for (i, ch) in label.chars().enumerate() {
                 buf[(area.x + i as u16, y)].set_char(ch).set_style(style);
             }
@@ -14130,7 +14133,7 @@ impl App {
                 let owner_col = layout[slot.owner].0;
                 let style_addr = Address::new(sheet, owner_col, row_idx);
                 let mut cell_style = if highlighted {
-                    Style::default().add_modifier(Modifier::REVERSED)
+                    self.theme.cell_highlight_style()
                 } else {
                     display_mode_default_style(self.display_mode)
                 };
@@ -14367,11 +14370,12 @@ impl App {
                     // Build the anchor's full visual style — same
                     // layering as the cell-paint loop: pointer
                     // suppresses fill/font; text-style modifiers
-                    // always apply.  The pointer-on-anchor case keeps
-                    // the wide span REVERSED across the whole merge.
+                    // always apply.  When the pointer sits on the
+                    // anchor, the merge's whole span wears the
+                    // theme's cell-highlight style.
                     let anchor_highlighted = highlight.contains(m.anchor);
                     let mut astyle = if anchor_highlighted {
-                        Style::default().add_modifier(Modifier::REVERSED)
+                        self.theme.cell_highlight_style()
                     } else {
                         Style::default()
                     };
@@ -18821,5 +18825,179 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn default_theme_paints_headers_with_reversed_modifier() {
+        // Default theme leaves both fg and bg unset and just sets
+        // REVERSED so the terminal inverts its own pair — exactly what
+        // every existing acceptance transcript already snapshots.
+        let app = App::new();
+        let buf = app.render_to_buffer(80, 25);
+        // Column header strip is at y = PANEL_HEIGHT (top of the grid).
+        let col_header_y = PANEL_HEIGHT;
+        // Default column width is 9; column B sits at ROW_GUTTER + 9..
+        // and is *not* the active column on a fresh App, so it shows
+        // the resting (non-active) header style.
+        let inactive = &buf[(ROW_GUTTER + 9 + 4, col_header_y)];
+        assert!(
+            inactive.modifier.contains(Modifier::REVERSED),
+            "default theme should set REVERSED on column headers"
+        );
+        assert_eq!(inactive.fg, Color::Reset);
+        assert_eq!(inactive.bg, Color::Reset);
+
+        // Row-number gutter at body row 2 (y = PANEL_HEIGHT + 2,
+        // which is sheet row index 1, also non-active on a fresh app).
+        let gutter = &buf[(0, PANEL_HEIGHT + 2)];
+        assert!(
+            gutter.modifier.contains(Modifier::REVERSED),
+            "default theme should set REVERSED on the row gutter"
+        );
+    }
+
+    #[test]
+    fn dos_theme_paints_inactive_headers_black_on_cyan() {
+        let mut app = App::new();
+        app.set_theme(crate::Theme::Dos);
+        let buf = app.render_to_buffer(80, 25);
+        let col_header_y = PANEL_HEIGHT;
+
+        // Column B (inactive) — resting header style.
+        let inactive_col = &buf[(ROW_GUTTER + 9 + 4, col_header_y)];
+        assert_eq!(
+            inactive_col.bg,
+            Color::Rgb(0, 170, 170),
+            "column-B header bg"
+        );
+        assert_eq!(inactive_col.fg, Color::Rgb(0, 0, 0), "column-B header fg");
+        assert!(
+            !inactive_col.modifier.contains(Modifier::REVERSED),
+            "DOS theme must not also set REVERSED — that would re-invert"
+        );
+
+        // Row 2 (sheet row 1, inactive) — resting gutter style.
+        let inactive_row_gutter = &buf[(0, PANEL_HEIGHT + 2)];
+        assert_eq!(
+            inactive_row_gutter.bg,
+            Color::Rgb(0, 170, 170),
+            "row-2 gutter bg"
+        );
+        assert_eq!(
+            inactive_row_gutter.fg,
+            Color::Rgb(0, 0, 0),
+            "row-2 gutter fg"
+        );
+    }
+
+    #[test]
+    fn dos_theme_paints_active_column_header_deep_blue() {
+        // Pointer is at A1 by default — column A is the active column.
+        let mut app = App::new();
+        app.set_theme(crate::Theme::Dos);
+        let buf = app.render_to_buffer(80, 25);
+        // ROW_GUTTER + 4 is inside column A's slot (default width 9).
+        let active_cell = &buf[(ROW_GUTTER + 4, PANEL_HEIGHT)];
+        assert_eq!(
+            active_cell.bg,
+            Color::Rgb(0, 0, 170),
+            "active column header should wear CGA blue"
+        );
+        assert_eq!(active_cell.fg, Color::Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn dos_theme_paints_active_row_gutter_deep_blue() {
+        // Pointer is at A1 by default — row 0 (label "1") is active.
+        let mut app = App::new();
+        app.set_theme(crate::Theme::Dos);
+        let buf = app.render_to_buffer(80, 25);
+        // Row 1 lands at y = PANEL_HEIGHT + 1.
+        let active_gutter = &buf[(0, PANEL_HEIGHT + 1)];
+        assert_eq!(active_gutter.bg, Color::Rgb(0, 0, 170));
+        assert_eq!(active_gutter.fg, Color::Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn dos_theme_paints_upper_left_corner_deep_blue() {
+        // Sheet-identity area in the corner above the row gutter
+        // wears the same active style — CGA blue across all five
+        // gutter columns.
+        let mut app = App::new();
+        app.set_theme(crate::Theme::Dos);
+        let buf = app.render_to_buffer(80, 25);
+        for x in 0..ROW_GUTTER {
+            let cell = &buf[(x, PANEL_HEIGHT)];
+            assert_eq!(
+                cell.bg,
+                Color::Rgb(0, 0, 170),
+                "corner column {x} should be CGA blue"
+            );
+        }
+    }
+
+    #[test]
+    fn dos_theme_paints_selected_cell_in_resting_label_teal() {
+        let mut app = App::new();
+        app.set_theme(crate::Theme::Dos);
+        let buf = app.render_to_buffer(80, 25);
+        // Pointer is on A1; the cell occupies x ∈ [ROW_GUTTER, ROW_GUTTER+9)
+        // at y = PANEL_HEIGHT + 1.
+        let cell = &buf[(ROW_GUTTER, PANEL_HEIGHT + 1)];
+        assert_eq!(
+            cell.bg,
+            Color::Rgb(0, 170, 170),
+            "selected cell bg should match the resting label teal"
+        );
+        assert_eq!(
+            cell.fg,
+            Color::Rgb(0, 0, 0),
+            "selected cell fg should be black"
+        );
+        assert!(
+            !cell.modifier.contains(Modifier::REVERSED),
+            "DOS theme paints the highlight directly — no REVERSED"
+        );
+    }
+
+    #[test]
+    fn dos_theme_active_highlight_follows_pointer_on_move() {
+        // Move the pointer to B2 and verify B's header + row 2's
+        // gutter pick up the active deep-blue style, while A's drop
+        // back to the resting teal.
+        let mut app = App::new();
+        app.set_theme(crate::Theme::Dos);
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let buf = app.render_to_buffer(80, 25);
+
+        // B's column header — now active (deep blue).
+        let b_header = &buf[(ROW_GUTTER + 9 + 4, PANEL_HEIGHT)];
+        assert_eq!(b_header.bg, Color::Rgb(0, 0, 170), "B should now be active");
+
+        // A's column header — dropped back to resting teal.
+        let a_header = &buf[(ROW_GUTTER + 4, PANEL_HEIGHT)];
+        assert_eq!(
+            a_header.bg,
+            Color::Rgb(0, 170, 170),
+            "A should no longer be active"
+        );
+
+        // Row 2's gutter — active deep blue.
+        let row2_gutter = &buf[(0, PANEL_HEIGHT + 2)];
+        assert_eq!(row2_gutter.bg, Color::Rgb(0, 0, 170));
+        // Row 1's gutter — resting teal.
+        let row1_gutter = &buf[(0, PANEL_HEIGHT + 1)];
+        assert_eq!(row1_gutter.bg, Color::Rgb(0, 170, 170));
+    }
+
+    #[test]
+    fn set_theme_round_trips() {
+        let mut app = App::new();
+        assert_eq!(app.theme(), crate::Theme::Default);
+        app.set_theme(crate::Theme::Dos);
+        assert_eq!(app.theme(), crate::Theme::Dos);
+        app.set_theme(crate::Theme::Default);
+        assert_eq!(app.theme(), crate::Theme::Default);
     }
 }

@@ -1003,7 +1003,6 @@ transcripts! {
     // Time Intl (D8/D9) rendering is unit-tested in l123-core/format;
     // exposing D8/D9 via /RF Date Time is a separate menu-wiring task.
     m5_wgdo_intl_undo      => "M5_wgdo_intl_undo.tsv",
-    m5_wgdo_intl_stat      => "M5_wgdo_intl_stat.tsv",
     m6_print_file      => "M6_print_file.tsv",
     m6_print_multi_range => "m6_print_multi_range.tsv",
     m6_print_options_header => "M6_print_options_header.tsv",

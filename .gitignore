@@ -32,3 +32,6 @@ Cargo.lock.bak
 # Worktrees
 worktrees/
 .claude/worktrees/
+
+# Spreadsheet files
+*.xlsx

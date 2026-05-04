@@ -54,6 +54,10 @@ pub struct Config {
     /// invalid input, etc.) is active. Stored as a canonical
     /// `"true"`/`"false"` string — see [`Config::error_beep_enabled`].
     pub error_beep: Setting,
+    /// Chrome theme name — `default` or `dos`. Stored as a string so
+    /// `l123 config` can print whatever the user typed; downstream
+    /// callers go through [`Config::theme`].
+    pub theme: Setting,
     /// Path that was searched for the config file (always reported,
     /// even if the file doesn't exist).
     pub file_path: Option<PathBuf>,
@@ -93,6 +97,11 @@ pub const KEYS: &[KeyInfo] = &[
         key: "error_beep",
         env_var: Some("L123_BEEP"),
         description: "Soft terminal bell on edge collisions (true/false).",
+    },
+    KeyInfo {
+        key: "theme",
+        env_var: Some("L123_THEME"),
+        description: "Chrome theme: default | dos.",
     },
 ];
 
@@ -177,6 +186,7 @@ impl Config {
         let log_file = pick(src, "L123_LOG", file.log_file.as_deref(), "");
         let log_filter = pick(src, "RUST_LOG", file.log_filter.as_deref(), "");
         let error_beep = pick_bool(src, "L123_BEEP", file.error_beep, true);
+        let theme = pick_theme(src, file.theme.as_deref());
 
         Config {
             user,
@@ -184,9 +194,18 @@ impl Config {
             log_file,
             log_filter,
             error_beep,
+            theme,
             file_path,
             file_found,
         }
+    }
+
+    /// Effective theme. Defaults to `Theme::Default` if the stored
+    /// string isn't a known theme name (which can happen if a user
+    /// hand-edits `L123.CNF` with a typo — we don't want to crash the
+    /// app over chrome).
+    pub fn theme(&self) -> crate::Theme {
+        crate::Theme::parse(&self.theme.value).unwrap_or_default()
     }
 
     /// Effective value for `error_beep`. Default is `true` — match the
@@ -241,6 +260,7 @@ impl Config {
             "log_file" => Some(&self.log_file),
             "log_filter" => Some(&self.log_filter),
             "error_beep" => Some(&self.error_beep),
+            "theme" => Some(&self.theme),
             _ => None,
         }
     }
@@ -287,6 +307,32 @@ fn pick_bool(src: &dyn ConfigSource, env_var: &str, file: Option<bool>, default:
     }
     Setting {
         value: canonical_bool(default),
+        source: Source::Default,
+    }
+}
+
+/// Like `pick`, but the value is a chrome theme name. Unrecognized
+/// values from env or file fall through (so a typo in `L123.CNF`
+/// doesn't break the app — it just stays on the previous tier).
+fn pick_theme(src: &dyn ConfigSource, file: Option<&str>) -> Setting {
+    if let Some(raw) = src.var("L123_THEME").filter(|s| !s.is_empty()) {
+        if let Some(t) = crate::Theme::parse(&raw) {
+            return Setting {
+                value: t.name().to_string(),
+                source: Source::Env,
+            };
+        }
+    }
+    if let Some(raw) = file.filter(|s| !s.is_empty()) {
+        if let Some(t) = crate::Theme::parse(raw) {
+            return Setting {
+                value: t.name().to_string(),
+                source: Source::File,
+            };
+        }
+    }
+    Setting {
+        value: crate::Theme::default().name().to_string(),
         source: Source::Default,
     }
 }
@@ -357,6 +403,9 @@ pub struct ConfigFile {
     /// `Some(true|false)` when the user wrote a recognized boolean;
     /// `None` when the key was absent or the value couldn't be parsed.
     pub error_beep: Option<bool>,
+    /// Raw theme name as typed in the file. Validation happens later
+    /// in [`pick_theme`] so an invalid file value can fall through.
+    pub theme: Option<String>,
 }
 
 /// Parse `key = value` lines. Accepts `"..."`, `'...'`, or bare values.
@@ -383,6 +432,7 @@ pub fn parse_config_body(body: &str) -> ConfigFile {
             "log_file" | "log" => out.log_file = Some(value),
             "log_filter" | "rust_log" => out.log_filter = Some(value),
             "error_beep" | "beep" => out.error_beep = parse_bool(&value),
+            "theme" => out.theme = Some(value),
             _ => {}
         }
     }
@@ -419,6 +469,12 @@ pub const SAMPLE_CNF: &str = "\
 # behavior. Accepts true/false, on/off, yes/no, 1/0. Default: true.
 # Env: L123_BEEP. (alias: beep)
 # error_beep = true
+
+# Chrome theme. Recognized names: default, dos. `dos` paints the
+# row-number gutter and column-letter strip black-on-cyan to match
+# the Lotus 1-2-3 R3.4a DOS look; `default` uses the terminal's
+# reversed style. Env: L123_THEME.
+# theme = default
 ";
 
 #[cfg(test)]
@@ -704,5 +760,60 @@ mod tests {
         // so the parsed config should be entirely empty.
         let f = parse_config_body(SAMPLE_CNF);
         assert_eq!(f, ConfigFile::default());
+    }
+
+    #[test]
+    fn theme_defaults_to_default() {
+        let src = MockSource::new();
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme.value, "default");
+        assert_eq!(cfg.theme.source, Source::Default);
+        assert_eq!(cfg.theme(), crate::Theme::Default);
+    }
+
+    #[test]
+    fn theme_from_file() {
+        let src = MockSource::new().with_file("theme = dos\n");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme.value, "dos");
+        assert_eq!(cfg.theme.source, Source::File);
+        assert_eq!(cfg.theme(), crate::Theme::Dos);
+    }
+
+    #[test]
+    fn theme_env_beats_file() {
+        let src = MockSource::new()
+            .with_file("theme = default\n")
+            .with_var("L123_THEME", "dos");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme.value, "dos");
+        assert_eq!(cfg.theme.source, Source::Env);
+    }
+
+    #[test]
+    fn theme_unknown_env_falls_through_to_file() {
+        let src = MockSource::new()
+            .with_file("theme = dos\n")
+            .with_var("L123_THEME", "amber");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme.value, "dos");
+        assert_eq!(cfg.theme.source, Source::File);
+    }
+
+    #[test]
+    fn theme_unknown_file_falls_through_to_default() {
+        let src = MockSource::new().with_file("theme = paper\n");
+        let cfg = Config::resolve_with(&src);
+        assert_eq!(cfg.theme.value, "default");
+        assert_eq!(cfg.theme.source, Source::Default);
+    }
+
+    #[test]
+    fn theme_appears_in_render_table() {
+        let src = MockSource::new().with_var("L123_THEME", "dos");
+        let out = Config::resolve_with(&src).render_table();
+        assert!(out.contains("theme"), "theme row missing: {out}");
+        assert!(out.contains("dos"), "theme value missing: {out}");
+        assert!(out.contains("L123_THEME"), "env name missing: {out}");
     }
 }

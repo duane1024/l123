@@ -9,8 +9,13 @@ use anyhow::Result;
 /// Decoded command-line action.
 #[derive(Debug, PartialEq, Eq)]
 enum Action {
-    /// Run the TUI, optionally opening `path`.
-    Run(Option<PathBuf>),
+    /// Run the TUI, optionally opening `path`. `theme` is `Some` only
+    /// when the user passed `--theme`; otherwise the resolved
+    /// [`l123_ui::Config`] decides.
+    Run {
+        path: Option<PathBuf>,
+        theme: Option<l123_ui::Theme>,
+    },
     /// Print --help to stdout and exit 0.
     Help,
     /// Print --version to stdout and exit 0.
@@ -39,8 +44,10 @@ ARGS:
     <FILE>    Workbook to open (.xlsx, .wk3). If omitted, starts empty.
 
 OPTIONS:
-    -h, --help       Print this help and exit
-    -V, --version    Print version and exit
+    -h, --help            Print this help and exit
+    -V, --version         Print version and exit
+        --theme <NAME>    Chrome theme: default | dos. Overrides
+                          L123_THEME and L123.CNF `theme=`.
 
 SUBCOMMANDS:
     config                 Show effective configuration and sources
@@ -56,6 +63,8 @@ ENVIRONMENT:
                 Defaults to `info` when L123_LOG is set.
     L123_BEEP   Soft terminal bell on edge collisions (true/false).
                 Default: true.
+    L123_THEME  Chrome theme name (default | dos). Overridden by
+                --theme; overrides L123.CNF `theme=`.
 
 CONFIG FILE:
     ~/.l123/L123.CNF    Optional. Run `l123 config --init` to create
@@ -73,7 +82,7 @@ fn main() -> ExitCode {
     let _log_guard = init_tracing();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match parse(&args) {
-        Action::Run(path) => match run(path) {
+        Action::Run { path, theme } => match run(path, theme) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 tracing::error!(error = %e, "l123 run failed");
@@ -156,11 +165,38 @@ fn parse(args: &[OsString]) -> Action {
     }
 
     let mut positional: Option<PathBuf> = None;
-    for arg in args {
+    let mut theme: Option<l123_ui::Theme> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
         let s = arg.to_string_lossy();
         match s.as_ref() {
             "-h" | "--help" => return Action::Help,
             "-V" | "--version" => return Action::Version,
+            "--theme" => {
+                let Some(val) = iter.next() else {
+                    return Action::Usage("l123: --theme requires a value (default | dos)".into());
+                };
+                let raw = val.to_string_lossy();
+                match l123_ui::Theme::parse(&raw) {
+                    Some(t) => theme = Some(t),
+                    None => {
+                        return Action::Usage(format!(
+                            "l123: unknown theme '{raw}' (valid: default, dos)"
+                        ));
+                    }
+                }
+            }
+            flag if flag.starts_with("--theme=") => {
+                let raw = &flag["--theme=".len()..];
+                match l123_ui::Theme::parse(raw) {
+                    Some(t) => theme = Some(t),
+                    None => {
+                        return Action::Usage(format!(
+                            "l123: unknown theme '{raw}' (valid: default, dos)"
+                        ));
+                    }
+                }
+            }
             flag if flag.starts_with('-') && flag != "-" => {
                 return Action::Usage(format!("l123: unknown option '{flag}'"));
             }
@@ -174,7 +210,10 @@ fn parse(args: &[OsString]) -> Action {
             }
         }
     }
-    Action::Run(positional)
+    Action::Run {
+        path: positional,
+        theme,
+    }
 }
 
 fn parse_config_subcommand(args: &[OsString]) -> Action {
@@ -217,8 +256,8 @@ fn parse_config_subcommand(args: &[OsString]) -> Action {
     })
 }
 
-fn run(path: Option<PathBuf>) -> Result<()> {
-    l123_ui::App::run_with_file(path)
+fn run(path: Option<PathBuf>, theme: Option<l123_ui::Theme>) -> Result<()> {
+    l123_ui::App::run_with(path, theme)
 }
 
 /// Install a tracing subscriber that appends to `log_file` from the
@@ -272,14 +311,23 @@ mod tests {
 
     #[test]
     fn no_args_runs_empty() {
-        assert_eq!(parse(&osv(&[])), Action::Run(None));
+        assert_eq!(
+            parse(&osv(&[])),
+            Action::Run {
+                path: None,
+                theme: None
+            }
+        );
     }
 
     #[test]
     fn single_positional_opens_that_file() {
         assert_eq!(
             parse(&osv(&["sheet.xlsx"])),
-            Action::Run(Some(PathBuf::from("sheet.xlsx")))
+            Action::Run {
+                path: Some(PathBuf::from("sheet.xlsx")),
+                theme: None
+            }
         );
     }
 
@@ -385,8 +433,102 @@ mod tests {
     fn file_path_ending_in_config_is_not_subcommand() {
         assert_eq!(
             parse(&osv(&["./config"])),
-            Action::Run(Some(PathBuf::from("./config"))),
+            Action::Run {
+                path: Some(PathBuf::from("./config")),
+                theme: None,
+            },
         );
+    }
+
+    #[test]
+    fn theme_flag_separate_value_parses() {
+        assert_eq!(
+            parse(&osv(&["--theme", "dos"])),
+            Action::Run {
+                path: None,
+                theme: Some(l123_ui::Theme::Dos),
+            },
+        );
+    }
+
+    #[test]
+    fn theme_flag_equals_form_parses() {
+        assert_eq!(
+            parse(&osv(&["--theme=dos"])),
+            Action::Run {
+                path: None,
+                theme: Some(l123_ui::Theme::Dos),
+            },
+        );
+    }
+
+    #[test]
+    fn theme_flag_default_value_parses() {
+        assert_eq!(
+            parse(&osv(&["--theme", "default"])),
+            Action::Run {
+                path: None,
+                theme: Some(l123_ui::Theme::Default),
+            },
+        );
+    }
+
+    #[test]
+    fn theme_flag_with_file_arg() {
+        assert_eq!(
+            parse(&osv(&["--theme", "dos", "sheet.xlsx"])),
+            Action::Run {
+                path: Some(PathBuf::from("sheet.xlsx")),
+                theme: Some(l123_ui::Theme::Dos),
+            },
+        );
+    }
+
+    #[test]
+    fn theme_flag_after_file_arg() {
+        assert_eq!(
+            parse(&osv(&["sheet.xlsx", "--theme=dos"])),
+            Action::Run {
+                path: Some(PathBuf::from("sheet.xlsx")),
+                theme: Some(l123_ui::Theme::Dos),
+            },
+        );
+    }
+
+    #[test]
+    fn theme_flag_missing_value_is_usage_error() {
+        match parse(&osv(&["--theme"])) {
+            Action::Usage(m) => {
+                assert!(m.contains("--theme"), "msg should mention flag: {m}");
+                assert!(
+                    m.contains("default") && m.contains("dos"),
+                    "msg should list valid: {m}"
+                );
+            }
+            other => panic!("expected Usage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn theme_flag_unknown_value_is_usage_error() {
+        match parse(&osv(&["--theme", "amber"])) {
+            Action::Usage(m) => {
+                assert!(m.contains("amber"), "msg should mention bad value: {m}");
+                assert!(
+                    m.contains("default") && m.contains("dos"),
+                    "msg should list valid: {m}"
+                );
+            }
+            other => panic!("expected Usage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn theme_flag_unknown_value_equals_form_is_usage_error() {
+        match parse(&osv(&["--theme=paper"])) {
+            Action::Usage(m) => assert!(m.contains("paper"), "msg should mention bad value: {m}"),
+            other => panic!("expected Usage, got {other:?}"),
+        }
     }
 
     #[test]
