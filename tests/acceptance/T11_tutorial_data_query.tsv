@@ -1,0 +1,198 @@
+# Tutorial Chapter 4, Lesson 14: /Data Query.
+# Mirror the Sloane Camera personnel-query flow: locate every employee
+# who is not currently eligible for profit sharing.
+
+# Wide viewport so column I (the PROFITSHARING field) is fully
+# rendered for ASSERT_CELL — at the default 80×25 only the first
+# ~3 characters of column I fit on-screen, so the assertions on the
+# 13-character "PROFITSHARING" header would clip.
+SIZE 120 25
+#
+# Layout (single-sheet — the tutorial uses worksheet B for the
+# criteria range and worksheet C for the output range to protect the
+# database from accidental overwrites; the L123 query semantics work
+# the same whether the ranges live on the same sheet or different
+# sheets, so this transcript stays single-sheet for tractability):
+#   A3..C3   field names (LASTNAME, LOCATION, PROFITSHARING)
+#   A4..C8   five records
+#   E1..E2   criteria range — single-field PROFITSHARING = No
+#   G1..I5   output range — pre-filled header + room for matches
+#
+# Lessons covered:
+#   - /Data Query Input — POINT for the database, header row included.
+#   - /Data Query Criteria — POINT for the criteria block.
+#   - /Data Query Output — POINT for the destination block.
+#   - /Data Query Find — pointer jumps to the first matching record.
+#   - /Data Query Extract — copies all matching records into the
+#     output range below its header, preserving input order.
+#   - Field-name matching is case-insensitive and positional only by
+#     name (not by column index), so the criteria range can name a
+#     subset of the input fields in any order.
+
+ASSERT_POINTER  A:A1
+
+# --- Database header in row 3.
+F 5
+KEYS A3
+ENTER
+KEYS LASTNAME
+RIGHT
+KEYS LOCATION
+RIGHT
+KEYS PROFITSHARING
+ENTER
+
+# --- Records in rows 4..8.
+F 5
+KEYS A4
+ENTER
+KEYS Edwards
+RIGHT
+KEYS Atlanta
+RIGHT
+KEYS Yes
+ENTER
+
+F 5
+KEYS A5
+ENTER
+KEYS Bird
+RIGHT
+KEYS Boston
+RIGHT
+KEYS No
+ENTER
+
+F 5
+KEYS A6
+ENTER
+KEYS Adamson
+RIGHT
+KEYS Boston
+RIGHT
+KEYS Yes
+ENTER
+
+F 5
+KEYS A7
+ENTER
+KEYS Bjorkman
+RIGHT
+KEYS Chicago
+RIGHT
+KEYS No
+ENTER
+
+F 5
+KEYS A8
+ENTER
+KEYS Percival
+RIGHT
+KEYS Atlanta
+RIGHT
+KEYS No
+ENTER
+
+# --- Criteria range: PROFITSHARING field name in E1, criterion "No"
+# in E2. The tutorial enters the criterion in lowercase to show that
+# field-name matching is case-insensitive.
+F 5
+KEYS E1
+ENTER
+KEYS PROFITSHARING
+ENTER
+F 5
+KEYS E2
+ENTER
+KEYS no
+ENTER
+
+# --- Output header in G1..I1. The tutorial copies the database's
+# field names directly so extracted records line up under matching
+# columns; only fields whose names appear in the output header are
+# copied (Extract skips any input field absent from the output
+# header).
+F 5
+KEYS G1
+ENTER
+KEYS LASTNAME
+RIGHT
+KEYS LOCATION
+RIGHT
+KEYS PROFITSHARING
+ENTER
+
+# --- /Data Query — set Input, Criteria, Output, then Find.
+F 5
+KEYS A1
+ENTER
+
+KEY /
+KEY D
+KEY Q
+ASSERT_MODE     MENU
+
+# Input range A3..C8 — header row + records.
+KEY I
+ASSERT_MODE     POINT
+ASSERT_PANEL_L3 input
+KEYS A3..C8
+ENTER
+ASSERT_MODE     MENU
+
+# Criteria range E1..E2.
+KEY C
+ASSERT_MODE     POINT
+ASSERT_PANEL_L3 criteria
+KEYS E1..E2
+ENTER
+ASSERT_MODE     MENU
+
+# Output range G1..I5 — header row + room for up to four matches.
+KEY O
+ASSERT_MODE     POINT
+ASSERT_PANEL_L3 output
+KEYS G1..I5
+ENTER
+ASSERT_MODE     MENU
+
+# Find — pointer jumps to the first record where PROFITSHARING = No.
+# That's Bird at A5 (Edwards/Atlanta/Yes at row 4 doesn't match).
+KEY F
+ASSERT_MODE     READY
+ASSERT_POINTER  A:A5
+
+# --- Extract — copy all matches into the output range.
+KEY /
+KEY D
+KEY Q
+ASSERT_MODE     MENU
+KEY E
+ASSERT_MODE     READY
+
+# Output header preserved. The 13-character "PROFITSHARING" label
+# overflows column I's 9-char default width, so it's verified via the
+# control-panel readout rather than the rendered cell.
+ASSERT_CELL      A:G1  LASTNAME
+ASSERT_CELL      A:H1  LOCATION
+F 5
+KEYS I1
+ENTER
+ASSERT_PANEL_L1  A:I1: 'PROFITSHARING
+
+# Matches in input order: Bird, Bjorkman, Percival.
+ASSERT_CELL  A:G2  Bird
+ASSERT_CELL  A:H2  Boston
+ASSERT_CELL  A:I2  No
+ASSERT_CELL  A:G3  Bjorkman
+ASSERT_CELL  A:H3  Chicago
+ASSERT_CELL  A:I3  No
+ASSERT_CELL  A:G4  Percival
+ASSERT_CELL  A:H4  Atlanta
+ASSERT_CELL  A:I4  No
+
+# Row 5 in the output range stays blank — only three records matched,
+# so the fourth slot is unused.
+ASSERT_CELL  A:G5
+ASSERT_CELL  A:H5
+ASSERT_CELL  A:I5

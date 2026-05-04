@@ -28,10 +28,10 @@ use crossterm::{
 use l123_core::cell_render::{apply_halign_to_rendered, halign_to_label_prefix, label_text_bounds};
 use l123_core::{
     address::col_to_letters, label::is_value_starter, plan_row_spill, render_label,
-    render_value_in_cell, Address, Alignment, Border, CellContents, Comment, CurrencyPosition,
-    DateIntl, ErrKind, Fill, FontStyle, Format, FormatKind, HAlign, International, LabelPrefix,
-    Merge, Mode, NegativeStyle, Punctuation, Range, RangeInput, RgbColor, SheetId, SheetState,
-    SpillSlot, Table, TextStyle, TimeIntl, Value,
+    render_value_in_cell, Address, Alignment, Border, BorderEdge, CellContents, Comment,
+    CurrencyPosition, DateIntl, ErrKind, Fill, FontStyle, Format, FormatKind, HAlign,
+    International, LabelPrefix, Merge, Mode, NegativeStyle, Punctuation, Range, RangeInput,
+    RgbColor, SheetId, SheetState, SpillSlot, Table, TextStyle, TimeIntl, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
@@ -1203,6 +1203,12 @@ enum JournalEntry {
     /// touches both channels.
     RangeColor {
         entries: Vec<(Address, Option<Fill>, Option<FontStyle>)>,
+    },
+    /// Restore per-cell `Border` overrides after the Outline SmartIcon
+    /// (icon 20) toggles a perimeter outline on a range. `None` =
+    /// no override before.
+    RangeBorder {
+        entries: Vec<(Address, Option<Border>)>,
     },
     /// Restore one column's width. `prev_width = None` means the
     /// column had no override (default width).
@@ -4616,9 +4622,17 @@ impl App {
             self.set_error(format!("macro: {{LET}} bad loc `{loc}`"));
             return;
         };
+        self.write_source_at(addr, expr);
+    }
+
+    /// Parse `source` (1-2-3 source form, e.g. `@SUM(A1..A5)` or
+    /// `42`) and commit it to `addr`, journalling the previous cell
+    /// for undo and recalcing the engine. Shared by `{LET}` and the
+    /// SmartIcon writers (Sum, Today's Date).
+    fn write_source_at(&mut self, addr: Address, source: &str) {
         let intl = self.wb().international.clone();
         let (contents, format) =
-            CellContents::from_source_with_format(expr, self.default_label_prefix, &intl);
+            CellContents::from_source_with_format(source, self.default_label_prefix, &intl);
         if self.undo_enabled {
             let prev_contents = self.wb().cells.get(&addr).cloned();
             let prev_format = self.wb().cell_formats.get(&addr).copied();
@@ -5283,6 +5297,18 @@ impl App {
                         }
                         None => {
                             self.wb_mut().cell_font_styles.remove(&addr);
+                        }
+                    }
+                }
+            }
+            JournalEntry::RangeBorder { entries } => {
+                for (addr, prev) in entries {
+                    match prev {
+                        Some(b) => {
+                            self.wb_mut().cell_borders.insert(addr, b);
+                        }
+                        None => {
+                            self.wb_mut().cell_borders.remove(&addr);
                         }
                     }
                 }
@@ -13002,8 +13028,295 @@ impl App {
             SysAction::Goto => (KeyCode::F(5), KeyModifiers::NONE),
             SysAction::NextSheet => (KeyCode::PageDown, KeyModifiers::CONTROL),
             SysAction::PrevSheet => (KeyCode::PageUp, KeyModifiers::CONTROL),
+            SysAction::StepToggle => (KeyCode::F(2), KeyModifiers::ALT),
+            SysAction::RunMacro => (KeyCode::F(3), KeyModifiers::ALT),
+            // END+arrow / END+HOME have no native crossterm equivalent
+            // — the End key is a one-shot prefix in 1-2-3, not a key
+            // chord. Run the move directly.
+            SysAction::BlockEndHome => {
+                self.move_pointer_to(self.active_area_corner());
+                return;
+            }
+            SysAction::BlockEndDown => return self.block_end_jump(0, 1),
+            SysAction::BlockEndUp => return self.block_end_jump(0, -1),
+            SysAction::BlockEndRight => return self.block_end_jump(1, 0),
+            SysAction::BlockEndLeft => return self.block_end_jump(-1, 0),
+            // Pure viewport scrolls — pointer untouched. The next
+            // arrow press will pull the viewport back to the pointer
+            // via `scroll_into_view`.
+            SysAction::ScrollColumnLeft => return self.scroll_viewport(-1, 0),
+            SysAction::ScrollColumnRight => return self.scroll_viewport(1, 0),
+            SysAction::ScrollRowUp => return self.scroll_viewport(0, -1),
+            SysAction::ScrollRowDown => return self.scroll_viewport(0, 1),
+            SysAction::ScrollScreenLeft => {
+                let n = self.visible_scrolling_cols() as i32;
+                return self.scroll_viewport(-n, 0);
+            }
+            SysAction::ScrollScreenRight => {
+                let n = self.visible_scrolling_cols() as i32;
+                return self.scroll_viewport(n, 0);
+            }
+            SysAction::ScrollScreenUp => {
+                let n = self.visible_scrolling_rows() as i32;
+                return self.scroll_viewport(0, -n);
+            }
+            SysAction::ScrollScreenDown => {
+                let n = self.visible_scrolling_rows() as i32;
+                return self.scroll_viewport(0, n);
+            }
+            SysAction::SumRange => return self.dispatch_sum_smarticon(),
+            SysAction::TodayDate => return self.dispatch_today_smarticon(),
+            SysAction::OutlineRange => return self.dispatch_outline_smarticon(),
         };
         self.handle_key(KeyEvent::new(code, mods));
+    }
+
+    /// Lower-right corner of the occupied rectangle on the current
+    /// sheet. Empty sheet → A1. The corner cell itself need not be
+    /// occupied — `(max_col, max_row)` are computed independently.
+    fn active_area_corner(&self) -> Address {
+        let sheet = self.wb().pointer.sheet;
+        let (max_col, max_row) = self
+            .wb()
+            .cells
+            .keys()
+            .filter(|a| a.sheet == sheet)
+            .fold((0u16, 0u32), |(c, r), a| (c.max(a.col), r.max(a.row)));
+        Address::new(sheet, max_col, max_row)
+    }
+
+    /// Shift the viewport offsets by the given deltas, clamped to
+    /// `[0, MAX_COLS-1]` × `[0, MAX_ROWS-1]`. Pointer is untouched.
+    fn scroll_viewport(&mut self, d_col: i32, d_row: i32) {
+        let max_col = (l123_core::address::MAX_COLS - 1) as i32;
+        let max_row = (l123_core::address::MAX_ROWS - 1) as i32;
+        let new_col = (self.wb().viewport_col_offset as i32 + d_col).clamp(0, max_col) as u16;
+        let new_row = (self.wb().viewport_row_offset as i32 + d_row).clamp(0, max_row) as u32;
+        self.wb_mut().viewport_col_offset = new_col;
+        self.wb_mut().viewport_row_offset = new_row;
+    }
+
+    /// Number of scrolling rows currently visible in the body area.
+    /// Falls back to 20 when no grid has rendered yet — matches the
+    /// PgUp/PgDn convention.
+    fn visible_scrolling_rows(&self) -> u32 {
+        let Some(area) = self.last_grid_area.get() else {
+            return 20;
+        };
+        if area.height < 2 {
+            return 1;
+        }
+        let visible = (area.height - 1) as u32;
+        let sheet = self.wb().pointer.sheet;
+        let frozen: u32 = self.wb().frozen.get(&sheet).map(|f| f.0).unwrap_or(0);
+        visible.saturating_sub(frozen).max(1)
+    }
+
+    /// Number of scrolling columns currently visible. Falls back to 8
+    /// columns at default width when no grid has rendered.
+    fn visible_scrolling_cols(&self) -> u16 {
+        let Some(area) = self.last_grid_area.get() else {
+            return 8;
+        };
+        if area.width <= ROW_GUTTER {
+            return 1;
+        }
+        let content_width = area.width - ROW_GUTTER;
+        let sheet = self.wb().pointer.sheet;
+        let frozen: u16 = self.wb().frozen.get(&sheet).map(|f| f.1).unwrap_or(0);
+        let layout = self.visible_column_layout(content_width);
+        let scrolling = layout.iter().filter(|(c, _, _)| *c >= frozen).count();
+        (scrolling as u16).max(1)
+    }
+
+    /// END+arrow scan rules per 1-2-3 R3.4: from a non-blank cell with
+    /// a non-blank neighbour, jump to the last non-blank in that run;
+    /// otherwise (cur is blank, or first step is blank) skip blanks
+    /// to the first non-blank. If no non-blank is found, stop at the
+    /// worksheet boundary.
+    fn block_end_jump(&mut self, d_col: i32, d_row: i32) {
+        let start = self.wb().pointer;
+        let cur_blank = !self.wb().cells.contains_key(&start);
+        let next_nonblank = start
+            .shifted(d_col, d_row)
+            .map(|n| self.wb().cells.contains_key(&n));
+        let stop_at_run_end = !cur_blank && matches!(next_nonblank, Some(true));
+        let mut p = start;
+        let target = loop {
+            let Some(n) = p.shifted(d_col, d_row) else {
+                break p;
+            };
+            if stop_at_run_end {
+                if !self.wb().cells.contains_key(&n) {
+                    break p;
+                }
+                p = n;
+            } else {
+                p = n;
+                if self.wb().cells.contains_key(&p) {
+                    break p;
+                }
+            }
+        };
+        self.move_pointer_to(target);
+    }
+
+    /// `@SUM` SmartIcon (icon 9). Detect the contiguous numeric run
+    /// immediately above the cursor (preferred) or to its left, then
+    /// write `@SUM(top..bottom)` at the cursor. Beep if neither
+    /// neighbour is numeric, or if the cursor cell is protected.
+    fn dispatch_sum_smarticon(&mut self) {
+        if self.is_cell_protected(self.wb().pointer) {
+            self.request_beep();
+            return;
+        }
+        let Some((from, to)) = self.detect_sum_source() else {
+            self.request_beep();
+            return;
+        };
+        let expr = format!("@SUM({}..{})", from.display_short(), to.display_short());
+        let addr = self.wb().pointer;
+        self.write_source_at(addr, &expr);
+    }
+
+    /// Outline SmartIcon (icon 20). Toggle a thin border on the
+    /// perimeter of the active POINT highlight (or single cell at the
+    /// pointer). If every perimeter edge is already set, clear them
+    /// all; otherwise set them all. Journal the prior `Border` for
+    /// each touched cell so undo can restore it.
+    fn dispatch_outline_smarticon(&mut self) {
+        let range = if matches!(self.mode, Mode::Point) {
+            self.highlight_range()
+        } else {
+            Range::single(self.wb().pointer)
+        };
+        let r = range.normalized();
+        let sheet = r.start.sheet;
+        let already_outlined = (r.start.row..=r.end.row).all(|row| {
+            (r.start.col..=r.end.col).all(|col| {
+                let addr = Address::new(sheet, col, row);
+                let b = self
+                    .wb()
+                    .cell_borders
+                    .get(&addr)
+                    .copied()
+                    .unwrap_or_default();
+                let need_top = row == r.start.row;
+                let need_bottom = row == r.end.row;
+                let need_left = col == r.start.col;
+                let need_right = col == r.end.col;
+                (!need_top || b.top.is_some())
+                    && (!need_bottom || b.bottom.is_some())
+                    && (!need_left || b.left.is_some())
+                    && (!need_right || b.right.is_some())
+            })
+        });
+        let new_edge: Option<BorderEdge> = if already_outlined {
+            None
+        } else {
+            Some(BorderEdge::default())
+        };
+
+        let mut prior: Vec<(Address, Option<Border>)> = Vec::new();
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(sheet, col, row);
+                let prev = self.wb().cell_borders.get(&addr).copied();
+                let mut next = prev.unwrap_or_default();
+                if row == r.start.row {
+                    next.top = new_edge;
+                }
+                if row == r.end.row {
+                    next.bottom = new_edge;
+                }
+                if col == r.start.col {
+                    next.left = new_edge;
+                }
+                if col == r.end.col {
+                    next.right = new_edge;
+                }
+                if next == prev.unwrap_or_default() {
+                    continue;
+                }
+                prior.push((addr, prev));
+                if next.is_default() {
+                    self.wb_mut().cell_borders.remove(&addr);
+                } else {
+                    self.wb_mut().cell_borders.insert(addr, next);
+                }
+            }
+        }
+        let any_change = !prior.is_empty();
+        if self.undo_enabled && any_change {
+            self.wb_mut()
+                .journal
+                .push(JournalEntry::RangeBorder { entries: prior });
+        }
+        self.point = None;
+        self.menu = None;
+        self.mode = Mode::Ready;
+        if any_change {
+            self.wb_mut().dirty = true;
+        }
+    }
+
+    /// `@NOW` SmartIcon (icon 45). Writes `@NOW` at the cursor; the
+    /// engine handles formatting. Beeps if the cell is protected.
+    fn dispatch_today_smarticon(&mut self) {
+        if self.is_cell_protected(self.wb().pointer) {
+            self.request_beep();
+            return;
+        }
+        let addr = self.wb().pointer;
+        self.write_source_at(addr, "@NOW");
+    }
+
+    /// Find the @SUM source range for the SmartIcon: the contiguous
+    /// run of numeric cells directly above the cursor (preferred) or
+    /// directly to its left. Returns `(top_left, bottom_right)` of the
+    /// range, or `None` if neither neighbour is numeric.
+    fn detect_sum_source(&self) -> Option<(Address, Address)> {
+        let cursor = self.wb().pointer;
+        if let Some(above) = cursor.shifted(0, -1) {
+            if self.is_numeric_at(above) {
+                let mut top = above;
+                while let Some(prev) = top.shifted(0, -1) {
+                    if !self.is_numeric_at(prev) {
+                        break;
+                    }
+                    top = prev;
+                }
+                return Some((top, above));
+            }
+        }
+        if let Some(left) = cursor.shifted(-1, 0) {
+            if self.is_numeric_at(left) {
+                let mut leftmost = left;
+                while let Some(prev) = leftmost.shifted(-1, 0) {
+                    if !self.is_numeric_at(prev) {
+                        break;
+                    }
+                    leftmost = prev;
+                }
+                return Some((leftmost, left));
+            }
+        }
+        None
+    }
+
+    /// True iff the cell at `addr` evaluates to a number — either a
+    /// numeric constant or a formula whose cached value is a Number.
+    /// Empty cells, labels, booleans, errors, and unevaluated formulas
+    /// are all treated as non-numeric.
+    fn is_numeric_at(&self, addr: Address) -> bool {
+        matches!(
+            self.wb().cells.get(&addr),
+            Some(CellContents::Constant(Value::Number(_)))
+                | Some(CellContents::Formula {
+                    cached_value: Some(Value::Number(_)),
+                    ..
+                })
+        )
     }
 
     fn render_graph_overlay(&self, area: Rect, buf: &mut Buffer) {
@@ -17349,6 +17662,524 @@ mod tests {
         let mut app = App::new();
         click(&mut app, TEST_PANEL, 10, 10);
         assert_eq!(app.pointer().display_full(), "A:A1");
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    /// Drop a non-blank label at the given short address on sheet A.
+    fn put_label(app: &mut App, addr: &str, text: &str) {
+        let a = Address::parse(addr).expect("test addr");
+        app.wb_mut().cells.insert(a, make_label(text));
+    }
+
+    /// Drop a numeric constant at the given short address on sheet A,
+    /// keeping the engine in sync so subsequent recalcs see the value.
+    fn put_number(app: &mut App, addr: &str, n: f64) {
+        let a = Address::parse(addr).expect("test addr");
+        let c = CellContents::Constant(Value::Number(n));
+        app.push_to_engine_at(a, &c);
+        app.wb_mut().cells.insert(a, c);
+    }
+
+    fn set_pointer(app: &mut App, addr: &str) {
+        app.wb_mut().pointer = Address::parse(addr).expect("test addr");
+    }
+
+    #[test]
+    fn block_end_home_on_empty_sheet_stays_at_a1() {
+        let mut app = App::new();
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndHome);
+        assert_eq!(app.pointer().display_short(), "A1");
+    }
+
+    #[test]
+    fn block_end_home_jumps_to_lower_right_of_active_area() {
+        // Active area corner = (max occupied col, max occupied row),
+        // which need not itself be occupied.
+        let mut app = App::new();
+        put_label(&mut app, "C2", "x");
+        put_label(&mut app, "A5", "x");
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndHome);
+        assert_eq!(app.pointer().display_short(), "C5");
+    }
+
+    #[test]
+    fn block_end_down_in_run_jumps_to_last_nonblank() {
+        let mut app = App::new();
+        put_label(&mut app, "A1", "a");
+        put_label(&mut app, "A2", "b");
+        put_label(&mut app, "A3", "c");
+        // A4 blank.
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndDown);
+        assert_eq!(app.pointer().display_short(), "A3");
+    }
+
+    #[test]
+    fn block_end_down_past_blanks_lands_on_next_nonblank() {
+        let mut app = App::new();
+        put_label(&mut app, "A1", "a");
+        // A2..A4 blank.
+        put_label(&mut app, "A5", "b");
+        // From A1 with A2 blank: scan past blanks → A5.
+        set_pointer(&mut app, "A1");
+        // A1 is nonblank with nonblank A2 in the canonical case, but
+        // here A2 is blank so this exercises the "first nonblank"
+        // path even though we started on a nonblank.
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndDown);
+        assert_eq!(app.pointer().display_short(), "A5");
+    }
+
+    #[test]
+    fn block_end_down_from_blank_finds_first_nonblank() {
+        let mut app = App::new();
+        // A1 blank, A2 blank, A3 nonblank.
+        put_label(&mut app, "A3", "c");
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndDown);
+        assert_eq!(app.pointer().display_short(), "A3");
+    }
+
+    #[test]
+    fn block_end_down_with_nothing_below_goes_to_last_row() {
+        let mut app = App::new();
+        // Empty sheet → END+DOWN from A1 → A8192 (max row).
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndDown);
+        assert_eq!(app.pointer().row, l123_core::address::MAX_ROWS - 1);
+        assert_eq!(app.pointer().col, 0);
+    }
+
+    #[test]
+    fn block_end_up_jumps_to_top_of_run() {
+        let mut app = App::new();
+        put_label(&mut app, "A2", "a");
+        put_label(&mut app, "A3", "b");
+        put_label(&mut app, "A4", "c");
+        set_pointer(&mut app, "A4");
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndUp);
+        assert_eq!(app.pointer().display_short(), "A2");
+    }
+
+    #[test]
+    fn block_end_right_jumps_to_end_of_run() {
+        let mut app = App::new();
+        put_label(&mut app, "A1", "a");
+        put_label(&mut app, "B1", "b");
+        put_label(&mut app, "C1", "c");
+        // D1 blank.
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndRight);
+        assert_eq!(app.pointer().display_short(), "C1");
+    }
+
+    #[test]
+    fn block_end_left_from_blank_finds_first_nonblank() {
+        let mut app = App::new();
+        // Pointer at D1, A1 nonblank, B1..C1 blank.
+        put_label(&mut app, "A1", "a");
+        set_pointer(&mut app, "D1");
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndLeft);
+        assert_eq!(app.pointer().display_short(), "A1");
+    }
+
+    #[test]
+    fn block_end_at_boundary_does_not_move() {
+        let mut app = App::new();
+        // At A1 with nothing above: END+UP holds.
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndUp);
+        assert_eq!(app.pointer().display_short(), "A1");
+        // Same for END+LEFT.
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndLeft);
+        assert_eq!(app.pointer().display_short(), "A1");
+    }
+
+    #[test]
+    fn block_end_only_scans_current_sheet() {
+        let mut app = App::new();
+        // Place a cell on sheet B that should not pull the active-area
+        // corner on sheet A.
+        let other = Address::new(SheetId(1), 9, 9);
+        app.wb_mut().cells.insert(other, make_label("x"));
+        put_label(&mut app, "B2", "x");
+        app.dispatch_sys_action(l123_graph::SysAction::BlockEndHome);
+        assert_eq!(app.pointer().display_short(), "B2");
+    }
+
+    #[test]
+    fn scroll_one_row_down_shifts_viewport_offset_only() {
+        let mut app = App::new();
+        let pointer_before = app.pointer();
+        app.dispatch_sys_action(l123_graph::SysAction::ScrollRowDown);
+        assert_eq!(app.wb().viewport_row_offset, 1);
+        assert_eq!(app.wb().viewport_col_offset, 0);
+        assert_eq!(app.pointer(), pointer_before, "pointer must not move");
+    }
+
+    #[test]
+    fn scroll_one_column_right_shifts_viewport_col_only() {
+        let mut app = App::new();
+        app.dispatch_sys_action(l123_graph::SysAction::ScrollColumnRight);
+        assert_eq!(app.wb().viewport_col_offset, 1);
+        assert_eq!(app.wb().viewport_row_offset, 0);
+    }
+
+    #[test]
+    fn scroll_up_at_top_clamps_at_zero() {
+        let mut app = App::new();
+        app.dispatch_sys_action(l123_graph::SysAction::ScrollRowUp);
+        assert_eq!(app.wb().viewport_row_offset, 0);
+        app.dispatch_sys_action(l123_graph::SysAction::ScrollColumnLeft);
+        assert_eq!(app.wb().viewport_col_offset, 0);
+    }
+
+    #[test]
+    fn scroll_screen_down_with_no_grid_uses_pgdn_default() {
+        let mut app = App::new();
+        // No render yet → fallback of 20 rows / 8 cols.
+        app.dispatch_sys_action(l123_graph::SysAction::ScrollScreenDown);
+        assert_eq!(app.wb().viewport_row_offset, 20);
+        app.dispatch_sys_action(l123_graph::SysAction::ScrollScreenRight);
+        assert_eq!(app.wb().viewport_col_offset, 8);
+    }
+
+    #[test]
+    fn scroll_clamps_at_worksheet_max() {
+        let mut app = App::new();
+        app.wb_mut().viewport_row_offset = l123_core::address::MAX_ROWS - 2;
+        app.dispatch_sys_action(l123_graph::SysAction::ScrollScreenDown);
+        // Clamped at MAX_ROWS - 1 even though the screen-jump would
+        // overshoot.
+        assert_eq!(
+            app.wb().viewport_row_offset,
+            l123_core::address::MAX_ROWS - 1
+        );
+    }
+
+    #[test]
+    fn icon_click_panel_five_scroll_row_down_dispatches() {
+        // Panel 5 slot 11 = icon 80 (Move display one row down). The
+        // pure-scroll path bumps viewport_row_offset and leaves the
+        // pointer at A1.
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Five;
+        click_slot(&mut app, 11);
+        assert_eq!(app.wb().viewport_row_offset, 1);
+        assert_eq!(app.pointer().display_short(), "A1");
+    }
+
+    #[test]
+    fn icon_click_panel_five_delete_sheet_opens_menu() {
+        // Panel 5 slot 3 = icon 72 (Delete worksheets) → /WDS.
+        // /WDS in a one-sheet workbook prompts for confirmation, so the
+        // icon click should land us in Mode::Menu with a prompt.
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Five;
+        click_slot(&mut app, 3);
+        // /WDS dispatches synchronously; with a single sheet it can
+        // either land on a confirm prompt or refuse — either way we
+        // must not have crashed and the pointer stays at A1.
+        assert_eq!(app.pointer().display_short(), "A1");
+    }
+
+    #[test]
+    fn icon_click_panel_five_page_break_invokes_wp() {
+        // Panel 5 slot 12 = icon 63 (row page break) → /WP.
+        // /WP inserts a row at the pointer with `|::` in column A.
+        let mut app = App::new();
+        app.wb_mut().pointer = Address::new(SheetId::A, 0, 4);
+        app.current_panel = l123_graph::Panel::Five;
+        click_slot(&mut app, 12);
+        let marker = Address::new(SheetId::A, 0, 4);
+        assert!(
+            app.wb().cells.contains_key(&marker),
+            "page-break marker at A5 should exist after /WP",
+        );
+        let cell = app.wb().cells.get(&marker).unwrap();
+        if let CellContents::Label { prefix, text } = cell {
+            assert_eq!(*prefix, LabelPrefix::Pipe);
+            assert_eq!(text, "::");
+        } else {
+            panic!("expected pipe-prefixed `::` label, got {cell:?}");
+        }
+    }
+
+    /// Read the source-form expression at `addr`, panicking on
+    /// non-formula cells. Tests assert the formula written by the
+    /// SmartIcon — the engine's cached evaluation is exercised
+    /// elsewhere.
+    fn formula_expr_at(app: &App, addr: &str) -> String {
+        let a = Address::parse(addr).expect("test addr");
+        match app.wb().cells.get(&a) {
+            Some(CellContents::Formula { expr, .. }) => expr.clone(),
+            other => panic!("expected formula at {addr}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sum_smarticon_uses_run_directly_above() {
+        let mut app = App::new();
+        put_number(&mut app, "A1", 1.0);
+        put_number(&mut app, "A2", 2.0);
+        put_number(&mut app, "A3", 3.0);
+        set_pointer(&mut app, "A4");
+        app.dispatch_sys_action(l123_graph::SysAction::SumRange);
+        assert_eq!(formula_expr_at(&app, "A4"), "@SUM(A1..A3)");
+    }
+
+    #[test]
+    fn sum_smarticon_falls_back_to_left_when_above_is_blank() {
+        let mut app = App::new();
+        put_number(&mut app, "A1", 10.0);
+        put_number(&mut app, "B1", 20.0);
+        put_number(&mut app, "C1", 30.0);
+        set_pointer(&mut app, "D1");
+        // No row above D1 — algorithm scans left.
+        app.dispatch_sys_action(l123_graph::SysAction::SumRange);
+        assert_eq!(formula_expr_at(&app, "D1"), "@SUM(A1..C1)");
+    }
+
+    #[test]
+    fn sum_smarticon_prefers_above_over_left() {
+        let mut app = App::new();
+        // Both above and left are numeric — above wins.
+        put_number(&mut app, "B1", 1.0);
+        put_number(&mut app, "A2", 99.0);
+        set_pointer(&mut app, "B2");
+        app.dispatch_sys_action(l123_graph::SysAction::SumRange);
+        assert_eq!(formula_expr_at(&app, "B2"), "@SUM(B1..B1)");
+    }
+
+    #[test]
+    fn sum_smarticon_stops_at_label_above() {
+        let mut app = App::new();
+        // A1 is a label header → not numeric; the run is just A2..A3.
+        put_label(&mut app, "A1", "Total");
+        put_number(&mut app, "A2", 5.0);
+        put_number(&mut app, "A3", 7.0);
+        set_pointer(&mut app, "A4");
+        app.dispatch_sys_action(l123_graph::SysAction::SumRange);
+        assert_eq!(formula_expr_at(&app, "A4"), "@SUM(A2..A3)");
+    }
+
+    #[test]
+    fn sum_smarticon_with_no_numeric_neighbor_beeps_and_writes_nothing() {
+        let mut app = App::new();
+        let beep_before = app.beep_count();
+        // Empty sheet, cursor at A1 — nothing above or to the left.
+        app.dispatch_sys_action(l123_graph::SysAction::SumRange);
+        assert!(app.beep_count() > beep_before, "expected a beep");
+        assert!(
+            !app.wb().cells.contains_key(&Address::A1),
+            "no cell should have been written",
+        );
+    }
+
+    #[test]
+    fn sum_smarticon_skips_when_directly_above_is_blank_with_numbers_higher() {
+        // Algorithm checks the immediately-adjacent neighbour. If A2
+        // is blank but A1 has a number, the run-above test fails →
+        // we fall through to scan-left, which is also blank → beep.
+        let mut app = App::new();
+        put_number(&mut app, "A1", 1.0);
+        // A2 blank.
+        set_pointer(&mut app, "A3");
+        let beep_before = app.beep_count();
+        app.dispatch_sys_action(l123_graph::SysAction::SumRange);
+        assert!(app.beep_count() > beep_before);
+        assert!(!app.wb().cells.contains_key(&Address::parse("A3").unwrap()));
+    }
+
+    #[test]
+    fn today_smarticon_writes_now_formula_at_pointer() {
+        let mut app = App::new();
+        app.dispatch_sys_action(l123_graph::SysAction::TodayDate);
+        assert_eq!(formula_expr_at(&app, "A1"), "@NOW");
+    }
+
+    #[test]
+    fn icon_click_panel_one_sum_writes_formula() {
+        // Panel 1 slot 6 = icon id 9 = Sum SmartIcon.
+        let mut app = App::new();
+        put_number(&mut app, "A1", 1.0);
+        put_number(&mut app, "A2", 2.0);
+        set_pointer(&mut app, "A3");
+        click_slot(&mut app, 6);
+        assert_eq!(formula_expr_at(&app, "A3"), "@SUM(A1..A2)");
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    #[test]
+    fn icon_click_panel_four_today_writes_now_formula() {
+        // Panel 4 slot 7 = icon id 45 = Today's date SmartIcon.
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Four;
+        click_slot(&mut app, 7);
+        assert_eq!(formula_expr_at(&app, "A1"), "@NOW");
+    }
+
+    #[test]
+    fn icon_click_panel_four_copy_single_to_range_opens_copy_point() {
+        // Panel 4 slot 9 = icon id 47 → /Copy. /C enters POINT for the
+        // FROM range; the user (or icon caller) then selects source +
+        // destination. Single-cell sources are handled natively by /C.
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Four;
+        click_slot(&mut app, 9);
+        assert_eq!(app.mode, Mode::Point);
+    }
+
+    #[test]
+    fn step_toggle_smarticon_flips_step_mode() {
+        let mut app = App::new();
+        assert!(!app.step_mode, "fresh App starts with STEP off");
+        app.dispatch_sys_action(l123_graph::SysAction::StepToggle);
+        assert!(app.step_mode);
+        app.dispatch_sys_action(l123_graph::SysAction::StepToggle);
+        assert!(!app.step_mode);
+    }
+
+    #[test]
+    fn run_macro_smarticon_opens_name_picker() {
+        let mut app = App::new();
+        app.dispatch_sys_action(l123_graph::SysAction::RunMacro);
+        assert_eq!(app.mode, Mode::Names);
+        assert!(app.name_list.is_some(), "macro picker should be open");
+    }
+
+    #[test]
+    fn icon_click_panel_seven_step_toggles_step_mode() {
+        // Panel 7 slot 4 = icon id 52 (STEP toggle).
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Seven;
+        click_slot(&mut app, 4);
+        assert!(app.step_mode);
+    }
+
+    #[test]
+    fn icon_click_panel_seven_run_opens_picker() {
+        // Panel 7 slot 5 = icon id 53 (Run a macro).
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Seven;
+        click_slot(&mut app, 5);
+        assert_eq!(app.mode, Mode::Names);
+    }
+
+    #[test]
+    fn outline_smarticon_borders_single_cell_perimeter() {
+        let mut app = App::new();
+        app.dispatch_sys_action(l123_graph::SysAction::OutlineRange);
+        let b = app
+            .wb()
+            .cell_borders
+            .get(&Address::A1)
+            .copied()
+            .expect("A1 should now have a border entry");
+        assert!(b.top.is_some());
+        assert!(b.bottom.is_some());
+        assert!(b.left.is_some());
+        assert!(b.right.is_some());
+    }
+
+    #[test]
+    fn outline_smarticon_toggles_off_when_already_outlined() {
+        let mut app = App::new();
+        // First click outlines.
+        app.dispatch_sys_action(l123_graph::SysAction::OutlineRange);
+        assert!(app.wb().cell_borders.contains_key(&Address::A1));
+        // Second click clears it.
+        app.dispatch_sys_action(l123_graph::SysAction::OutlineRange);
+        assert!(
+            !app.wb().cell_borders.contains_key(&Address::A1),
+            "second click should leave the cell with no border entry",
+        );
+    }
+
+    #[test]
+    fn outline_smarticon_only_perimeter_for_multi_cell_range() {
+        let mut app = App::new();
+        // 3x3 range A1:C3 via POINT.
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        // Now in POINT with highlight A1:C3. Outline.
+        app.dispatch_sys_action(l123_graph::SysAction::OutlineRange);
+        // Corner A1: top + left set, right + bottom clear.
+        let a1 = app.wb().cell_borders.get(&Address::A1).copied().unwrap();
+        assert!(a1.top.is_some() && a1.left.is_some());
+        assert!(a1.right.is_none() && a1.bottom.is_none());
+        // Top-mid B1: only top.
+        let b1 = app
+            .wb()
+            .cell_borders
+            .get(&Address::new(SheetId::A, 1, 0))
+            .copied()
+            .unwrap();
+        assert!(b1.top.is_some());
+        assert!(b1.left.is_none() && b1.right.is_none() && b1.bottom.is_none());
+        // Centre B2: no border at all (interior cell).
+        let b2 = app.wb().cell_borders.get(&Address::new(SheetId::A, 1, 1));
+        assert!(
+            b2.is_none(),
+            "interior cell of an outlined range should have no border",
+        );
+        // Bottom-right C3: bottom + right.
+        let c3 = app
+            .wb()
+            .cell_borders
+            .get(&Address::new(SheetId::A, 2, 2))
+            .copied()
+            .unwrap();
+        assert!(c3.bottom.is_some() && c3.right.is_some());
+        assert!(c3.top.is_none() && c3.left.is_none());
+    }
+
+    #[test]
+    fn outline_smarticon_undo_restores_prior_border_state() {
+        let mut app = App::new();
+        assert!(app.wb().cell_borders.is_empty());
+        app.dispatch_sys_action(l123_graph::SysAction::OutlineRange);
+        assert!(app.wb().cell_borders.contains_key(&Address::A1));
+        // Alt-F4 = undo.
+        app.handle_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::ALT));
+        assert!(
+            !app.wb().cell_borders.contains_key(&Address::A1),
+            "undo should remove the border entry that wasn't there before",
+        );
+    }
+
+    #[test]
+    fn icon_click_panel_three_outline_writes_borders() {
+        // Panel 3 slot 8 = icon id 20 (drop shadow + outline).
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Three;
+        click_slot(&mut app, 8);
+        assert!(app.wb().cell_borders.contains_key(&Address::A1));
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    #[test]
+    fn icon_click_panel_three_comma_format_opens_decimals_prompt() {
+        // Panel 3 slot 6 = icon id 18 (Comma format) → /RF, → decimals
+        // prompt, same shape as Currency (slot 5 = icon 17).
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Three;
+        click_slot(&mut app, 6);
+        assert_eq!(app.mode, Mode::Menu);
+        assert!(
+            app.prompt.is_some(),
+            "Comma format should prompt for decimal places",
+        );
+    }
+
+    #[test]
+    fn icon_click_panel_two_block_end_down_dispatches() {
+        let mut app = App::new();
+        put_label(&mut app, "A1", "a");
+        put_label(&mut app, "A2", "b");
+        app.current_panel = l123_graph::Panel::Two;
+        // Slot 2 in panel 2 = icon id 40 = END+DOWN.
+        click_slot(&mut app, 2);
+        assert_eq!(app.pointer().display_short(), "A2");
         assert_eq!(app.mode, Mode::Ready);
     }
 

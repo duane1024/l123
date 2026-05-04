@@ -148,6 +148,53 @@ pub enum SysAction {
     NextSheet,
     /// Ctrl-PgUp — previous worksheet.
     PrevSheet,
+    /// END+HOME — lower-right corner of the active area on the
+    /// current sheet (max occupied col × max occupied row).
+    BlockEndHome,
+    /// END+DOWN — first blank↔nonblank transition below the cursor.
+    BlockEndDown,
+    /// END+UP — first blank↔nonblank transition above the cursor.
+    BlockEndUp,
+    /// END+RIGHT — first blank↔nonblank transition right of the cursor.
+    BlockEndRight,
+    /// END+LEFT — first blank↔nonblank transition left of the cursor.
+    BlockEndLeft,
+    /// Scroll the viewport one screen left without moving the cell
+    /// pointer. "One screen" is the count of scrolling columns
+    /// currently in view.
+    ScrollScreenLeft,
+    /// Scroll the viewport one screen right.
+    ScrollScreenRight,
+    /// Scroll the viewport one screen up. Falls back to 20 rows when
+    /// no grid has rendered yet (matches the PgUp convention).
+    ScrollScreenUp,
+    /// Scroll the viewport one screen down.
+    ScrollScreenDown,
+    /// Scroll the viewport one column left.
+    ScrollColumnLeft,
+    /// Scroll the viewport one column right.
+    ScrollColumnRight,
+    /// Scroll the viewport one row up.
+    ScrollRowUp,
+    /// Scroll the viewport one row down.
+    ScrollRowDown,
+    /// Insert `@SUM(<auto-detected range>)` at the cursor. The range
+    /// is the contiguous run of numeric cells immediately above the
+    /// cursor, falling back to the run immediately to its left. No-op
+    /// (with a beep) if neither is numeric.
+    SumRange,
+    /// Insert `@NOW` at the cursor.
+    TodayDate,
+    /// Alt-F2 — toggle macro STEP mode (single-step execution).
+    StepToggle,
+    /// Alt-F3 — open the named-range picker filtered for macro names
+    /// so the user can pick one to run.
+    RunMacro,
+    /// Toggle a thin outline (border) around the perimeter of the
+    /// active POINT highlight, or the single cell at the pointer.
+    /// 1-2-3's icon also draws a "drop shadow" — we drop that flourish
+    /// since it doesn't carry through a TUI.
+    OutlineRange,
 }
 
 /// Return the action a click on the given icon ID should fire.
@@ -177,7 +224,9 @@ pub fn icon_action(id: u8) -> IconAction {
             bits: TextStyle::UNDERLINE,
         },
         17 => MenuPath("RFC"), // Currency
+        18 => MenuPath("RF,"), // Comma
         19 => MenuPath("RFP"), // Percent
+        20 => SysKey(OutlineRange),
         26 => MenuPath("C"),   // Copy
         27 => MenuPath("M"),   // Move
         28 => MenuPath("RLL"), // Label Left
@@ -188,18 +237,38 @@ pub fn icon_action(id: u8) -> IconAction {
         35 => MenuPath("WIC"), // Insert column
         36 => MenuPath("WDR"), // Delete row
         37 => MenuPath("WDC"), // Delete column
+        9 => SysKey(SumRange),
         38 => SysKey(Home),
+        39 => SysKey(BlockEndHome),
+        40 => SysKey(BlockEndDown),
+        41 => SysKey(BlockEndUp),
+        42 => SysKey(BlockEndRight),
+        43 => SysKey(BlockEndLeft),
         44 => SysKey(Recalc),
+        45 => SysKey(TodayDate),
+        47 => MenuPath("C"), // Copy single cell across highlighted range
         49 => SysKey(Goto),
         50 => MenuPath("RS"), // Range Search
         51 => MenuPath("DF"), // Data Fill
+        52 => SysKey(StepToggle),
+        53 => SysKey(RunMacro),
         58 => SysKey(GraphView),
         61 => SysKey(Edit),
         66 => MenuPath("FN"),  // File New
         67 => MenuPath("FOA"), // File Open After
+        63 => MenuPath("WP"),  // Insert page break at pointer (row)
         69 => SysKey(NextSheet),
         70 => SysKey(PrevSheet),
         71 => MenuPath("WISA"), // Worksheet Insert Sheet After
+        72 => MenuPath("WDS"),  // Worksheet Delete Sheet
+        73 => SysKey(ScrollScreenLeft),
+        74 => SysKey(ScrollScreenRight),
+        75 => SysKey(ScrollScreenUp),
+        76 => SysKey(ScrollScreenDown),
+        77 => SysKey(ScrollColumnLeft),
+        78 => SysKey(ScrollColumnRight),
+        79 => SysKey(ScrollRowUp),
+        80 => SysKey(ScrollRowDown),
         // Everything else: Noop until the underlying feature lands.
         _ => Noop,
     }
@@ -552,6 +621,65 @@ mod tests {
         assert_eq!(icon_action(4), IconAction::Noop); // help
         assert_eq!(icon_action(16), IconAction::Noop); // double-underline (wysiwyg)
         assert_eq!(icon_action(93), IconAction::Noop);
+    }
+
+    #[test]
+    fn icon_action_wires_panel5_structure_and_scroll() {
+        use SysAction::*;
+        // Structure: page break at pointer (row), delete sheet.
+        assert_eq!(icon_action(63), IconAction::MenuPath("WP"));
+        assert_eq!(icon_action(72), IconAction::MenuPath("WDS"));
+        // Scroll: 4 screen-sized + 4 single-cell directions.
+        assert_eq!(icon_action(73), IconAction::SysKey(ScrollScreenLeft));
+        assert_eq!(icon_action(74), IconAction::SysKey(ScrollScreenRight));
+        assert_eq!(icon_action(75), IconAction::SysKey(ScrollScreenUp));
+        assert_eq!(icon_action(76), IconAction::SysKey(ScrollScreenDown));
+        assert_eq!(icon_action(77), IconAction::SysKey(ScrollColumnLeft));
+        assert_eq!(icon_action(78), IconAction::SysKey(ScrollColumnRight));
+        assert_eq!(icon_action(79), IconAction::SysKey(ScrollRowUp));
+        assert_eq!(icon_action(80), IconAction::SysKey(ScrollRowDown));
+    }
+
+    #[test]
+    fn icon_action_wires_data_and_formula_smarticons() {
+        use SysAction::*;
+        assert_eq!(icon_action(9), IconAction::SysKey(SumRange));
+        assert_eq!(icon_action(45), IconAction::SysKey(TodayDate));
+        // 47 (copy single cell across range) just opens /Copy — same
+        // shape as 26, since /C handles the single-source case
+        // natively.
+        assert_eq!(icon_action(47), IconAction::MenuPath("C"));
+    }
+
+    #[test]
+    fn icon_action_wires_panel3_format_extras() {
+        use SysAction::*;
+        // Comma is just another menu accelerator under /Range Format.
+        assert_eq!(icon_action(18), IconAction::MenuPath("RF,"));
+        // Outline is a SmartIcon — no menu equivalent in the project.
+        assert_eq!(icon_action(20), IconAction::SysKey(OutlineRange));
+    }
+
+    #[test]
+    fn icon_action_wires_panel7_macro_smarticons() {
+        use SysAction::*;
+        // Macro STEP toggle and the macro picker — Panel 7 slots 4
+        // and 5 in catalog terms.
+        assert_eq!(icon_action(52), IconAction::SysKey(StepToggle));
+        assert_eq!(icon_action(53), IconAction::SysKey(RunMacro));
+    }
+
+    #[test]
+    fn icon_action_wires_block_end_navigation() {
+        // Panel 2 slots 1..5 — END+HOME and END+arrow group.
+        assert_eq!(icon_action(39), IconAction::SysKey(SysAction::BlockEndHome),);
+        assert_eq!(icon_action(40), IconAction::SysKey(SysAction::BlockEndDown),);
+        assert_eq!(icon_action(41), IconAction::SysKey(SysAction::BlockEndUp));
+        assert_eq!(
+            icon_action(42),
+            IconAction::SysKey(SysAction::BlockEndRight),
+        );
+        assert_eq!(icon_action(43), IconAction::SysKey(SysAction::BlockEndLeft),);
     }
 
     #[test]

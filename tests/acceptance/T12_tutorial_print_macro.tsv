@@ -1,0 +1,100 @@
+# Tutorial Chapter 5, Lesson 16: a macro that prints data.
+#
+# Author a macro that performs the slash-command sequence
+# `/Print File <path> Range A1..B1 Go Quit`. Bind it to a
+# multi-character macro name `print_data` (longer than `\letter` so
+# Alt-letter doesn't apply), then invoke it via Alt-F3 RUN.
+#
+# Lessons covered:
+#   - Slash-prefixed slash-command labels in macros: `'/...` survives
+#     the LABEL-mode commit, and the macro pump replays each char
+#     through handle_key so the bare keystrokes drive the menu live.
+#   - Multi-character macro names (vs. \letter): /Range Name Create
+#     <name> binds the macro range; macros named with anything other
+#     than `\letter` aren't reachable via Alt-letter and must be
+#     launched by Alt-F3 RUN.
+#   - Alt-F3 RUN opens the NAMES overlay; ENTER on the highlighted
+#     name runs the corresponding macro.
+#   - `~` inside macro source becomes ENTER at run-time, both for
+#     prompt-commit (filename, range) and for inter-step submenu
+#     transitions.
+#
+# Tutorial divergence: the tutorial's macro uses `/Print Printer`
+# (`/ppr...agpq`) since 1-2-3 R3.1 targeted physical printers.
+# L123's testable equivalent is `/Print File`, which writes to disk
+# and lets the transcript verify output via ASSERT_FILE_CONTAINS.
+# The lesson — that `/`-prefixed sequences survive as macro labels
+# and replay live through the menu — is the same.
+
+RM_FILE $TMPDIR/t12_print.prn
+SIZE 120 25
+
+ASSERT_POINTER  A:A1
+
+# --- Seed two cells of data to print at A1 / B1.
+KEYS Hello
+ENTER
+F 5
+KEYS B1
+ENTER
+KEYS 42
+ENTER
+
+# --- Author the print macro across two label cells (B5..B6) so the
+# macro is well clear of the data and easy to read. The macro splits
+# at a natural boundary: B5 enters the Print-File prompt and commits
+# the filename; B6 specifies the range and runs Go/Quit.
+F 5
+KEYS B5
+ENTER
+KEY '
+KEYS /pf$TMPDIR/t12_print.prn~
+ENTER
+ASSERT_PANEL_L1 A:B5: '/pf$TMPDIR/t12_print.prn~
+
+F 5
+KEYS B6
+ENTER
+KEY '
+KEYS rA1..B1~gq
+ENTER
+ASSERT_PANEL_L1 A:B6: 'rA1..B1~gq
+
+# --- Bind the macro range to the multi-character name `print_data`.
+# Naming only the first cell (B5..B5) is sufficient; the macro pump
+# walks the column downward until a blank cell, so B6's actions
+# execute as a continuation of the same macro.
+F 5
+KEYS B5
+ENTER
+KEY /
+KEY R
+KEY N
+KEY C
+KEYS print_data
+ENTER
+ASSERT_MODE     POINT
+ENTER
+ASSERT_MODE     READY
+
+# --- Park the cell pointer somewhere harmless before invoking, so
+# the macro's effect is observable independent of where authoring
+# left the pointer.
+F 5
+KEYS D10
+ENTER
+ASSERT_POINTER  A:D10
+
+# --- Alt-F3 RUN opens the NAMES overlay. ENTER on the highlighted
+# entry runs the corresponding macro. Names display in their stored
+# (lowercased) form in the overlay.
+ALT_F 3
+ASSERT_MODE     NAMES
+ASSERT_SCREEN   print_data
+ENTER
+ASSERT_MODE     READY
+
+# --- The macro printed the data. Both cells in the range render
+# their displayed text into the .prn file.
+ASSERT_FILE_CONTAINS  $TMPDIR/t12_print.prn  Hello
+ASSERT_FILE_CONTAINS  $TMPDIR/t12_print.prn  42

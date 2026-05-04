@@ -1,0 +1,207 @@
+# Tutorial Chapter 4, Lesson 13: /Data Sort.
+# Mirror the Sloane Camera personnel-database sort flow from the
+# tutorial: title in row 1, field-name row in row 3, records in
+# rows 4-8. Two sorts: first by LASTNAME ascending, then by LOCATION
+# ascending with LASTNAME as the secondary key.
+#
+# Lessons covered:
+#   - /Data Sort Data-Range — POINT for the records (excludes the
+#     field-name row so headers aren't sorted into the data).
+#   - /Data Sort Primary-Key — POINT in the desired key column;
+#     follow-up Asc/Desc submenu binds the direction.
+#   - /Data Sort Secondary-Key — same shape; ties on the primary key
+#     fall through to the secondary.
+#   - /Data Sort Go — execute the sort and return to READY.
+#   - The Sort menu is sticky: each leaf returns to it so the user
+#     can stack settings before pressing Go.
+
+ASSERT_POINTER  A:A1
+
+# --- Title in A1.
+KEYS PERSONNEL DATA: Sloane Camera and Video
+ENTER
+
+# --- Field names in A3..E3.
+F 5
+KEYS A3
+ENTER
+KEYS EMPLOYEE
+RIGHT
+KEYS LASTNAME
+RIGHT
+KEYS FIRSTNAME
+RIGHT
+KEYS LOCATION
+RIGHT
+KEYS DATE_HIRED
+ENTER
+
+# --- Five records in rows 4..8 (intentionally entered out of order).
+F 5
+KEYS A4
+ENTER
+KEYS 220
+RIGHT
+KEYS Edwards
+RIGHT
+KEYS Jack
+RIGHT
+KEYS Atlanta
+RIGHT
+KEY '
+KEYS 14-Feb-87
+ENTER
+
+F 5
+KEYS A5
+ENTER
+KEYS 297
+RIGHT
+KEYS Percival
+RIGHT
+KEYS James
+RIGHT
+KEYS Atlanta
+RIGHT
+KEY '
+KEYS 18-Dec-87
+ENTER
+
+F 5
+KEYS A6
+ENTER
+KEYS 262
+RIGHT
+KEYS Bird
+RIGHT
+KEYS Lance
+RIGHT
+KEYS Boston
+RIGHT
+KEY '
+KEYS 13-Aug-87
+ENTER
+
+F 5
+KEYS A7
+ENTER
+KEYS 281
+RIGHT
+KEYS Adamson
+RIGHT
+KEYS Joy
+RIGHT
+KEYS Boston
+RIGHT
+KEY '
+KEYS 21-Oct-87
+ENTER
+
+F 5
+KEYS A8
+ENTER
+KEYS 307
+RIGHT
+KEYS Bjorkman
+RIGHT
+KEYS Robert
+RIGHT
+KEYS Chicago
+RIGHT
+KEY '
+KEYS 24-Feb-88
+ENTER
+
+# --- First sort: by LASTNAME (column B), ascending.
+F 5
+KEYS A1
+ENTER
+
+KEY /
+KEY D
+KEY S
+ASSERT_MODE     MENU
+ASSERT_PANEL_L2 Data-Range
+
+# Data-Range = A4..E8 — records only, field-name row excluded.
+KEY D
+ASSERT_MODE     POINT
+ASSERT_PANEL_L3 data-range
+KEYS A4..E8
+ENTER
+ASSERT_MODE     MENU
+ASSERT_PANEL_L2 Data-Range
+
+# Primary-Key in any cell of LASTNAME (column B), Ascending.
+KEY P
+ASSERT_MODE     POINT
+ASSERT_PANEL_L3 primary
+KEYS B4
+ENTER
+ASSERT_MODE     MENU
+ASSERT_PANEL_L2 Ascending
+KEY A
+ASSERT_MODE     MENU
+ASSERT_PANEL_L2 Data-Range
+
+# Go executes the sort.
+KEY G
+ASSERT_MODE     READY
+
+# Records now alphabetical by LASTNAME.
+ASSERT_CELL  A:B4  Adamson
+ASSERT_CELL  A:B5  Bird
+ASSERT_CELL  A:B6  Bjorkman
+ASSERT_CELL  A:B7  Edwards
+ASSERT_CELL  A:B8  Percival
+
+# Whole-record cohesion: the FIRSTNAME column followed each lastname
+# through the sort, proving rows moved as units rather than as
+# independent column slices.
+ASSERT_CELL  A:C4  Joy
+ASSERT_CELL  A:C5  Lance
+ASSERT_CELL  A:C6  Robert
+ASSERT_CELL  A:C7  Jack
+ASSERT_CELL  A:C8  James
+
+# --- Second sort: by LOCATION (D) ascending, then LASTNAME (B) ascending.
+KEY /
+KEY D
+KEY S
+ASSERT_MODE     MENU
+
+# Data-Range is remembered from the previous sort. Set a new
+# Primary-Key in the LOCATION column.
+KEY P
+ASSERT_MODE     POINT
+KEYS D4
+ENTER
+ASSERT_MODE     MENU
+ASSERT_PANEL_L2 Ascending
+KEY A
+ASSERT_MODE     MENU
+
+# Secondary-Key in the LASTNAME column, Ascending.
+KEY S
+ASSERT_MODE     POINT
+KEYS B4
+ENTER
+ASSERT_MODE     MENU
+ASSERT_PANEL_L2 Ascending
+KEY A
+ASSERT_MODE     MENU
+
+KEY G
+ASSERT_MODE     READY
+
+# Atlanta { Edwards, Percival }, Boston { Adamson, Bird }, Chicago { Bjorkman }.
+ASSERT_CELL  A:B4  Edwards
+ASSERT_CELL  A:D4  Atlanta
+ASSERT_CELL  A:B5  Percival
+ASSERT_CELL  A:D5  Atlanta
+ASSERT_CELL  A:B6  Adamson
+ASSERT_CELL  A:D6  Boston
+ASSERT_CELL  A:B7  Bird
+ASSERT_CELL  A:D7  Boston
+ASSERT_CELL  A:B8  Bjorkman
+ASSERT_CELL  A:D8  Chicago

@@ -68,3 +68,14 @@ CTRL_END
 CTRL_PGDN
 ASSERT_CELL       A:A1  777
 ASSERT_STATUS     tutorial_second.xlsx
+
+# Round-trip back via Ctrl-End Ctrl-PgUp (prev active file). The
+# tutorial uses the same prefix (Ctrl-End) for both directions of
+# inter-file rotation, parallel to Ctrl-PgUp/PgDn for inter-sheet
+# rotation within a single file. The Ctrl-End prefix is consumed by
+# the next keystroke, so a stray key after Ctrl-End drops you back
+# into normal navigation rather than rotating files.
+CTRL_END
+CTRL_PGUP
+ASSERT_CELL       A:A1  42
+ASSERT_STATUS     tutorial_first.xlsx

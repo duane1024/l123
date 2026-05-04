@@ -42,6 +42,51 @@ ASSERT_POINTER  A:C5
 ASSERT_PANEL_L1 A:C5: 'Hello
 ASSERT_MODE     READY
 
+# --- Lesson 15's signature debugging exercise: deliberately drop
+# the trailing `~` from the macro so the final label entry is never
+# committed, run it, observe the macro stranded in LABEL mode at the
+# entry it was typing, then F2 EDIT the macro cell to restore the
+# tilde and re-run to verify the fix.
+HOME
+F 2
+ASSERT_MODE     EDIT
+END
+BACKSPACE
+ENTER
+ASSERT_MODE     READY
+ASSERT_PANEL_L1 A:A1: '{GOTO}C5~Hello
+
+# Re-run: the macro still navigates to C5 and starts typing "Hello",
+# but without the closing tilde it leaves the user parked in LABEL
+# mode at C5 with an uncommitted entry. The cell's stored value is
+# whatever was committed previously (the earlier successful run),
+# so the panel still reads `'Hello` from before.
+HOME
+ALT m
+ASSERT_POINTER  A:C5
+ASSERT_MODE     LABEL
+ASSERT_PANEL_L2 Hello
+ESC
+ASSERT_MODE     READY
+
+# --- Repair the macro by F2 EDIT-ing the trailing tilde back in.
+HOME
+F 2
+ASSERT_MODE     EDIT
+END
+KEY ~
+ENTER
+ASSERT_MODE     READY
+ASSERT_PANEL_L1 A:A1: '{GOTO}C5~Hello~
+
+# Re-run to confirm the fix: the macro now ends with the entry
+# committed and the workbook back in READY mode.
+HOME
+ALT m
+ASSERT_POINTER  A:C5
+ASSERT_MODE     READY
+ASSERT_PANEL_L1 A:C5: 'Hello
+
 # --- Reset for the STEP demonstration.
 HOME
 KEY /

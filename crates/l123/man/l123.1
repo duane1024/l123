@@ -1,0 +1,132 @@
+.TH L123 1 "2026-05-03" "l123 1.1.0" "User Commands"
+.SH NAME
+l123 \- terminal clone of Lotus 1\-2\-3 Release 3.4a for DOS
+.SH SYNOPSIS
+.B l123
+.RI [ OPTIONS ]
+.RI [ FILE ]
+.br
+.B l123 config
+.RI [ --init " [" --force ]]
+.SH DESCRIPTION
+.B l123
+is a TUI spreadsheet that recreates the look and feel of Lotus 1\-2\-3
+Release 3.4a for DOS, backed by the IronCalc calculation engine. It
+opens
+.B .xlsx
+workbooks natively and, when built with the
+.B wk3
+feature, can also read Lotus
+.B .WK3
+files.
+.PP
+With no
+.IR FILE ,
+.B l123
+starts on an empty workbook.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print help and exit.
+.TP
+.BR \-V ", " \-\-version
+Print version and exit.
+.TP
+.BI \-\-theme " NAME"
+Chrome theme:
+.B default
+or
+.BR dos .
+Overrides the
+.B L123_THEME
+environment variable and the
+.B theme=
+setting in
+.BR L123.CNF .
+.SH SUBCOMMANDS
+.TP
+.B config
+Print the effective configuration and where each value came from.
+.TP
+.B config \-\-init
+Write a sample
+.B ~/.l123/L123.CNF
+with annotated defaults.
+.TP
+.B config \-\-init \-\-force
+Overwrite an existing
+.B L123.CNF .
+.SH ENVIRONMENT
+.TP
+.B L123_USER
+Name shown on the startup splash.
+.TP
+.B L123_ORG
+Organization shown on the startup splash.
+.TP
+.B L123_LOG
+Path to a log file. When set, events are appended to this file; when
+unset, no logging is performed.
+.TP
+.B RUST_LOG
+Standard
+.B tracing
+env filter (e.g.\&
+.BR l123=debug ).
+Defaults to
+.B info
+when
+.B L123_LOG
+is set.
+.TP
+.B L123_BEEP
+Soft terminal bell on edge collisions
+.RB ( true / false ).
+Default:
+.BR true .
+.TP
+.B L123_THEME
+Chrome theme name
+.RB ( default " | " dos ).
+Overridden by
+.BR \-\-theme ;
+overrides
+.B L123.CNF
+.BR theme= .
+.SH FILES
+.TP
+.B ~/.l123/L123.CNF
+Optional configuration file. Run
+.B l123 config \-\-init
+to create an annotated sample.
+.SH KEYS
+Inside the program:
+.TP
+.B /
+Open the 1\-2\-3 slash menu.
+.TP
+.B F1
+Help.
+.TP
+.B F10
+Graph view.
+.TP
+.B /QY
+Quit.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Runtime error.
+.TP
+.B 2
+Usage error (unknown option, bad argument).
+.SH SEE ALSO
+Project documentation:
+.UR https://github.com/duane1024/l123
+project page
+.UE .
+.SH AUTHOR
+Duane Moore.
