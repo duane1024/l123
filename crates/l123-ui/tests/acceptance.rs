@@ -602,6 +602,36 @@ fn run_transcript(path: &Path) {
             "HOVER_CLEAR" => {
                 app.clear_hovered_icon();
             }
+            // "ICON_CLICK <panel> <slot>" — dispatch the SmartIcon at
+            // `(panel, slot)` directly, mirroring a real click. The
+            // headless render buffer has no real icon panel to hit-test
+            // against, so the harness short-circuits the mouse-coord
+            // path and pokes the App's dispatcher.
+            "ICON_CLICK" => {
+                let mut parts = rest.split_ascii_whitespace();
+                let panel_n: u8 = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: ICON_CLICK expects `<panel 1..7> <slot 0..16>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                let slot: usize = parts.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!(
+                        "{}:{line_no}: ICON_CLICK expects `<panel 1..7> <slot 0..16>`, got {rest:?}",
+                        path.display()
+                    )
+                });
+                let panel = l123_graph::Panel::ORDER
+                    .get(panel_n.saturating_sub(1) as usize)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{}:{line_no}: ICON_CLICK panel number must be 1..=7, got {panel_n}",
+                            path.display()
+                        )
+                    });
+                app.dispatch_icon_for_test(panel, slot);
+            }
             // "MOUSE_CLICK <col> <row>" — synthesize a left-button
             // mouse-down at the given terminal coordinates. Grid-click
             // hit-testing needs the last_grid_area cache, which is set
@@ -1106,6 +1136,7 @@ transcripts! {
     m8_data_table_1           => "M8_data_table_1.tsv",
     m8_data_table_2           => "M8_data_table_2.tsv",
     m8_data_sort_extra        => "M8_data_sort_extra.tsv",
+    m10_icon_sort             => "M10_icon_sort.tsv",
     m8_data_parse_format_line => "M8_data_parse_format_line.tsv",
     m8_data_query             => "M8_data_query.tsv",
     function_renames    => "function_renames.tsv",

@@ -3282,6 +3282,33 @@ impl App {
         self.hovered_icon = None;
     }
 
+    /// Dispatch the icon at `(panel, slot)` as if the user had clicked
+    /// it. Switches `current_panel` to `panel` so SmartIcon dispatch
+    /// resolves through the same code path as a real click. Slot 16
+    /// (the pager) cycles `current_panel` forward — direction-aware
+    /// pagination needs a real x-coordinate, which the harness can't
+    /// supply.
+    pub fn dispatch_icon_for_test(&mut self, panel: l123_graph::Panel, slot: usize) {
+        if slot >= 17 {
+            return;
+        }
+        self.current_panel = panel;
+        if slot == 16 {
+            self.current_panel = panel.next();
+            self.refresh_icon_panel();
+            return;
+        }
+        let id = panel.icon_ids()[slot];
+        match l123_graph::icon_action(id) {
+            l123_graph::IconAction::MenuPath(p) => self.dispatch_menu_path(p),
+            l123_graph::IconAction::WysiwygMenuPath(p) => self.dispatch_wysiwyg_menu_path(p),
+            l123_graph::IconAction::TextStyleToggle { bits } => self.dispatch_icon_text_style(bits),
+            l123_graph::IconAction::SysKey(act) => self.dispatch_sys_action(act),
+            l123_graph::IconAction::PageNav => {}
+            l123_graph::IconAction::Noop => {}
+        }
+    }
+
     /// True while the startup splash is up.
     pub fn splash_active(&self) -> bool {
         self.splash.is_some()
@@ -13306,6 +13333,8 @@ impl App {
             SysAction::SumRange => return self.dispatch_sum_smarticon(),
             SysAction::TodayDate => return self.dispatch_today_smarticon(),
             SysAction::OutlineRange => return self.dispatch_outline_smarticon(),
+            SysAction::SortAscending => return self.dispatch_sort_smarticon(SortDir::Ascending),
+            SysAction::SortDescending => return self.dispatch_sort_smarticon(SortDir::Descending),
         };
         self.handle_key(KeyEvent::new(code, mods));
     }
@@ -13556,6 +13585,78 @@ impl App {
                     ..
                 })
         )
+    }
+
+    /// Auto-detect the rectangular block of contiguous non-empty cells
+    /// surrounding the cursor. The block grows in two passes: first
+    /// left/right along the cursor's row to fix the column band, then
+    /// up/down across that band stopping at the first row where every
+    /// column is blank. Returns `None` when the cursor itself is blank.
+    /// The first row of the returned range is the database header.
+    fn auto_detect_database_range(&self, cursor: Address) -> Option<Range> {
+        if !self.wb().cells.contains_key(&cursor) {
+            return None;
+        }
+        let sheet = cursor.sheet;
+        let mut col_lo = cursor.col;
+        let mut col_hi = cursor.col;
+        while col_lo > 0
+            && self
+                .wb()
+                .cells
+                .contains_key(&Address::new(sheet, col_lo - 1, cursor.row))
+        {
+            col_lo -= 1;
+        }
+        while col_hi + 1 < l123_core::address::MAX_COLS
+            && self
+                .wb()
+                .cells
+                .contains_key(&Address::new(sheet, col_hi + 1, cursor.row))
+        {
+            col_hi += 1;
+        }
+        let row_has_data = |row: u32| -> bool {
+            (col_lo..=col_hi).any(|c| self.wb().cells.contains_key(&Address::new(sheet, c, row)))
+        };
+        let mut row_lo = cursor.row;
+        let mut row_hi = cursor.row;
+        while row_lo > 0 && row_has_data(row_lo - 1) {
+            row_lo -= 1;
+        }
+        while row_hi + 1 < l123_core::address::MAX_ROWS && row_has_data(row_hi + 1) {
+            row_hi += 1;
+        }
+        Some(Range {
+            start: Address::new(sheet, col_lo, row_lo),
+            end: Address::new(sheet, col_hi, row_hi),
+        })
+    }
+
+    /// Sort SmartIcon (icons 31/32). Auto-detect the database around
+    /// the cursor, treat the first row as a header, set the primary
+    /// key to the cursor's column with `dir`, and run the sort. Beep +
+    /// no-op when the cursor isn't inside a block of at least one
+    /// header row plus one data row.
+    fn dispatch_sort_smarticon(&mut self, dir: SortDir) {
+        let cursor = self.wb().pointer;
+        let Some(block) = self.auto_detect_database_range(cursor) else {
+            self.request_beep();
+            return;
+        };
+        if block.end.row <= block.start.row {
+            self.request_beep();
+            return;
+        }
+        let data_range = Range {
+            start: Address::new(block.start.sheet, block.start.col, block.start.row + 1),
+            end: block.end,
+        };
+        self.data_sort.data_range = Some(data_range);
+        self.data_sort.primary = Some((cursor.col, dir));
+        self.data_sort.secondary = None;
+        self.data_sort.extra = None;
+        self.execute_data_sort();
     }
 
     fn render_graph_overlay(&self, area: Rect, buf: &mut Buffer) {
@@ -18272,6 +18373,179 @@ mod tests {
         app.current_panel = l123_graph::Panel::Four;
         click_slot(&mut app, 7);
         assert_eq!(formula_expr_at(&app, "A1"), "@NOW");
+    }
+
+    #[test]
+    fn auto_detect_database_range_returns_none_on_blank_cursor() {
+        let app = App::new();
+        let cur = Address::A1;
+        assert!(app.auto_detect_database_range(cur).is_none());
+    }
+
+    #[test]
+    fn auto_detect_database_range_grows_to_full_block() {
+        // Header A1..C1, two data rows A2..C3. Cursor at B2 should
+        // discover the full A1..C3 rectangle.
+        let mut app = App::new();
+        put_label(&mut app, "A1", "id");
+        put_label(&mut app, "B1", "name");
+        put_label(&mut app, "C1", "value");
+        put_number(&mut app, "A2", 2.0);
+        put_label(&mut app, "B2", "bob");
+        put_number(&mut app, "C2", 20.0);
+        put_number(&mut app, "A3", 1.0);
+        put_label(&mut app, "B3", "alice");
+        put_number(&mut app, "C3", 10.0);
+        let cursor = Address::parse("B2").unwrap();
+        let block = app
+            .auto_detect_database_range(cursor)
+            .expect("block should be detected");
+        assert_eq!(block.start.display_short(), "A1");
+        assert_eq!(block.end.display_short(), "C3");
+    }
+
+    #[test]
+    fn auto_detect_database_range_stops_at_fully_blank_row() {
+        // Two blocks separated by a blank row 3. Cursor in the upper
+        // block should detect only that block, not row 4 onwards.
+        let mut app = App::new();
+        put_label(&mut app, "A1", "id");
+        put_label(&mut app, "B1", "name");
+        put_number(&mut app, "A2", 1.0);
+        put_label(&mut app, "B2", "alice");
+        // Row 3 fully blank.
+        put_number(&mut app, "A4", 99.0);
+        put_label(&mut app, "B4", "elsewhere");
+        let cursor = Address::parse("A2").unwrap();
+        let block = app.auto_detect_database_range(cursor).unwrap();
+        assert_eq!(block.start.display_short(), "A1");
+        assert_eq!(block.end.display_short(), "B2");
+    }
+
+    #[test]
+    fn sort_smarticon_ascending_orders_block_excluding_header() {
+        // Header + 3 data rows, sorted by column A ascending. Cursor in
+        // column A on a data row picks that column as primary key.
+        let mut app = App::new();
+        put_label(&mut app, "A1", "id");
+        put_label(&mut app, "B1", "name");
+        put_number(&mut app, "A2", 3.0);
+        put_label(&mut app, "B2", "cherry");
+        put_number(&mut app, "A3", 1.0);
+        put_label(&mut app, "B3", "apple");
+        put_number(&mut app, "A4", 2.0);
+        put_label(&mut app, "B4", "banana");
+        set_pointer(&mut app, "A3");
+        app.dispatch_sys_action(l123_graph::SysAction::SortAscending);
+        // Header still in row 1.
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A1").unwrap()),
+            Some(CellContents::Label { .. })
+        ));
+        // Data sorted 1, 2, 3.
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A2").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 1.0
+        ));
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A3").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 2.0
+        ));
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A4").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 3.0
+        ));
+        assert_eq!(app.mode, Mode::Ready);
+    }
+
+    #[test]
+    fn sort_smarticon_descending_orders_block_high_to_low() {
+        let mut app = App::new();
+        put_label(&mut app, "A1", "id");
+        put_number(&mut app, "A2", 1.0);
+        put_number(&mut app, "A3", 3.0);
+        put_number(&mut app, "A4", 2.0);
+        set_pointer(&mut app, "A3");
+        app.dispatch_sys_action(l123_graph::SysAction::SortDescending);
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A2").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 3.0
+        ));
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A3").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 2.0
+        ));
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A4").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 1.0
+        ));
+    }
+
+    #[test]
+    fn sort_smarticon_on_blank_cursor_beeps_no_op() {
+        let mut app = App::new();
+        // Numbers far away from cursor at A1.
+        put_number(&mut app, "C5", 1.0);
+        let beep_before = app.beep_count();
+        app.dispatch_sys_action(l123_graph::SysAction::SortAscending);
+        assert!(app.beep_count() > beep_before, "expected a beep");
+        // Untouched.
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("C5").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 1.0
+        ));
+    }
+
+    #[test]
+    fn sort_smarticon_on_header_only_block_beeps_no_op() {
+        // Single row of labels — no data rows below, can't sort.
+        let mut app = App::new();
+        put_label(&mut app, "A1", "id");
+        put_label(&mut app, "B1", "name");
+        set_pointer(&mut app, "A1");
+        let beep_before = app.beep_count();
+        app.dispatch_sys_action(l123_graph::SysAction::SortAscending);
+        assert!(app.beep_count() > beep_before, "expected a beep");
+    }
+
+    #[test]
+    fn icon_click_panel_four_sort_ascending_runs_sort() {
+        // Panel 4 slot 0 = icon id 31 (Sort Ascending).
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Four;
+        put_label(&mut app, "A1", "id");
+        put_number(&mut app, "A2", 2.0);
+        put_number(&mut app, "A3", 1.0);
+        set_pointer(&mut app, "A2");
+        click_slot(&mut app, 0);
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A2").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 1.0
+        ));
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A3").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 2.0
+        ));
+    }
+
+    #[test]
+    fn icon_click_panel_four_sort_descending_runs_sort() {
+        // Panel 4 slot 1 = icon id 32 (Sort Descending).
+        let mut app = App::new();
+        app.current_panel = l123_graph::Panel::Four;
+        put_label(&mut app, "A1", "id");
+        put_number(&mut app, "A2", 1.0);
+        put_number(&mut app, "A3", 2.0);
+        set_pointer(&mut app, "A2");
+        click_slot(&mut app, 1);
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A2").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 2.0
+        ));
+        assert!(matches!(
+            app.wb().cells.get(&Address::parse("A3").unwrap()),
+            Some(CellContents::Constant(Value::Number(n))) if *n == 1.0
+        ));
     }
 
     #[test]

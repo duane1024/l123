@@ -1,0 +1,146 @@
+# Sort SmartIcons (icons 31, 32) — Panel 4 slots 0 and 1.
+# Auto-detect the database around the cursor, take the cursor's
+# column as the primary sort key, and run the sort immediately
+# (no menu). Header row is excluded from the sort.
+#
+# Seed a header + 5-row block, place the cursor on a data cell in
+# column A, click the icon, and assert the post-sort cell values.
+
+# Header row: id, name, value
+KEY "
+KEYS id
+ENTER
+RIGHT
+KEY "
+KEYS name
+ENTER
+RIGHT
+KEY "
+KEYS value
+ENTER
+
+# Row 2: 5, eve, 50
+HOME
+DOWN
+KEYS 5
+ENTER
+RIGHT
+KEY "
+KEYS eve
+ENTER
+RIGHT
+KEYS 50
+ENTER
+
+# Row 3: 3, charlie, 30
+HOME
+DOWN
+DOWN
+KEYS 3
+ENTER
+RIGHT
+KEY "
+KEYS charlie
+ENTER
+RIGHT
+KEYS 30
+ENTER
+
+# Row 4: 1, alice, 10
+HOME
+DOWN
+DOWN
+DOWN
+KEYS 1
+ENTER
+RIGHT
+KEY "
+KEYS alice
+ENTER
+RIGHT
+KEYS 10
+ENTER
+
+# Row 5: 4, david, 40
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+KEYS 4
+ENTER
+RIGHT
+KEY "
+KEYS david
+ENTER
+RIGHT
+KEYS 40
+ENTER
+
+# Row 6: 2, bob, 20
+HOME
+DOWN
+DOWN
+DOWN
+DOWN
+DOWN
+KEYS 2
+ENTER
+RIGHT
+KEY "
+KEYS bob
+ENTER
+RIGHT
+KEYS 20
+ENTER
+
+# Park the cursor mid-block in column A — that picks A as the
+# primary sort key.
+HOME
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER A:A4
+
+# Click icon 31 (Panel 4 slot 0) — Sort Ascending.
+ICON_CLICK 4 0
+ASSERT_MODE READY
+
+# Header untouched.
+ASSERT_CELL A:A1  id
+ASSERT_CELL A:B1  name
+ASSERT_CELL A:C1  value
+
+# Data rows now ascending by column A: 1, 2, 3, 4, 5.
+ASSERT_CELL A:A2  1
+ASSERT_CELL A:B2  alice
+ASSERT_CELL A:C2  10
+ASSERT_CELL A:A3  2
+ASSERT_CELL A:B3  bob
+ASSERT_CELL A:C3  20
+ASSERT_CELL A:A4  3
+ASSERT_CELL A:B4  charlie
+ASSERT_CELL A:C4  30
+ASSERT_CELL A:A5  4
+ASSERT_CELL A:B5  david
+ASSERT_CELL A:C5  40
+ASSERT_CELL A:A6  5
+ASSERT_CELL A:B6  eve
+ASSERT_CELL A:C6  50
+
+# Click icon 32 (Panel 4 slot 1) — Sort Descending. Cursor is still
+# in column A, so column A is the key again.
+ICON_CLICK 4 1
+ASSERT_MODE READY
+
+# Data rows now descending by column A: 5, 4, 3, 2, 1.
+ASSERT_CELL A:A2  5
+ASSERT_CELL A:B2  eve
+ASSERT_CELL A:A3  4
+ASSERT_CELL A:B3  david
+ASSERT_CELL A:A4  3
+ASSERT_CELL A:B4  charlie
+ASSERT_CELL A:A5  2
+ASSERT_CELL A:B5  bob
+ASSERT_CELL A:A6  1
+ASSERT_CELL A:B6  alice

@@ -55,6 +55,7 @@ and its argument (separated by tabs or spaces). `#` starts a comment.
 | `ASSERT_FILE_NOT_CONTAINS <path>  <substr>` | Negation of the above. |
 | `HOVER_ICON <panel> <slot>` | Pin the icon-bar hover state as if the mouse were over `(panel, slot)`, where panel is `1..=7` and slot is `0..=16`. Drives control-panel line 3's hover-description tooltip. Transcripts use this instead of synthetic mouse-move events because the headless render buffer doesn't materialize a real icon panel to hit-test against. |
 | `HOVER_CLEAR` | Clear the hover state set by a prior `HOVER_ICON`. |
+| `ICON_CLICK <panel> <slot>` | Dispatch the SmartIcon at `(panel, slot)` directly, as if the user clicked it. Same panel/slot encoding as `HOVER_ICON`. Bypasses the mouse-coord path because the headless buffer has no real icon panel to hit-test against. |
 | `MOUSE_CLICK <col> <row>` | Synthesize a left-button mouse-down at the given terminal coordinates. Drives grid click-to-move-pointer (READY mode) and — if you pre-stash the icon panel rect elsewhere — icon panel clicks. The directive renders a frame first so `last_grid_area` is populated, mirroring what the real event loop does between frames. |
 | `MOUSE_DRAG <col> <row>` | Synthesize a left-button drag (button held, cursor moved) at the given terminal coordinates. Pairs with `MOUSE_CLICK` to drive drag-to-select. Renders a frame first so `last_grid_area` is populated. |
 | `MOUSE_UP <col> <row>` | Synthesize the left-button release at the given terminal coordinates, ending a drag. |

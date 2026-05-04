@@ -195,6 +195,14 @@ pub enum SysAction {
     /// 1-2-3's icon also draws a "drop shadow" — we drop that flourish
     /// since it doesn't carry through a TUI.
     OutlineRange,
+    /// Sort the database surrounding the cursor in ascending order
+    /// using the cursor's column as the primary key. Auto-detects the
+    /// database range as the contiguous block of non-empty cells around
+    /// the cursor, treating the first row as a header.
+    SortAscending,
+    /// Sort the database surrounding the cursor in descending order.
+    /// See [`SysAction::SortAscending`].
+    SortDescending,
 }
 
 /// Return the action a click on the given icon ID should fire.
@@ -238,6 +246,8 @@ pub fn icon_action(id: u8) -> IconAction {
         36 => MenuPath("WDR"), // Delete row
         37 => MenuPath("WDC"), // Delete column
         9 => SysKey(SumRange),
+        31 => SysKey(SortAscending),
+        32 => SysKey(SortDescending),
         38 => SysKey(Home),
         39 => SysKey(BlockEndHome),
         40 => SysKey(BlockEndDown),
@@ -651,6 +661,14 @@ mod tests {
         // shape as 26, since /C handles the single-source case
         // natively.
         assert_eq!(icon_action(47), IconAction::MenuPath("C"));
+    }
+
+    #[test]
+    fn icon_action_wires_sort_smarticons() {
+        use SysAction::*;
+        // Panel 4 slots 0/1 — Sort Ascending / Descending.
+        assert_eq!(icon_action(31), IconAction::SysKey(SortAscending));
+        assert_eq!(icon_action(32), IconAction::SysKey(SortDescending));
     }
 
     #[test]
