@@ -1,0 +1,56 @@
+# /Worksheet Page Column — insert a manual column page break at the
+# cell pointer.  Implemented as a column insert with the literal `|::`
+# label in row 1: the print engine recognizes it as a column-section
+# boundary, dropping the marker column from output and starting the
+# next column on a new page.
+
+RM_FILE $TMPDIR/m6_ws_page_column.prn
+SIZE 80 25
+
+# A1=L1, B1=L2, C1=R1.  RIGHT commits the entry and advances.
+KEYS L1
+RIGHT
+KEYS L2
+RIGHT
+KEYS R1
+RIGHT
+HOME
+RIGHT
+RIGHT
+ASSERT_POINTER   A:C1
+ASSERT_CELL      A:C1   R1
+
+# /WPC inserts a column at C with `|::` in row 1; R1 shifts right to
+# D1.  The marker itself is non-printing.
+KEY /
+KEY W
+KEY P
+KEY C
+ASSERT_MODE      READY
+ASSERT_CELL      A:D1   R1
+
+# /WPC left the pointer on the marker column (C1) — anchor at A1
+# before entering the print range.  Default pg_length is 0 (no
+# chunking inside a section), so the only page boundary is the manual
+# column break.
+HOME
+KEY /
+KEY P
+KEY F
+KEYS $TMPDIR/m6_ws_page_column.prn
+ENTER
+KEY R
+RIGHT
+RIGHT
+RIGHT
+ENTER
+KEY G
+KEY Q
+ASSERT_MODE      READY
+
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_ws_page_column.prn  L1
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_ws_page_column.prn  L2
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_ws_page_column.prn  R1
+ASSERT_FILE_NOT_CONTAINS  $TMPDIR/m6_ws_page_column.prn  ::
+# Form feed between the two column sections — manual break honored.
+ASSERT_FILE_CONTAINS      $TMPDIR/m6_ws_page_column.prn  L2\n\fR1

@@ -109,9 +109,14 @@ pub enum Action {
     /// `/Worksheet Titles Clear` — remove any frozen-pane setting on
     /// the current sheet.
     WorksheetTitlesClear,
-    /// `/Worksheet Page` — insert a row at the pointer with `|::` in
-    /// column A, marking a manual page break for the print engine.
-    WorksheetPage,
+    /// `/Worksheet Page Row` — insert a row at the pointer with `|::`
+    /// in column A, marking a manual row page break for the print
+    /// engine.
+    WorksheetPageRow,
+    /// `/Worksheet Page Column` — insert a column at the pointer with
+    /// `|::` in row 1, marking a manual column page break for the
+    /// print engine.
+    WorksheetPageColumn,
     /// `/Worksheet Hide Enable` — hide the current worksheet so it
     /// disappears from `Ctrl-PgUp/PgDn` navigation. Refuses if the
     /// current sheet is the only visible one.
@@ -1663,8 +1668,8 @@ const WORKSHEET_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'P',
         name: "Page",
-        help: "Insert a manual page break at the cell pointer",
-        body: MenuBody::Action(Action::WorksheetPage),
+        help: "Insert a manual row or column page break at the pointer",
+        body: MenuBody::Submenu(WS_PAGE_MENU),
     },
     MenuItem {
         letter: 'H',
@@ -1677,6 +1682,21 @@ const WORKSHEET_MENU: &[MenuItem] = &[
         name: "Learn",
         help: "Define / cancel / erase the Learn range",
         body: MenuBody::Submenu(WS_LEARN_MENU),
+    },
+];
+
+const WS_PAGE_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'R',
+        name: "Row",
+        help: "Insert a manual row page break at the cell pointer",
+        body: MenuBody::Action(Action::WorksheetPageRow),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Column",
+        help: "Insert a manual column page break at the cell pointer",
+        body: MenuBody::Action(Action::WorksheetPageColumn),
     },
 ];
 
@@ -4418,8 +4438,16 @@ mod tests {
 
     #[test]
     fn resolve_worksheet_page() {
-        let node = resolve(&['W', 'P']).unwrap();
-        assert!(matches!(node.body, MenuBody::Action(Action::WorksheetPage)));
+        let row = resolve(&['W', 'P', 'R']).unwrap();
+        assert!(matches!(
+            row.body,
+            MenuBody::Action(Action::WorksheetPageRow)
+        ));
+        let col = resolve(&['W', 'P', 'C']).unwrap();
+        assert!(matches!(
+            col.body,
+            MenuBody::Action(Action::WorksheetPageColumn)
+        ));
     }
 
     #[test]

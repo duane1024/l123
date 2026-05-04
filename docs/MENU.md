@@ -121,7 +121,14 @@ Display STAT screen: memory, recalc mode, circular refs, coprocessor, formats.
 
 ### /Worksheet Page  (P)  **[CPL]**
 
-Insert manual page break at pointer.
+```
+Row   Column
+```
+
+Insert manual page break at pointer. **Row** inserts a row with `|::`
+in column A; **Column** inserts a column with `|::` in row 1. The print
+engine drops the marker line from output and starts a new page on the
+other side.
 
 ### /Worksheet Hide  (H)  **[CPL]**
 

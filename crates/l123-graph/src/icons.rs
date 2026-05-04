@@ -256,7 +256,8 @@ pub fn icon_action(id: u8) -> IconAction {
         61 => SysKey(Edit),
         66 => MenuPath("FN"),  // File New
         67 => MenuPath("FOA"), // File Open After
-        63 => MenuPath("WP"),  // Insert page break at pointer (row)
+        63 => MenuPath("WPR"), // Insert row page break at pointer
+        64 => MenuPath("WPC"), // Insert column page break at pointer
         69 => SysKey(NextSheet),
         70 => SysKey(PrevSheet),
         71 => MenuPath("WISA"), // Worksheet Insert Sheet After
@@ -626,8 +627,9 @@ mod tests {
     #[test]
     fn icon_action_wires_panel5_structure_and_scroll() {
         use SysAction::*;
-        // Structure: page break at pointer (row), delete sheet.
-        assert_eq!(icon_action(63), IconAction::MenuPath("WP"));
+        // Structure: page break at pointer (row & column), delete sheet.
+        assert_eq!(icon_action(63), IconAction::MenuPath("WPR"));
+        assert_eq!(icon_action(64), IconAction::MenuPath("WPC"));
         assert_eq!(icon_action(72), IconAction::MenuPath("WDS"));
         // Scroll: 4 screen-sized + 4 single-cell directions.
         assert_eq!(icon_action(73), IconAction::SysKey(ScrollScreenLeft));

@@ -5931,7 +5931,8 @@ impl App {
             Action::WorksheetTitlesHorizontal => self.set_titles(TitlesKind::Horizontal),
             Action::WorksheetTitlesVertical => self.set_titles(TitlesKind::Vertical),
             Action::WorksheetTitlesClear => self.clear_titles(),
-            Action::WorksheetPage => self.insert_page_break_at_pointer(),
+            Action::WorksheetPageRow => self.insert_page_break_row_at_pointer(),
+            Action::WorksheetPageColumn => self.insert_page_break_column_at_pointer(),
             Action::WorksheetHideEnable => self.hide_current_sheet(),
             Action::WorksheetHideDisable => self.unhide_all_sheets(),
             Action::WorksheetLearnRange => {
@@ -6854,7 +6855,7 @@ impl App {
         self.close_menu();
     }
 
-    fn insert_page_break_at_pointer(&mut self) {
+    fn insert_page_break_row_at_pointer(&mut self) {
         let sheet = self.wb().pointer.sheet;
         let at = self.wb().pointer.row;
         self.menu = None;
@@ -6864,6 +6865,33 @@ impl App {
             batch.push(JournalEntry::RowInsert { sheet, at });
         }
         let marker = Address::new(sheet, 0, at);
+        let prev_contents = self.wb_mut().cells.remove(&marker);
+        let prev_format = self.wb_mut().cell_formats.remove(&marker);
+        let label = CellContents::Label {
+            prefix: LabelPrefix::Pipe,
+            text: "::".into(),
+        };
+        self.push_to_engine_at(marker, &label);
+        self.wb_mut().cells.insert(marker, label);
+        batch.push(JournalEntry::CellEdit {
+            addr: marker,
+            prev_contents,
+            prev_format,
+        });
+        self.push_journal_batch(batch);
+        self.mode = Mode::Ready;
+    }
+
+    fn insert_page_break_column_at_pointer(&mut self) {
+        let sheet = self.wb().pointer.sheet;
+        let at = self.wb().pointer.col;
+        self.menu = None;
+        let mut batch: Vec<JournalEntry> = Vec::new();
+        if self.wb_mut().engine.insert_cols(sheet, at, 1).is_ok() {
+            shift_cells_cols(&mut self.wb_mut().cells, sheet, at, 1);
+            batch.push(JournalEntry::ColInsert { sheet, at });
+        }
+        let marker = Address::new(sheet, at, 0);
         let prev_contents = self.wb_mut().cells.remove(&marker);
         let prev_format = self.wb_mut().cell_formats.remove(&marker);
         let label = CellContents::Label {
@@ -18089,9 +18117,9 @@ mod tests {
     }
 
     #[test]
-    fn icon_click_panel_five_page_break_invokes_wp() {
-        // Panel 5 slot 12 = icon 63 (row page break) → /WP.
-        // /WP inserts a row at the pointer with `|::` in column A.
+    fn icon_click_panel_five_page_break_row_invokes_wpr() {
+        // Panel 5 slot 12 = icon 63 (row page break) → /WPR.
+        // /WPR inserts a row at the pointer with `|::` in column A.
         let mut app = App::new();
         app.wb_mut().pointer = Address::new(SheetId::A, 0, 4);
         app.current_panel = l123_graph::Panel::Five;
@@ -18099,7 +18127,29 @@ mod tests {
         let marker = Address::new(SheetId::A, 0, 4);
         assert!(
             app.wb().cells.contains_key(&marker),
-            "page-break marker at A5 should exist after /WP",
+            "page-break marker at A5 should exist after /WPR",
+        );
+        let cell = app.wb().cells.get(&marker).unwrap();
+        if let CellContents::Label { prefix, text } = cell {
+            assert_eq!(*prefix, LabelPrefix::Pipe);
+            assert_eq!(text, "::");
+        } else {
+            panic!("expected pipe-prefixed `::` label, got {cell:?}");
+        }
+    }
+
+    #[test]
+    fn icon_click_panel_five_page_break_column_invokes_wpc() {
+        // Panel 5 slot 13 = icon 64 (column page break) → /WPC.
+        // /WPC inserts a column at the pointer with `|::` in row 1.
+        let mut app = App::new();
+        app.wb_mut().pointer = Address::new(SheetId::A, 4, 0);
+        app.current_panel = l123_graph::Panel::Five;
+        click_slot(&mut app, 13);
+        let marker = Address::new(SheetId::A, 4, 0);
+        assert!(
+            app.wb().cells.contains_key(&marker),
+            "page-break marker at E1 should exist after /WPC",
         );
         let cell = app.wb().cells.get(&marker).unwrap();
         if let CellContents::Label { prefix, text } = cell {

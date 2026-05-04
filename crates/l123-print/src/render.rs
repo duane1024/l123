@@ -18,18 +18,50 @@ pub fn render<V: WorkbookView + ?Sized>(
     settings: &PrintSettings,
 ) -> PageGrid {
     let r = range.normalized();
-    // Page width = sum of column widths in the selected range.
-    let page_width_usize: usize = (r.start.col..=r.end.col)
+
+    // Column-break segmentation. `|::` in row r.start.row of any
+    // column marks a manual column page break (`/Worksheet Page
+    // Column` inserts that label); each such column closes the current
+    // segment and opens a new one. Other pipe-prefix columns still
+    // suppress output without breaking pages.
+    let mut col_segments: Vec<Vec<u16>> = vec![Vec::new()];
+    for col in r.start.col..=r.end.col {
+        let first = Address::new(r.start.sheet, col, r.start.row);
+        if let Some(CellContents::Label {
+            prefix: LabelPrefix::Pipe,
+            text,
+        }) = view.cell(first)
+        {
+            if text.starts_with("::") {
+                col_segments.push(Vec::new());
+            }
+            continue;
+        }
+        col_segments.last_mut().unwrap().push(col);
+    }
+    while col_segments.len() > 1 && col_segments.last().is_some_and(Vec::is_empty) {
+        col_segments.pop();
+    }
+    let segment_widths: Vec<usize> = col_segments
+        .iter()
+        .map(|seg| {
+            seg.iter()
+                .map(|c| view.col_width(r.start.sheet, *c) as usize)
+                .sum()
+        })
+        .collect();
+    // Grid-level page_width: first non-empty segment, falling back to
+    // the full range width when every segment is empty.
+    let total_page_width: usize = (r.start.col..=r.end.col)
         .map(|c| view.col_width(r.start.sheet, c) as usize)
         .sum();
-    let page_width = page_width_usize.max(1);
-    // Right margin trims content lines (after the left pad) down to
-    // `page_width - margin_right`. `0` = no limit.
-    let effective_width = if settings.margin_right == 0 {
-        page_width
-    } else {
-        page_width.saturating_sub(settings.margin_right as usize)
-    };
+    let grid_page_width = segment_widths
+        .iter()
+        .copied()
+        .find(|w| *w > 0)
+        .unwrap_or(total_page_width)
+        .max(1);
+
     let (header, footer) = match settings.format_mode {
         PrintFormatMode::Formatted => (settings.header.as_str(), settings.footer.as_str()),
         PrintFormatMode::Unformatted => ("", ""),
@@ -37,111 +69,129 @@ pub fn render<V: WorkbookView + ?Sized>(
     let content_mode = settings.content_mode;
     let left_pad: String = " ".repeat(settings.margin_left as usize);
 
-    // Collect content rows into sections — `|::` in column A marks a
-    // manual page break (`/Worksheet Page` inserts that label), so each
-    // such row closes the current section and opens a new one.  Other
-    // pipe-prefix rows still suppress output without breaking pages.
-    // Each entry has `left_pad` prepended and a trailing `\n`.
-    let mut sections: Vec<Vec<String>> = vec![Vec::new()];
-    for row in r.start.row..=r.end.row {
-        let first = Address::new(r.start.sheet, r.start.col, row);
-        if let Some(CellContents::Label {
-            prefix: LabelPrefix::Pipe,
-            text,
-        }) = view.cell(first)
-        {
-            if text.starts_with("::") {
-                sections.push(Vec::new());
-            }
-            continue;
-        }
-        let mut line = String::new();
-        for col in r.start.col..=r.end.col {
-            let addr = Address::new(r.start.sheet, col, row);
-            let w = view.col_width(r.start.sheet, col) as usize;
-            let piece = match view.cell(addr) {
-                Some(CellContents::Empty) | None => " ".repeat(w),
-                Some(CellContents::Label { prefix, text }) => render_label(*prefix, text, w),
-                Some(CellContents::Constant(v)) => {
-                    let fmt = view.format_for_cell(addr);
-                    render_value_in_cell(v, w, fmt, view.international())
-                        .unwrap_or_else(|| " ".repeat(w))
-                }
-                Some(CellContents::Formula { expr, cached_value }) => match content_mode {
-                    PrintContentMode::CellFormulas => {
-                        let src = format!("@{expr}");
-                        let pad = w.saturating_sub(src.chars().count());
-                        let mut s = src;
-                        s.extend(std::iter::repeat_n(' ', pad));
-                        s
-                    }
-                    PrintContentMode::AsDisplayed => match cached_value {
-                        Some(v) => {
-                            let fmt = view.format_for_cell(addr);
-                            render_value_in_cell(v, w, fmt, view.international())
-                                .unwrap_or_else(|| " ".repeat(w))
-                        }
-                        None => " ".repeat(w),
-                    },
-                },
-            };
-            line.push_str(&piece);
-        }
-        let truncated: String = line.chars().take(effective_width).collect();
-        let trimmed: String = truncated.trim_end().to_string();
-        let mut entry = String::with_capacity(left_pad.len() + trimmed.len() + 1);
-        entry.push_str(&left_pad);
-        entry.push_str(&trimmed);
-        entry.push('\n');
-        sections.last_mut().unwrap().push(entry);
-    }
-    // Trailing `|::` shouldn't yield a blank page on its own.
-    while sections.len() > 1 && sections.last().is_some_and(Vec::is_empty) {
-        sections.pop();
-    }
+    // Build pages segment-by-segment (column-major: all rows of the
+    // leftmost segment first, then the next segment, etc.).
+    let mut pages_with_width: Vec<(Vec<String>, usize)> = Vec::new();
+    for (seg_idx, cols) in col_segments.iter().enumerate() {
+        let seg_width = segment_widths[seg_idx].max(1);
+        let effective_width = if settings.margin_right == 0 {
+            seg_width
+        } else {
+            seg_width.saturating_sub(settings.margin_right as usize)
+        };
 
-    // Chunk each section into pages. pg_length == 0 means no
-    // pagination within a section. Sections still split into separate
-    // pages, since a manual break is itself a page boundary.
-    let chunked: Vec<Vec<String>> = if sections.iter().all(Vec::is_empty) {
-        vec![Vec::new()]
-    } else {
-        let mut out: Vec<Vec<String>> = Vec::new();
-        for section in sections {
-            if section.is_empty() {
-                out.push(Vec::new());
+        // Collect content rows into row-sections — `|::` in column
+        // r.start.col marks a manual row page break (`/Worksheet Page
+        // Row` inserts that label), closing the current section and
+        // opening a new one. Other pipe-prefix rows still suppress
+        // output without breaking pages.  Each entry has `left_pad`
+        // prepended and a trailing `\n`.
+        let mut sections: Vec<Vec<String>> = vec![Vec::new()];
+        for row in r.start.row..=r.end.row {
+            let first = Address::new(r.start.sheet, r.start.col, row);
+            if let Some(CellContents::Label {
+                prefix: LabelPrefix::Pipe,
+                text,
+            }) = view.cell(first)
+            {
+                if text.starts_with("::") {
+                    sections.push(Vec::new());
+                }
                 continue;
             }
-            let per_page = if settings.pg_length == 0 {
-                section.len()
-            } else {
-                settings.pg_length as usize
-            };
-            out.extend(section.chunks(per_page).map(<[String]>::to_vec));
+            let mut line = String::new();
+            for &col in cols {
+                let addr = Address::new(r.start.sheet, col, row);
+                let w = view.col_width(r.start.sheet, col) as usize;
+                let piece = match view.cell(addr) {
+                    Some(CellContents::Empty) | None => " ".repeat(w),
+                    Some(CellContents::Label { prefix, text }) => render_label(*prefix, text, w),
+                    Some(CellContents::Constant(v)) => {
+                        let fmt = view.format_for_cell(addr);
+                        render_value_in_cell(v, w, fmt, view.international())
+                            .unwrap_or_else(|| " ".repeat(w))
+                    }
+                    Some(CellContents::Formula { expr, cached_value }) => match content_mode {
+                        PrintContentMode::CellFormulas => {
+                            let src = format!("@{expr}");
+                            let pad = w.saturating_sub(src.chars().count());
+                            let mut s = src;
+                            s.extend(std::iter::repeat_n(' ', pad));
+                            s
+                        }
+                        PrintContentMode::AsDisplayed => match cached_value {
+                            Some(v) => {
+                                let fmt = view.format_for_cell(addr);
+                                render_value_in_cell(v, w, fmt, view.international())
+                                    .unwrap_or_else(|| " ".repeat(w))
+                            }
+                            None => " ".repeat(w),
+                        },
+                    },
+                };
+                line.push_str(&piece);
+            }
+            let truncated: String = line.chars().take(effective_width).collect();
+            let trimmed: String = truncated.trim_end().to_string();
+            let mut entry = String::with_capacity(left_pad.len() + trimmed.len() + 1);
+            entry.push_str(&left_pad);
+            entry.push_str(&trimmed);
+            entry.push('\n');
+            sections.last_mut().unwrap().push(entry);
         }
-        out
-    };
+        // Trailing `|::` shouldn't yield a blank page on its own.
+        while sections.len() > 1 && sections.last().is_some_and(Vec::is_empty) {
+            sections.pop();
+        }
+
+        // Chunk each row-section into pages. pg_length == 0 means no
+        // pagination within a section.  Sections still split into
+        // separate pages, since a manual break is itself a page
+        // boundary.
+        let chunked: Vec<Vec<String>> = if sections.iter().all(Vec::is_empty) {
+            vec![Vec::new()]
+        } else {
+            let mut out: Vec<Vec<String>> = Vec::new();
+            for section in sections {
+                if section.is_empty() {
+                    out.push(Vec::new());
+                    continue;
+                }
+                let per_page = if settings.pg_length == 0 {
+                    section.len()
+                } else {
+                    settings.pg_length as usize
+                };
+                out.extend(section.chunks(per_page).map(<[String]>::to_vec));
+            }
+            out
+        };
+
+        for page_rows in chunked {
+            pages_with_width.push((page_rows, seg_width));
+        }
+    }
 
     let today = today_ddmmmyy();
-    let mut pages: Vec<Page> = Vec::with_capacity(chunked.len());
-    for (i, page_rows) in chunked.into_iter().enumerate() {
+    let mut pages: Vec<Page> = Vec::with_capacity(pages_with_width.len());
+    for (i, (page_rows, pw)) in pages_with_width.into_iter().enumerate() {
         let page_no = settings.start_page as usize + i;
         let header_line = if header.is_empty() {
             None
         } else {
             let substituted = substitute_tokens(header, page_no, &today);
-            let mut line = String::with_capacity(left_pad.len() + page_width);
+            let mut line = String::with_capacity(left_pad.len() + pw);
             line.push_str(&left_pad);
-            line.push_str(&format_three_part(&substituted, page_width));
+            line.push_str(&format_three_part(&substituted, pw));
             Some(line)
         };
         let footer_line = if footer.is_empty() {
             None
         } else {
             let substituted = substitute_tokens(footer, page_no, &today);
-            let mut line = String::with_capacity(left_pad.len() + page_width);
+            let mut line = String::with_capacity(left_pad.len() + pw);
             line.push_str(&left_pad);
-            line.push_str(&format_three_part(&substituted, page_width));
+            line.push_str(&format_three_part(&substituted, pw));
             Some(line)
         };
         pages.push(Page {
@@ -156,7 +206,7 @@ pub fn render<V: WorkbookView + ?Sized>(
 
     PageGrid {
         pages,
-        page_width: page_width as u16,
+        page_width: grid_page_width as u16,
     }
 }
 

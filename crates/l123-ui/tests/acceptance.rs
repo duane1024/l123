@@ -1012,6 +1012,7 @@ transcripts! {
     m6_print_advanced_device => "M6_print_advanced_device.tsv",
     m6_print_pipe_row  => "M6_print_pipe_row.tsv",
     m6_ws_page         => "M6_ws_page.tsv",
+    m6_ws_page_column  => "M6_ws_page_column.tsv",
     m6_range_search_replace => "M6_range_search_replace.tsv",
     m6_print_cell_formulas  => "M6_print_cell_formulas.tsv",
     m6_print_margins        => "M6_print_margins.tsv",
