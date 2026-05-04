@@ -1,0 +1,72 @@
+# WYSIWYG `:Special Copy` carries colors and alignment too — not just
+# the bold/italic/underline triple. Bold + red bg + yellow fg + center
+# align on A1, copy formatting to B1, verify all four attributes
+# travel together.
+
+KEYS aaa
+ENTER
+RIGHT
+KEYS bbb
+ENTER
+HOME
+
+# Bold + red bg + yellow fg + center align on A1 (4 colon-menu
+# invocations, all POINT-committed on A1).
+KEY :
+KEY F
+KEY B
+KEY S
+ENTER
+KEY :
+KEY F
+KEY C
+KEY B
+KEY R
+ENTER
+KEY :
+KEY F
+KEY C
+KEY T
+KEY Y
+ENTER
+KEY :
+KEY F
+KEY A
+KEY C
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold
+
+# Park off A1 to read its stored colors (the highlight inverts them).
+RIGHT
+ASSERT_CELL_BG    A:A1  FF0000
+ASSERT_CELL_FG    A:A1  FFFF00
+
+# B1 starts plain.
+ASSERT_CELL_STYLE A:B1  plain
+ASSERT_CELL_BG    A:B1  none
+ASSERT_CELL_FG    A:B1  none
+
+# `:Special Copy` from A1 to B1 — pointer is on B1 now, anchor it
+# before navigating: source step takes pointer's cell as FROM.
+HOME
+KEY :
+KEY S
+KEY C
+ENTER
+RIGHT
+ENTER
+ASSERT_MODE       READY
+
+# B1 now carries every formatting attribute A1 had.
+HOME
+ASSERT_CELL_STYLE A:B1  Bold
+ASSERT_CELL_BG    A:B1  FF0000
+ASSERT_CELL_FG    A:B1  FFFF00
+# A1 unchanged.
+ASSERT_CELL_STYLE A:A1  Bold
+RIGHT
+ASSERT_CELL_BG    A:A1  FF0000
+ASSERT_CELL_FG    A:A1  FFFF00
+# Texts intact.
+ASSERT_CELL       A:A1  aaa
+ASSERT_CELL       A:B1  bbb

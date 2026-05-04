@@ -369,6 +369,40 @@ the override.
 Magenta` (B / W / R / G / L / Y / C / M).  `:Format Color Reset`
 strips both background fill and text color from the selected range.
 
+### :Special  (S)
+
+```
+Copy  Move  Import  Quit
+C     M     I       Q
+```
+
+R3.4a WYSIWYG's "transfer formatting between cells" submenu.
+Operates on *formatting only* — distinct from `/Copy` and `/Move`,
+which carry contents (and their formatting) as a unit.
+
+- **Copy** — POINT for the source range, then POINT for the
+  destination. Every formatting attribute on each source cell
+  (number format, text style, alignment, fill, font color/size/strike,
+  borders) is replicated to the corresponding destination cell.
+  Destination cells with formatting that the source doesn't carry have
+  that attribute *cleared* — the goal is to make the destination cell's
+  formatting equal to the source's, not to merge.   **[MVP]**
+- **Move** — same as Copy, but after the write, every source cell
+  outside the destination block has its formatting attributes cleared.
+  Cell *contents* are untouched at both source and destination.   **[MVP]**
+- **Import**   **[STR]** — R3.4a imported `.FMT` files (a WYSIWYG-
+  specific sidecar format). L123 stores formatting inline in xlsx, so
+  there is no `.FMT` to import; this leaf is parked under
+  `wysiwyg-special-import-fmt` until we have a story for cross-workbook
+  format reuse.
+- **Quit** — return to READY.
+
+Dimension rules match `/Copy`: single source × any-size dest replicates
+the source's formatting at every dest cell; multi-source × single-cell
+dest pastes the source's shape at the dest's top-left; same-shape ranges
+paste cell-for-cell. Mismatched multi-cell shapes raise the standard
+`source and destination ranges have different sizes` error.
+
 ---
 
 ## Implementation notes

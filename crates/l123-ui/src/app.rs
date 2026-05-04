@@ -2748,6 +2748,21 @@ enum ColorTarget {
     Both,
 }
 
+/// One source cell's frozen formatting state, used by `:Special
+/// Copy` / `:Special Move`. `None` on a field means the source had no
+/// override — when written, the destination's matching entry is
+/// removed (so the dest ends up *equal* to the source, not merged).
+#[derive(Debug, Clone, Copy)]
+struct FormatSnapshot {
+    addr: Address,
+    format: Option<Format>,
+    text_style: Option<TextStyle>,
+    alignment: Option<Alignment>,
+    fill: Option<Fill>,
+    font_style: Option<FontStyle>,
+    border: Option<Border>,
+}
+
 /// Commands in progress that are waiting on one more POINT selection.
 #[derive(Debug, Clone, Copy)]
 enum PendingCommand {
@@ -2787,6 +2802,24 @@ enum PendingCommand {
     RangeColor {
         target: ColorTarget,
         color: Option<RgbColor>,
+    },
+    /// First POINT of `:Special Copy` — pick the source range whose
+    /// formatting will be replicated.
+    SpecialCopyFrom,
+    /// Second POINT of `:Special Copy` — pick the destination. On
+    /// commit, every formatting attribute on each source cell
+    /// overwrites the corresponding destination cell's formatting.
+    /// Cell contents are untouched.
+    SpecialCopyTo {
+        source: Range,
+    },
+    /// First POINT of `:Special Move` — pick the source range.
+    SpecialMoveFrom,
+    /// Second POINT of `:Special Move` — pick the destination. On
+    /// commit, formatting is copied to the destination and then
+    /// cleared from any source cells outside the destination block.
+    SpecialMoveTo {
+        source: Range,
     },
     /// `pending_name` on App carries the name; on commit, define it over
     /// the selected range.
@@ -2979,6 +3012,10 @@ impl PendingCommand {
             PendingCommand::RangeTextStyle { .. } => "Enter range for style:",
             PendingCommand::RangeAlignment { .. } => "Enter range for alignment:",
             PendingCommand::RangeColor { .. } => "Enter range for color:",
+            PendingCommand::SpecialCopyFrom => "Enter range to copy formatting FROM:",
+            PendingCommand::SpecialCopyTo { .. } => "Enter range to copy formatting TO:",
+            PendingCommand::SpecialMoveFrom => "Enter range to move formatting FROM:",
+            PendingCommand::SpecialMoveTo { .. } => "Enter range to move formatting TO:",
             PendingCommand::RangeNameCreate => "Enter range for the named range:",
             PendingCommand::RangeNameLabels { .. } => "Enter range of labels:",
             PendingCommand::RangeNameTable => "Enter cell to write table to:",
@@ -6190,6 +6227,8 @@ impl App {
                 self.show_gridlines = false;
                 self.close_menu();
             }
+            Action::SpecialCopy => self.begin_point(PendingCommand::SpecialCopyFrom),
+            Action::SpecialMove => self.begin_point(PendingCommand::SpecialMoveFrom),
             Action::RangeFormatText => self.begin_point(PendingCommand::RangeFormat {
                 format: Format {
                     kind: FormatKind::Text,
@@ -8688,6 +8727,24 @@ impl App {
             }
             PendingCommand::MoveTo { source } => {
                 if self.execute_move(source, first) {
+                    self.wb_mut().dirty = true;
+                    self.mode = Mode::Ready;
+                }
+            }
+            PendingCommand::SpecialCopyFrom => {
+                self.transition_point(PendingCommand::SpecialCopyTo { source: first })
+            }
+            PendingCommand::SpecialMoveFrom => {
+                self.transition_point(PendingCommand::SpecialMoveTo { source: first })
+            }
+            PendingCommand::SpecialCopyTo { source } => {
+                if self.execute_special_copy(source, first) {
+                    self.wb_mut().dirty = true;
+                    self.mode = Mode::Ready;
+                }
+            }
+            PendingCommand::SpecialMoveTo { source } => {
+                if self.execute_special_move(source, first) {
                     self.wb_mut().dirty = true;
                     self.mode = Mode::Ready;
                 }
@@ -11955,6 +12012,9 @@ impl App {
     fn transition_point(&mut self, next: PendingCommand) {
         let source_tl = match next {
             PendingCommand::CopyTo { source } | PendingCommand::MoveTo { source } => source.start,
+            PendingCommand::SpecialCopyTo { source } | PendingCommand::SpecialMoveTo { source } => {
+                source.start
+            }
             // /Data Distribution: spring back to the values-range
             // top-left so the user navigates from a familiar landmark
             // to the bin column.
@@ -11973,6 +12033,8 @@ impl App {
         let anchor = match next {
             PendingCommand::CopyTo { .. }
             | PendingCommand::MoveTo { .. }
+            | PendingCommand::SpecialCopyTo { .. }
+            | PendingCommand::SpecialMoveTo { .. }
             | PendingCommand::DataDistributionBins { .. }
             | PendingCommand::RangeValueTo { .. }
             | PendingCommand::RangeTransTo { .. } => None,
@@ -12053,6 +12115,155 @@ impl App {
         self.wb_mut().engine.recalc();
         self.refresh_formula_caches();
         true
+    }
+
+    /// `:Special Copy` — replicate every formatting attribute (number
+    /// format, text style, alignment, fill, font color/size/strike,
+    /// borders) from each source cell onto the corresponding
+    /// destination cell. Cell contents are untouched. Reuses
+    /// [`copy_paste_anchors`] so the dim-rule matrix matches `/Copy`.
+    fn execute_special_copy(&mut self, source: Range, dest_range: Range) -> bool {
+        let src = source.normalized();
+        let dest = dest_range.normalized();
+        let anchors = match copy_paste_anchors(src, dest) {
+            Ok(a) => a,
+            Err(msg) => {
+                self.set_error(msg);
+                return false;
+            }
+        };
+        let snap = self.collect_format_snapshots(src);
+        for anchor in anchors {
+            self.write_format_snapshots_at_offset(&snap, src.start, anchor);
+        }
+        true
+    }
+
+    /// `:Special Move` — like `execute_special_copy`, but after writing,
+    /// every source cell outside the destination block has its
+    /// formatting cleared. Cell contents are untouched.
+    fn execute_special_move(&mut self, source: Range, dest_range: Range) -> bool {
+        let src = source.normalized();
+        let dest = dest_range.normalized();
+        let src_cols = u32::from(src.end.col - src.start.col + 1);
+        let src_rows = src.end.row - src.start.row + 1;
+        let dst_cols = u32::from(dest.end.col - dest.start.col + 1);
+        let dst_rows = dest.end.row - dest.start.row + 1;
+        let same_size = src_cols == dst_cols && src_rows == dst_rows;
+        let single_dest = dst_cols == 1 && dst_rows == 1;
+        if !same_size && !single_dest {
+            self.set_error("Move: source and destination ranges have different sizes");
+            return false;
+        }
+        let snap = self.collect_format_snapshots(src);
+        let dest_anchor = Address::new(dest.start.sheet, dest.start.col, dest.start.row);
+        self.write_format_snapshots_at_offset(&snap, src.start, dest_anchor);
+        let dest_block = Range {
+            start: dest_anchor,
+            end: Address::new(
+                dest_anchor.sheet,
+                dest_anchor.col + (src.end.col - src.start.col),
+                dest_anchor.row + (src.end.row - src.start.row),
+            ),
+        };
+        for fs in &snap {
+            if !dest_block.contains(fs.addr) {
+                self.clear_formatting_at(fs.addr);
+            }
+        }
+        true
+    }
+
+    fn collect_format_snapshots(&self, range: Range) -> Vec<FormatSnapshot> {
+        let r = range.normalized();
+        let mut out = Vec::new();
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                out.push(FormatSnapshot {
+                    addr,
+                    format: self.wb().cell_formats.get(&addr).copied(),
+                    text_style: self.wb().cell_text_styles.get(&addr).copied(),
+                    alignment: self.wb().cell_alignments.get(&addr).copied(),
+                    fill: self.wb().cell_fills.get(&addr).copied(),
+                    font_style: self.wb().cell_font_styles.get(&addr).copied(),
+                    border: self.wb().cell_borders.get(&addr).copied(),
+                });
+            }
+        }
+        out
+    }
+
+    fn write_format_snapshots_at_offset(
+        &mut self,
+        snaps: &[FormatSnapshot],
+        src_origin: Address,
+        dest_anchor: Address,
+    ) {
+        for fs in snaps {
+            let dst = Address::new(
+                dest_anchor.sheet,
+                dest_anchor.col + (fs.addr.col - src_origin.col),
+                dest_anchor.row + (fs.addr.row - src_origin.row),
+            );
+            match fs.format {
+                Some(v) => {
+                    self.wb_mut().cell_formats.insert(dst, v);
+                }
+                None => {
+                    self.wb_mut().cell_formats.remove(&dst);
+                }
+            }
+            match fs.text_style {
+                Some(v) => {
+                    self.wb_mut().cell_text_styles.insert(dst, v);
+                }
+                None => {
+                    self.wb_mut().cell_text_styles.remove(&dst);
+                }
+            }
+            match fs.alignment {
+                Some(v) => {
+                    self.wb_mut().cell_alignments.insert(dst, v);
+                }
+                None => {
+                    self.wb_mut().cell_alignments.remove(&dst);
+                }
+            }
+            match fs.fill {
+                Some(v) => {
+                    self.wb_mut().cell_fills.insert(dst, v);
+                }
+                None => {
+                    self.wb_mut().cell_fills.remove(&dst);
+                }
+            }
+            match fs.font_style {
+                Some(v) => {
+                    self.wb_mut().cell_font_styles.insert(dst, v);
+                }
+                None => {
+                    self.wb_mut().cell_font_styles.remove(&dst);
+                }
+            }
+            match fs.border {
+                Some(v) => {
+                    self.wb_mut().cell_borders.insert(dst, v);
+                }
+                None => {
+                    self.wb_mut().cell_borders.remove(&dst);
+                }
+            }
+        }
+    }
+
+    fn clear_formatting_at(&mut self, addr: Address) {
+        self.wb_mut().cell_formats.remove(&addr);
+        self.wb_mut().cell_text_styles.remove(&addr);
+        self.wb_mut().cell_alignments.remove(&addr);
+        self.wb_mut().cell_fills.remove(&addr);
+        self.wb_mut().cell_font_styles.remove(&addr);
+        self.wb_mut().cell_borders.remove(&addr);
     }
 
     fn collect_cells_in_range(&self, range: Range) -> Vec<(Address, CellContents)> {

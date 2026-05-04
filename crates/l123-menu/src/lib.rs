@@ -530,6 +530,18 @@ pub enum Action {
     DisplayOptionsGridYes,
     /// `:Display Options Grid No` — hide row/column gutter.
     DisplayOptionsGridNo,
+    /// `:Special Copy` — POINT for source range, then for destination.
+    /// Replicates *every* formatting attribute (number format, text
+    /// style, alignment, fill, font color/size/strike, borders) from
+    /// each source cell onto the matching destination cell. Cell
+    /// contents are untouched. Destination attributes the source
+    /// doesn't carry are cleared (the dest ends up matching the source,
+    /// not merged).
+    SpecialCopy,
+    /// `:Special Move` — same shape as `SpecialCopy`, but after the
+    /// destination is written, every source cell *outside* the
+    /// destination block has its formatting cleared.
+    SpecialMove,
 
     /// `/Data Fill` — POINT for the fill range, then prompt for
     /// Start, Step, and Stop. Writes the arithmetic sequence into
@@ -3813,6 +3825,33 @@ const WYSIWYG_DISPLAY_MENU: &[MenuItem] = &[
     },
 ];
 
+const WYSIWYG_SPECIAL_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'C',
+        name: "Copy",
+        help: "Copy formatting from a source range to a destination",
+        body: MenuBody::Action(Action::SpecialCopy),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Move",
+        help: "Move formatting from a source range to a destination",
+        body: MenuBody::Action(Action::SpecialMove),
+    },
+    MenuItem {
+        letter: 'I',
+        name: "Import",
+        help: "Import formatting from a saved .FMT file",
+        body: MenuBody::NotImplemented("wysiwyg-special-import-fmt"),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
 /// Top-level WYSIWYG colon-menu.  Entered by pressing `:` in READY.
 pub const WYSIWYG_ROOT: &[MenuItem] = &[
     MenuItem {
@@ -3855,7 +3894,7 @@ pub const WYSIWYG_ROOT: &[MenuItem] = &[
         letter: 'S',
         name: "Special",
         help: "Copy / move / import formatting",
-        body: MenuBody::NotImplemented("wysiwyg-special"),
+        body: MenuBody::Submenu(WYSIWYG_SPECIAL_MENU),
     },
     MenuItem {
         letter: 'T',

@@ -1,0 +1,46 @@
+# WYSIWYG `:Special Move` — move formatting from one cell to another.
+# Like Copy, but the source cell's formatting is *cleared* after the
+# write.  Cell contents at both ends are untouched.
+
+KEYS aaa
+ENTER
+RIGHT
+KEYS bbb
+ENTER
+HOME
+ASSERT_CELL_STYLE A:A1  plain
+ASSERT_CELL_STYLE A:B1  plain
+
+# Bold A1.
+KEY :
+KEY F
+KEY B
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold
+
+# `:Special Move` — :S descends, M selects Move.
+KEY :
+ASSERT_PANEL_L2   Worksheet
+KEY S
+ASSERT_PANEL_L2   Copy
+ASSERT_PANEL_L2   Move
+KEY M
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   FROM
+
+# FROM = A1 (pointer is parked there).
+ENTER
+# TO = B1.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   TO
+RIGHT
+ENTER
+ASSERT_MODE       READY
+
+# Bold should have moved A1 → B1: B1 is now Bold, A1 is plain.
+# Texts at both cells stay put — Move only touches formatting.
+ASSERT_CELL_STYLE A:A1  plain
+ASSERT_CELL_STYLE A:B1  Bold
+ASSERT_CELL       A:A1  aaa
+ASSERT_CELL       A:B1  bbb

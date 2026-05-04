@@ -1,0 +1,66 @@
+# WYSIWYG `:Special Copy` — copy formatting (and only formatting)
+# from one range to another.
+
+# Lay down a labelled, bold cell at A1 and a plain labelled cell at B1.
+# Both cells already carry content; :Special should copy the *style*
+# from A1 to B1 without disturbing either cell's text.
+KEYS aaa
+ENTER
+RIGHT
+KEYS bbb
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: 'aaa
+ASSERT_CELL_STYLE A:A1  plain
+ASSERT_CELL_STYLE A:B1  plain
+
+# Bold A1 via `:FBS~`.
+KEY :
+KEY F
+KEY B
+KEY S
+ENTER
+ASSERT_CELL_STYLE A:A1  Bold
+ASSERT_CELL_STYLE A:B1  plain
+
+# `:Special Copy` — :S descends, C selects Copy, then POINT for FROM.
+KEY :
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Worksheet
+KEY S
+ASSERT_PANEL_L2   Copy
+KEY C
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   FROM
+# A1 is the FROM range (pointer is parked there from HOME).
+ENTER
+
+# Now POINT for TO.
+ASSERT_MODE       POINT
+ASSERT_PANEL_L3   TO
+RIGHT
+ENTER
+ASSERT_MODE       READY
+
+# B1 should now carry Bold; A1 keeps Bold; both texts intact.
+ASSERT_CELL_STYLE A:A1  Bold
+ASSERT_CELL_STYLE A:B1  Bold
+ASSERT_CELL       A:A1  aaa
+ASSERT_CELL       A:B1  bbb
+
+# `:Special Copy` from a plain cell over a styled one strips the style.
+# Pointer is at B1 (post-copy); RIGHT to C1 (plain), then :SC source=C1
+# dest=B1.
+RIGHT
+KEY :
+KEY S
+KEY C
+# Source = C1 (plain), already pointed at.
+ENTER
+# transition_point parks pointer at source TL (C1); LEFT navigates to B1.
+LEFT
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL_STYLE A:B1  plain
+ASSERT_CELL_STYLE A:A1  Bold
+ASSERT_CELL       A:B1  bbb
