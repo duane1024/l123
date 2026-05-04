@@ -151,8 +151,15 @@ pub trait Engine {
     /// `num_fmt` string on the underlying IronCalc style; the xlsx
     /// round-trip reads it back via the adapter's `used_cell_formats`.
     /// Passing [`Format::GENERAL`] / [`Format::RESET`] clears the
-    /// override.
-    fn set_cell_format(&mut self, _addr: Address, _format: Format) -> Result<()> {
+    /// override. `dates` supplies the workbook's interned date-pattern
+    /// tokens so [`FormatKind::DateCustom`] formats can be emitted as
+    /// their original Excel pattern.
+    fn set_cell_format(
+        &mut self,
+        _addr: Address,
+        _format: Format,
+        _dates: &l123_core::format::DateFormatTable,
+    ) -> Result<()> {
         Err(EngineError::Unsupported("set_cell_format"))
     }
 

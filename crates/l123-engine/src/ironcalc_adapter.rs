@@ -325,7 +325,12 @@ impl Engine for IronCalcEngine {
             .map_err(EngineError::Backend)
     }
 
-    fn set_cell_format(&mut self, addr: Address, format: Format) -> Result<()> {
+    fn set_cell_format(
+        &mut self,
+        addr: Address,
+        format: Format,
+        dates: &l123_core::format::DateFormatTable,
+    ) -> Result<()> {
         self.extend_sheets_to(addr.sheet)?;
         let sheet = self.sheet_index(addr.sheet);
         let row = Self::row_1based(addr);
@@ -334,7 +339,7 @@ impl Engine for IronCalcEngine {
             .model
             .get_style_for_cell(sheet, row, col)
             .map_err(EngineError::Backend)?;
-        s.num_fmt = num_fmt::to_num_fmt(format);
+        s.num_fmt = num_fmt::to_num_fmt(format, dates);
         self.model
             .set_cell_style(sheet, row, col, &s)
             .map_err(EngineError::Backend)
@@ -1010,8 +1015,13 @@ impl IronCalcEngine {
     /// format. Used after `load_xlsx` to repopulate the UI's
     /// `cell_formats` map so xlsx files authored in Excel (and in l123
     /// itself across /FS → /FR) keep their Currency / Percent / etc.
-    /// tags.
-    pub fn used_cell_formats(&self) -> Vec<(Address, Format)> {
+    /// tags. Non-canonical date patterns are interned into `dates` and
+    /// emerge as [`FormatKind::DateCustom`] entries that round-trip
+    /// back to their original Excel glyphs on save.
+    pub fn used_cell_formats(
+        &self,
+        dates: &mut l123_core::format::DateFormatTable,
+    ) -> Vec<(Address, Format)> {
         let mut out = Vec::new();
         for (sheet_idx, ws) in self.model.workbook.worksheets.iter().enumerate() {
             let sheet = SheetId(sheet_idx as u16);
@@ -1032,7 +1042,7 @@ impl IronCalcEngine {
                     else {
                         continue;
                     };
-                    if let Some(fmt) = num_fmt::parse(&style.num_fmt) {
+                    if let Some(fmt) = num_fmt::parse(&style.num_fmt, dates) {
                         out.push((addr, fmt));
                     }
                 }
@@ -1916,17 +1926,19 @@ mod tests {
         e.set_user_input(Address::new(SheetId::A, 0, 2), "42")
             .unwrap();
         e.recalc();
-        e.set_cell_format(Address::new(SheetId::A, 0, 0), Format::currency(2))
+        let dates = l123_core::format::DateFormatTable::new();
+        e.set_cell_format(Address::new(SheetId::A, 0, 0), Format::currency(2), &dates)
             .unwrap();
-        e.set_cell_format(Address::new(SheetId::A, 0, 1), Format::percent(1))
+        e.set_cell_format(Address::new(SheetId::A, 0, 1), Format::percent(1), &dates)
             .unwrap();
         // A3 left on General — should NOT appear in used_cell_formats.
         e.save_xlsx(&path).unwrap();
 
         let mut e2 = IronCalcEngine::new().unwrap();
         e2.load_xlsx(&path).unwrap();
+        let mut dates2 = l123_core::format::DateFormatTable::new();
         let fmts: std::collections::HashMap<Address, Format> =
-            e2.used_cell_formats().into_iter().collect();
+            e2.used_cell_formats(&mut dates2).into_iter().collect();
         assert_eq!(
             fmts.get(&Address::new(SheetId::A, 0, 0)).copied(),
             Some(Format::currency(2))

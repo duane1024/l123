@@ -1096,6 +1096,7 @@ transcripts! {
     xlsx_frozen                  => "xlsx_frozen.tsv",
     xlsx_hidden_sheets           => "xlsx_hidden_sheets.tsv",
     xlsx_tables                  => "xlsx_tables.tsv",
+    xlsx_dates                   => "xlsx_dates.tsv",
     t01_tutorial_labels_and_fast_entry => "T01_tutorial_labels_and_fast_entry.tsv",
     t02_tutorial_values_erase_and_repeating_label => "T02_tutorial_values_erase_and_repeating_label.tsv",
     t03_tutorial_calculation_and_named_ranges => "T03_tutorial_calculation_and_named_ranges.tsv",

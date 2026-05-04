@@ -41,6 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     regen(&out_dir.join("frozen.xlsx"), build_frozen)?;
     regen(&out_dir.join("hidden_sheets.xlsx"), build_hidden_sheets)?;
     regen(&out_dir.join("tables.xlsx"), build_tables)?;
+    regen(&out_dir.join("dates.xlsx"), build_dates)?;
     println!("Wrote fixtures to {}", out_dir.display());
     Ok(())
 }
@@ -637,6 +638,52 @@ fn write_cell_with_alignment(
         },
         wrap_text,
     });
+    model.set_cell_style(0, row_1b, col_1b, &style)?;
+    Ok(())
+}
+
+/// `dates.xlsx` — column A holds the same Lotus serial date (45931 =
+/// 2025-10-01) under five distinct Excel num_fmt strings the
+/// canonical D1..D5 enums lose fidelity on.  The acceptance
+/// transcript loads this and asserts that each cell's grid display
+/// matches the original Excel pattern (preserved via DateCustom).
+///
+///   A1  serial 45931, num_fmt = "m/yyyy"      → "10/2025"
+///   A2  serial 45931, num_fmt = "mmm-yyyy"    → "Oct-2025"
+///   A3  serial 45931, num_fmt = "mmm yyyy"    → "Oct 2025"
+///   A4  serial 45931, num_fmt = "dd-mmm-yyyy" → "01-Oct-2025"
+///   A5  serial 45931, num_fmt = "m/d/yyyy"    → "10/1/2025"
+fn build_dates(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = Model::new_empty("dates", "en", "UTC", "en")?;
+    let patterns = [
+        "m/yyyy",
+        "mmm-yyyy",
+        "mmm yyyy",
+        "dd-mmm-yyyy",
+        "m/d/yyyy",
+    ];
+    for (i, p) in patterns.iter().enumerate() {
+        let row = (i + 1) as i32;
+        write_cell_with_num_fmt(&mut model, row, 1, "45931", p)?;
+    }
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF8 path: {}", path.display()))?;
+    save_to_xlsx(&model, path_str)?;
+    println!("  {}", path.display());
+    Ok(())
+}
+
+fn write_cell_with_num_fmt(
+    model: &mut Model,
+    row_1b: i32,
+    col_1b: i32,
+    input: &str,
+    num_fmt: &str,
+) -> Result<(), String> {
+    model.set_user_input(0, row_1b, col_1b, input.to_string())?;
+    let mut style = model.get_style_for_cell(0, row_1b, col_1b)?;
+    style.num_fmt = num_fmt.to_string();
     model.set_cell_style(0, row_1b, col_1b, &style)?;
     Ok(())
 }

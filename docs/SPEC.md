@@ -445,6 +445,7 @@ tag is 1-2-3's in-situ type inspector.**
 | `(+)` | +/- bar |
 | `(P0)`..`(P15)` | Percent |
 | `(D1)`..`(D5)` | Date (DD-MMM-YY, DD-MMM, MMM-YY, Long Intn'l, Short Intn'l) |
+| `(D1*)`..`(D5*)`, `(D*)` | Date pattern imported from xlsx that doesn't reduce to a 1-2-3 D1..D5 enum (e.g. `mmm-yyyy`, `dd-mmm-yyyy`, `m/d/yyyy`). The original Excel pattern is rendered verbatim; the suffix `*` marks a custom format and the digit shows the closest 1-2-3 fit (or `*` alone when no shape matches). Set via xlsx import only — `/Range Format Date` always lands on D1..D5. |
 | `(D6)`..`(D9)` | Time (with/without seconds; 12h/24h Intn'l) |
 | `(T)` | Text — show formula, not value |
 | `(H)` | Hidden |

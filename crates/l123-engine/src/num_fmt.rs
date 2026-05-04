@@ -16,6 +16,7 @@
 //! Rendering to xlsx goes the other way: each `FormatKind` has a
 //! canonical num_fmt string the adapter writes back.
 
+use l123_core::format::{parse_date_pattern, DateFormatTable};
 use l123_core::{Format, FormatKind};
 
 /// Parse an Excel `num_fmt` string to an L123 `Format`.
@@ -23,7 +24,12 @@ use l123_core::{Format, FormatKind};
 /// Returns `None` if the string is empty, `"general"`, or otherwise
 /// unrecognisable — callers treat `None` as "cell inherits General and
 /// should not carry an entry in `cell_formats`."
-pub fn parse(raw: &str) -> Option<Format> {
+///
+/// `dates` receives any non-canonical date pattern via
+/// [`DateFormatTable::intern`], so the resulting `FormatKind::DateCustom(id)`
+/// can later be rendered or round-tripped back to its original Excel
+/// glyphs.
+pub fn parse(raw: &str, dates: &mut DateFormatTable) -> Option<Format> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("general") {
         return None;
@@ -38,6 +44,16 @@ pub fn parse(raw: &str) -> Option<Format> {
     // we don't fall through to the currency/scientific classifier.
     if let Some(kind) = classify_datetime(positive) {
         return Some(Format { kind, decimals: 0 });
+    }
+
+    // Non-canonical date pattern? Intern the token list and emit a
+    // `DateCustom` so the original Excel glyphs survive load and save.
+    if let Some(tokens) = parse_date_pattern(positive) {
+        let id = dates.intern(tokens);
+        return Some(Format {
+            kind: FormatKind::DateCustom(id),
+            decimals: 0,
+        });
     }
 
     let stripped = strip_cosmetic(positive);
@@ -89,7 +105,9 @@ pub fn parse(raw: &str) -> Option<Format> {
 ///
 /// For `Format::GENERAL` (and other inherit-from-default formats) returns
 /// `"general"` so callers can round-trip by writing the default string.
-pub fn to_num_fmt(format: Format) -> String {
+/// `DateCustom` formats consult `dates` to emit the original Excel
+/// pattern verbatim.
+pub fn to_num_fmt(format: Format, dates: &DateFormatTable) -> String {
     let d = format.decimals as usize;
     match format.kind {
         FormatKind::Fixed => zeros_with_decimals("0", d),
@@ -106,6 +124,7 @@ pub fn to_num_fmt(format: Format) -> String {
         FormatKind::DateShortIntl => "m/d".to_string(),
         FormatKind::TimeLongIntl => "h:mm:ss".to_string(),
         FormatKind::TimeShortIntl => "h:mm".to_string(),
+        FormatKind::DateCustom(id) => emit_date_pattern(dates.get(id)),
         // Kinds we don't yet render to Excel fall back to General so the
         // cell at least opens without an error in Excel.
         FormatKind::General
@@ -118,6 +137,38 @@ pub fn to_num_fmt(format: Format) -> String {
         | FormatKind::LabelOnly
         | FormatKind::Reset => "general".to_string(),
     }
+}
+
+/// Emit a `DateCustom` token list back as an Excel num_fmt string. Letter
+/// literals get quoted so they don't re-tokenize as date glyphs on load.
+fn emit_date_pattern(tokens: &[l123_core::format::DateToken]) -> String {
+    use l123_core::format::DateToken::*;
+    let mut s = String::new();
+    for t in tokens {
+        match t {
+            Year2 => s.push_str("yy"),
+            Year4 => s.push_str("yyyy"),
+            MonthNum => s.push('m'),
+            MonthNumPadded => s.push_str("mm"),
+            MonthAbbrev => s.push_str("mmm"),
+            MonthFull => s.push_str("mmmm"),
+            Day => s.push('d'),
+            DayPadded => s.push_str("dd"),
+            Literal(lit) => {
+                if lit
+                    .chars()
+                    .any(|c| matches!(c, 'y' | 'Y' | 'm' | 'M' | 'd' | 'D' | 'h' | 'H' | 's' | 'S'))
+                {
+                    s.push('"');
+                    s.push_str(lit);
+                    s.push('"');
+                } else {
+                    s.push_str(lit);
+                }
+            }
+        }
+    }
+    s
 }
 
 fn zeros_with_decimals(integer_pattern: &str, decimals: usize) -> String {
@@ -134,36 +185,50 @@ fn zeros_with_decimals(integer_pattern: &str, decimals: usize) -> String {
     }
 }
 
-/// Detect a date or time format by scanning unquoted `m`, `d`, `y`,
-/// `h`, `s` glyphs in the positive section.
+/// Detect a date or time format by exact-match against the canonical
+/// 1-2-3 D1..D5 / D8..D9 strings (after stripping cosmetic markup).
 ///
-/// 1-2-3 has five date kinds (D1..D5) and four time kinds (D6..D9).
-/// Excel's format strings carry more variation than that — we collapse:
-///
-/// * Any format containing `h` or `s` → **time**
-///   (`TimeLongIntl` if `s` is present, else `TimeShortIntl`).
-/// * Date with year + month + day:
-///   * letter month (`mmm`/`mmmm`) → `DateDmy` (D1)
-///   * numeric month → `DateLongIntl` (D4)
-/// * Date with month + day, no year:
-///   * letter month → `DateDm` (D2)
-///   * numeric month → `DateShortIntl` (D5)
-/// * Date with month + year, no day → `DateMy` (D3)
+/// Times still use a loose heuristic — any `h` or `s` outside markup
+/// counts — because time fidelity is a follow-up. Dates are strict:
+/// only the exact strings emitted by [`to_num_fmt`] map to D1..D5;
+/// every other date pattern (`m/yyyy`, `dd-mmm-yyyy`, …) falls
+/// through here and is handled by [`parse_date_pattern`] →
+/// `FormatKind::DateCustom`, which preserves the original glyphs.
 fn classify_datetime(positive: &str) -> Option<l123_core::FormatKind> {
     use l123_core::FormatKind;
 
-    let mut has_y = false;
-    let mut has_d = false;
-    let mut has_h = false;
-    let mut has_s = false;
-    let mut has_m = false;
-    let mut has_mmm = false;
+    let n = strip_for_datetime_match(positive);
 
+    // Time path: keep the existing loose heuristic so formats like
+    // `h:mm AM/PM` still classify as time. (Time fidelity is a separate
+    // task.)
+    if n.contains('h') || n.contains('s') {
+        return Some(if n.contains('s') {
+            FormatKind::TimeLongIntl
+        } else {
+            FormatKind::TimeShortIntl
+        });
+    }
+
+    // Date path: exact match against canonical strings only.
+    match n.as_str() {
+        "dd-mmm-yy" => Some(FormatKind::DateDmy),
+        "dd-mmm" => Some(FormatKind::DateDm),
+        "mmm-yy" => Some(FormatKind::DateMy),
+        "m/d/yy" => Some(FormatKind::DateLongIntl),
+        "m/d" => Some(FormatKind::DateShortIntl),
+        _ => None,
+    }
+}
+
+/// Strip cosmetic markup from a format string, lowercasing the rest, so
+/// `[$-409]M/D/YY` matches `m/d/yy`. Quoted literals, backslash escapes,
+/// `_`/`*` spacers and `[...]` tags are all dropped.
+fn strip_for_datetime_match(positive: &str) -> String {
+    let mut out = String::new();
     let mut chars = positive.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            // Quoted literal — skip the inner chars entirely so a
-            // literal "moon" doesn't trigger month detection.
             '"' => {
                 for inner in chars.by_ref() {
                     if inner == '"' {
@@ -171,17 +236,12 @@ fn classify_datetime(positive: &str) -> Option<l123_core::FormatKind> {
                     }
                 }
             }
-            // Backslash-escape consumes the next char literally.
             '\\' => {
                 chars.next();
             }
-            // Width-spacer / fill-repeat — drop the next char.
             '_' | '*' => {
                 chars.next();
             }
-            // `[Red]`, `[h]`, `[$-409]` — cosmetic / locale tags. We
-            // skip the entire bracketed run; the contents do not count
-            // as date glyphs.
             '[' => {
                 for inner in chars.by_ref() {
                     if inner == ']' {
@@ -189,49 +249,10 @@ fn classify_datetime(positive: &str) -> Option<l123_core::FormatKind> {
                     }
                 }
             }
-            'm' | 'M' => {
-                let mut run = 1;
-                while matches!(chars.peek(), Some('m') | Some('M')) {
-                    chars.next();
-                    run += 1;
-                }
-                has_m = true;
-                if run >= 3 {
-                    has_mmm = true;
-                }
-            }
-            'd' | 'D' => has_d = true,
-            'y' | 'Y' => has_y = true,
-            'h' | 'H' => has_h = true,
-            's' | 'S' => has_s = true,
-            _ => {}
+            _ => out.push(c.to_ascii_lowercase()),
         }
     }
-
-    // Time wins over date. `[h]:mm:ss` (elapsed time) hides `h` inside
-    // brackets — `s` alone is enough to mark it as time.
-    if has_h || has_s {
-        return Some(if has_s {
-            FormatKind::TimeLongIntl
-        } else {
-            FormatKind::TimeShortIntl
-        });
-    }
-
-    match (has_y, has_m, has_d) {
-        (true, true, true) => Some(if has_mmm {
-            FormatKind::DateDmy
-        } else {
-            FormatKind::DateLongIntl
-        }),
-        (false, true, true) => Some(if has_mmm {
-            FormatKind::DateDm
-        } else {
-            FormatKind::DateShortIntl
-        }),
-        (true, true, false) => Some(FormatKind::DateMy),
-        _ => None,
-    }
+    out
 }
 
 /// Remove Excel's literal-quote, escape, spacer, and color-tag markup
@@ -315,46 +336,55 @@ fn count_decimals(stripped: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use l123_core::format::DateToken;
+
+    fn p(s: &str) -> Option<Format> {
+        parse(s, &mut DateFormatTable::new())
+    }
+
+    fn t(f: Format) -> String {
+        to_num_fmt(f, &DateFormatTable::new())
+    }
 
     #[test]
     fn general_and_empty_return_none() {
-        assert_eq!(parse(""), None);
-        assert_eq!(parse("general"), None);
-        assert_eq!(parse("General"), None);
-        assert_eq!(parse("  General  "), None);
+        assert_eq!(p(""), None);
+        assert_eq!(p("general"), None);
+        assert_eq!(p("General"), None);
+        assert_eq!(p("  General  "), None);
     }
 
     #[test]
     fn fixed_decimals() {
-        assert_eq!(parse("0"), Some(Format::fixed(0)));
-        assert_eq!(parse("0.00"), Some(Format::fixed(2)));
-        assert_eq!(parse("0.000"), Some(Format::fixed(3)));
+        assert_eq!(p("0"), Some(Format::fixed(0)));
+        assert_eq!(p("0.00"), Some(Format::fixed(2)));
+        assert_eq!(p("0.000"), Some(Format::fixed(3)));
     }
 
     #[test]
     fn comma_with_thousands() {
-        assert_eq!(parse("#,##0"), Some(Format::comma(0)));
-        assert_eq!(parse("#,##0.00"), Some(Format::comma(2)));
+        assert_eq!(p("#,##0"), Some(Format::comma(0)));
+        assert_eq!(p("#,##0.00"), Some(Format::comma(2)));
     }
 
     #[test]
     fn percent() {
-        assert_eq!(parse("0%"), Some(Format::percent(0)));
-        assert_eq!(parse("0.00%"), Some(Format::percent(2)));
-        assert_eq!(parse("0.0%"), Some(Format::percent(1)));
+        assert_eq!(p("0%"), Some(Format::percent(0)));
+        assert_eq!(p("0.00%"), Some(Format::percent(2)));
+        assert_eq!(p("0.0%"), Some(Format::percent(1)));
     }
 
     #[test]
     fn scientific() {
         assert_eq!(
-            parse("0.00E+00"),
+            p("0.00E+00"),
             Some(Format {
                 kind: FormatKind::Scientific,
                 decimals: 2
             })
         );
         assert_eq!(
-            parse("0E+00"),
+            p("0E+00"),
             Some(Format {
                 kind: FormatKind::Scientific,
                 decimals: 0
@@ -364,24 +394,24 @@ mod tests {
 
     #[test]
     fn currency_with_dollar_sign() {
-        assert_eq!(parse("$#,##0.00"), Some(Format::currency(2)));
-        assert_eq!(parse("$#,##0"), Some(Format::currency(0)));
+        assert_eq!(p("$#,##0.00"), Some(Format::currency(2)));
+        assert_eq!(p("$#,##0"), Some(Format::currency(0)));
         // Quote-wrapped dollar sign.
-        assert_eq!(parse("\"$\"#,##0.00"), Some(Format::currency(2)));
+        assert_eq!(p("\"$\"#,##0.00"), Some(Format::currency(2)));
     }
 
     #[test]
     fn currency_excel_accounting_builtin_44() {
         // Built-in numFmtId 44 resolves to this string.
         let fmt = "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)";
-        assert_eq!(parse(fmt), Some(Format::currency(2)));
+        assert_eq!(p(fmt), Some(Format::currency(2)));
     }
 
     #[test]
     fn currency_with_locale_tag() {
         // Common form emitted by localised Excel.
         assert_eq!(
-            parse("[$$-409]#,##0.00"),
+            p("[$$-409]#,##0.00"),
             Some(Format::currency(2)),
             "bracket tag should be stripped"
         );
@@ -390,35 +420,16 @@ mod tests {
     #[test]
     fn negative_section_ignored() {
         // Positive;negative;zero;text — kind is decided by the first section.
-        assert_eq!(parse("$#,##0.00_);($#,##0.00)"), Some(Format::currency(2)));
+        assert_eq!(p("$#,##0.00_);($#,##0.00)"), Some(Format::currency(2)));
     }
 
     #[test]
-    fn date_my_for_month_year_formats() {
-        // The atlas-model.xlsx fixture uses these three forms.
+    fn canonical_date_my_for_mmm_yy_only() {
+        // Only `mmm-yy` (the to_num_fmt output for DateMy) maps to the
+        // 1-2-3 enum. The other month/year shapes preserve fidelity via
+        // DateCustom — covered by the date_custom_* tests below.
         assert_eq!(
-            parse("m/yyyy"),
-            Some(Format {
-                kind: FormatKind::DateMy,
-                decimals: 0
-            })
-        );
-        assert_eq!(
-            parse("mmm-yyyy"),
-            Some(Format {
-                kind: FormatKind::DateMy,
-                decimals: 0
-            })
-        );
-        assert_eq!(
-            parse("mmm yyyy"),
-            Some(Format {
-                kind: FormatKind::DateMy,
-                decimals: 0
-            })
-        );
-        assert_eq!(
-            parse("mmm-yy"),
+            p("mmm-yy"),
             Some(Format {
                 kind: FormatKind::DateMy,
                 decimals: 0
@@ -427,16 +438,9 @@ mod tests {
     }
 
     #[test]
-    fn date_dmy_for_letter_month_full_dates() {
+    fn canonical_date_dmy_for_dd_mmm_yy_only() {
         assert_eq!(
-            parse("dd-mmm-yy"),
-            Some(Format {
-                kind: FormatKind::DateDmy,
-                decimals: 0
-            })
-        );
-        assert_eq!(
-            parse("d-mmm-yyyy"),
+            p("dd-mmm-yy"),
             Some(Format {
                 kind: FormatKind::DateDmy,
                 decimals: 0
@@ -445,16 +449,9 @@ mod tests {
     }
 
     #[test]
-    fn date_dm_for_letter_month_no_year() {
+    fn canonical_date_dm_for_dd_mmm_only() {
         assert_eq!(
-            parse("d-mmm"),
-            Some(Format {
-                kind: FormatKind::DateDm,
-                decimals: 0
-            })
-        );
-        assert_eq!(
-            parse("dd-mmm"),
+            p("dd-mmm"),
             Some(Format {
                 kind: FormatKind::DateDm,
                 decimals: 0
@@ -463,18 +460,9 @@ mod tests {
     }
 
     #[test]
-    fn date_long_intl_for_numeric_full_dates() {
-        // Built-in numFmtId 14 = "m/d/yyyy"; 22 = "m/d/yyyy h:mm" (handled
-        // separately as time). All-numeric dates map to D4.
+    fn canonical_date_long_intl_for_m_d_yy_only() {
         assert_eq!(
-            parse("m/d/yyyy"),
-            Some(Format {
-                kind: FormatKind::DateLongIntl,
-                decimals: 0
-            })
-        );
-        assert_eq!(
-            parse("m/d/yy"),
+            p("m/d/yy"),
             Some(Format {
                 kind: FormatKind::DateLongIntl,
                 decimals: 0
@@ -483,9 +471,9 @@ mod tests {
     }
 
     #[test]
-    fn date_short_intl_for_numeric_no_year() {
+    fn canonical_date_short_intl_for_m_d_only() {
         assert_eq!(
-            parse("m/d"),
+            p("m/d"),
             Some(Format {
                 kind: FormatKind::DateShortIntl,
                 decimals: 0
@@ -494,9 +482,22 @@ mod tests {
     }
 
     #[test]
+    fn canonical_form_matches_case_insensitively() {
+        // Excel may emit upper- or lower-case glyphs. Case folds during
+        // canonical lookup so DD-MMM-YY still maps to DateDmy.
+        assert_eq!(
+            p("DD-MMM-YY"),
+            Some(Format {
+                kind: FormatKind::DateDmy,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
     fn time_long_intl_for_h_m_s() {
         assert_eq!(
-            parse("h:mm:ss"),
+            p("h:mm:ss"),
             Some(Format {
                 kind: FormatKind::TimeLongIntl,
                 decimals: 0
@@ -507,7 +508,7 @@ mod tests {
     #[test]
     fn time_short_intl_for_h_m_no_seconds() {
         assert_eq!(
-            parse("h:mm"),
+            p("h:mm"),
             Some(Format {
                 kind: FormatKind::TimeShortIntl,
                 decimals: 0
@@ -518,8 +519,108 @@ mod tests {
     #[test]
     fn quoted_letters_do_not_trigger_date_detection() {
         // Quoted "m" is a literal, not a month token. Should fall through
-        // to None (or, here, to currency since the format also has $).
-        assert_eq!(parse("\"month\" 0"), Some(Format::fixed(0)));
+        // to fixed since the rest is `0`.
+        assert_eq!(p("\"month\" 0"), Some(Format::fixed(0)));
+    }
+
+    #[test]
+    fn date_custom_for_m_yyyy_preserves_tokens() {
+        let mut tbl = DateFormatTable::new();
+        let f = parse("m/yyyy", &mut tbl).unwrap();
+        let FormatKind::DateCustom(id) = f.kind else {
+            panic!("expected DateCustom, got {:?}", f.kind);
+        };
+        assert_eq!(
+            tbl.get(id),
+            &[
+                DateToken::MonthNum,
+                DateToken::Literal("/".into()),
+                DateToken::Year4,
+            ]
+        );
+    }
+
+    #[test]
+    fn date_custom_for_mmm_yyyy_preserves_tokens() {
+        let mut tbl = DateFormatTable::new();
+        let f = parse("mmm-yyyy", &mut tbl).unwrap();
+        let FormatKind::DateCustom(id) = f.kind else {
+            panic!("expected DateCustom, got {:?}", f.kind);
+        };
+        assert_eq!(
+            tbl.get(id),
+            &[
+                DateToken::MonthAbbrev,
+                DateToken::Literal("-".into()),
+                DateToken::Year4,
+            ]
+        );
+    }
+
+    #[test]
+    fn date_custom_for_dd_mmm_yyyy_preserves_tokens() {
+        let mut tbl = DateFormatTable::new();
+        let f = parse("dd-mmm-yyyy", &mut tbl).unwrap();
+        let FormatKind::DateCustom(id) = f.kind else {
+            panic!("expected DateCustom, got {:?}", f.kind);
+        };
+        assert_eq!(
+            tbl.get(id),
+            &[
+                DateToken::DayPadded,
+                DateToken::Literal("-".into()),
+                DateToken::MonthAbbrev,
+                DateToken::Literal("-".into()),
+                DateToken::Year4,
+            ]
+        );
+    }
+
+    #[test]
+    fn date_custom_for_m_d_yyyy_preserves_tokens() {
+        let mut tbl = DateFormatTable::new();
+        let f = parse("m/d/yyyy", &mut tbl).unwrap();
+        let FormatKind::DateCustom(id) = f.kind else {
+            panic!("expected DateCustom, got {:?}", f.kind);
+        };
+        assert_eq!(
+            tbl.get(id),
+            &[
+                DateToken::MonthNum,
+                DateToken::Literal("/".into()),
+                DateToken::Day,
+                DateToken::Literal("/".into()),
+                DateToken::Year4,
+            ]
+        );
+    }
+
+    #[test]
+    fn date_custom_dedupes_repeat_pattern_into_same_id() {
+        let mut tbl = DateFormatTable::new();
+        let a = parse("m/yyyy", &mut tbl).unwrap();
+        let b = parse("m/yyyy", &mut tbl).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(tbl.len(), 1);
+    }
+
+    #[test]
+    fn date_custom_round_trips_through_to_num_fmt() {
+        for raw in ["m/yyyy", "mmm-yyyy", "mmm yyyy", "dd-mmm-yyyy", "m/d/yyyy"] {
+            let mut tbl = DateFormatTable::new();
+            let f = parse(raw, &mut tbl).expect(raw);
+            let emitted = to_num_fmt(f, &tbl);
+            assert_eq!(emitted, raw, "round-trip preserves Excel pattern");
+            // Re-parsing the emitted string into a fresh table yields
+            // the same tokens (interned at id 0 in both tables).
+            let mut tbl2 = DateFormatTable::new();
+            let g = parse(&emitted, &mut tbl2).expect(raw);
+            let (FormatKind::DateCustom(id_a), FormatKind::DateCustom(id_b)) = (f.kind, g.kind)
+            else {
+                panic!("expected DateCustom on both sides");
+            };
+            assert_eq!(tbl.get(id_a), tbl2.get(id_b));
+        }
     }
 
     #[test]
@@ -534,8 +635,8 @@ mod tests {
             FormatKind::TimeShortIntl,
         ] {
             let f = Format { kind, decimals: 0 };
-            let s = to_num_fmt(f);
-            assert_eq!(parse(&s), Some(f), "round-trip for {f:?} via {s:?}");
+            let s = t(f);
+            assert_eq!(p(&s), Some(f), "round-trip for {f:?} via {s:?}");
         }
     }
 
@@ -551,14 +652,14 @@ mod tests {
             Format::currency(0),
             Format::currency(2),
         ] {
-            let s = to_num_fmt(f);
-            assert_eq!(parse(&s), Some(f), "round-trip for {f:?} via {s:?}");
+            let s = t(f);
+            assert_eq!(p(&s), Some(f), "round-trip for {f:?} via {s:?}");
         }
     }
 
     #[test]
     fn to_num_fmt_general_is_string_general() {
-        assert_eq!(to_num_fmt(Format::GENERAL), "general");
+        assert_eq!(t(Format::GENERAL), "general");
     }
 
     #[test]
@@ -567,6 +668,6 @@ mod tests {
             kind: FormatKind::Scientific,
             decimals: 2,
         };
-        assert_eq!(parse(&to_num_fmt(f)), Some(f));
+        assert_eq!(p(&t(f)), Some(f));
     }
 }

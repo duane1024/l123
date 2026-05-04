@@ -341,6 +341,12 @@ pub(super) struct Workbook {
     pub(super) engine: IronCalcEngine,
     pub(super) cells: HashMap<Address, CellContents>,
     pub(super) cell_formats: HashMap<Address, Format>,
+    /// Interned token lists for `FormatKind::DateCustom` cells —
+    /// populated on xlsx load (per `Engine::used_cell_formats`) and
+    /// extended at edit time when a new custom date format is applied.
+    /// Read by [`format_number`] and [`to_num_fmt`] to render and
+    /// round-trip Excel date patterns that don't reduce to D1..D5.
+    pub(super) date_formats: l123_core::format::DateFormatTable,
     /// Workbook-wide default cell format set by `/Worksheet Global
     /// Format`. Cells without a `cell_formats` entry inherit this.
     /// Initialized to General.
@@ -480,6 +486,7 @@ impl Workbook {
             engine: IronCalcEngine::new().expect("IronCalc engine init"),
             cells: HashMap::new(),
             cell_formats: HashMap::new(),
+            date_formats: l123_core::format::DateFormatTable::new(),
             global_format: Format::GENERAL,
             international: International::default(),
             cell_text_styles: HashMap::new(),
@@ -529,6 +536,10 @@ impl WorkbookView for Workbook {
 
     fn international(&self) -> &International {
         &self.international
+    }
+
+    fn date_formats(&self) -> &l123_core::format::DateFormatTable {
+        &self.date_formats
     }
 }
 

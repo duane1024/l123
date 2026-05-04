@@ -3670,8 +3670,9 @@ impl App {
         for (addr, style) in engine.used_cell_text_styles() {
             cell_text_styles.insert(addr, style);
         }
+        let mut date_formats = l123_core::format::DateFormatTable::new();
         let mut cell_formats: HashMap<Address, Format> = HashMap::new();
-        for (addr, fmt) in engine.used_cell_formats() {
+        for (addr, fmt) in engine.used_cell_formats(&mut date_formats) {
             cell_formats.insert(addr, fmt);
         }
         let mut cell_alignments: HashMap<Address, Alignment> = HashMap::new();
@@ -3729,6 +3730,7 @@ impl App {
             engine,
             cells,
             cell_formats,
+            date_formats,
             global_format: Format::GENERAL,
             international: International::default(),
             cell_text_styles,
@@ -4135,7 +4137,13 @@ impl App {
         for (addr, style) in self.wb_mut().engine.used_cell_text_styles() {
             self.wb_mut().cell_text_styles.insert(addr, style);
         }
-        for (addr, fmt) in self.wb_mut().engine.used_cell_formats() {
+        // `used_cell_formats` interns into the workbook's date_formats
+        // table, so we have to split the &mut borrows carefully.
+        let parsed_formats = {
+            let wb = self.wb_mut();
+            wb.engine.used_cell_formats(&mut wb.date_formats)
+        };
+        for (addr, fmt) in parsed_formats {
             self.wb_mut().cell_formats.insert(addr, fmt);
         }
         for (addr, a) in self.wb_mut().engine.used_cell_alignments() {
@@ -4244,7 +4252,8 @@ impl App {
             .map(|(a, f)| (*a, *f))
             .collect();
         for (addr, fmt) in formats {
-            let _ = self.wb_mut().engine.set_cell_format(addr, fmt);
+            let wb = self.wb_mut();
+            let _ = wb.engine.set_cell_format(addr, fmt, &wb.date_formats);
         }
         // Push per-cell alignments so xlsx preserves the horizontal /
         // vertical / wrap settings imported (or assigned) on L123's side.

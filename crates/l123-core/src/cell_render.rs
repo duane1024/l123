@@ -267,13 +267,14 @@ pub fn render_value_in_cell(
     width: usize,
     format: Format,
     intl: &crate::International,
+    dates: &crate::format::DateFormatTable,
 ) -> Option<String> {
     if matches!(format.kind, FormatKind::Hidden) {
         return Some(" ".repeat(width));
     }
     match v {
         Value::Number(n) => {
-            let s = crate::format_number(*n, format, intl);
+            let s = crate::format_number(*n, format, intl, dates);
             if s.chars().count() > width && !matches!(format.kind, FormatKind::General) {
                 Some("*".repeat(width))
             } else {

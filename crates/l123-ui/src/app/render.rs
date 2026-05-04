@@ -238,6 +238,7 @@ fn render_own_width(
     width: usize,
     format: Format,
     intl: &International,
+    dates: &l123_core::format::DateFormatTable,
 ) -> String {
     match contents {
         CellContents::Empty => " ".repeat(width),
@@ -246,13 +247,13 @@ fn render_own_width(
             // never hit this branch from the planner caller.
             " ".repeat(width)
         }
-        CellContents::Constant(v) => {
-            render_value_in_cell(v, width, format, intl).unwrap_or_else(|| " ".repeat(width))
-        }
+        CellContents::Constant(v) => render_value_in_cell(v, width, format, intl, dates)
+            .unwrap_or_else(|| " ".repeat(width)),
         CellContents::Formula {
             cached_value: Some(v),
             ..
-        } => render_value_in_cell(v, width, format, intl).unwrap_or_else(|| " ".repeat(width)),
+        } => render_value_in_cell(v, width, format, intl, dates)
+            .unwrap_or_else(|| " ".repeat(width)),
         CellContents::Formula {
             cached_value: None, ..
         } => " ".repeat(width),
@@ -1558,7 +1559,8 @@ impl App {
     pub(super) fn format_tag_for_line1(&self) -> String {
         match self.wb().cells.get(&self.wb().pointer) {
             Some(CellContents::Constant(Value::Number(_))) | Some(CellContents::Formula { .. }) => {
-                match self.format_for_cell(self.wb().pointer).tag() {
+                let fmt = self.format_for_cell(self.wb().pointer);
+                match fmt.tag_with_dates(&self.wb().date_formats) {
                     Some(s) => format!("({s})"),
                     None => String::new(),
                 }
@@ -1798,8 +1800,13 @@ impl App {
                         }
                         Some(other) => {
                             let fmt = self.format_for_cell(addr);
-                            let s =
-                                render_own_width(other, w as usize, fmt, &self.wb().international);
+                            let s = render_own_width(
+                                other,
+                                w as usize,
+                                fmt,
+                                &self.wb().international,
+                                &self.wb().date_formats,
+                            );
                             RowInput::Rendered(apply_halign_to_rendered(&s, halign, w as usize))
                         }
                     }
@@ -2048,6 +2055,7 @@ impl App {
                                     span_w as usize,
                                     fmt,
                                     &self.wb().international,
+                                    &self.wb().date_formats,
                                 );
                                 let painted = apply_halign_to_rendered(&s, halign, span_w as usize);
                                 // Rendered values (numbers, formulas) have

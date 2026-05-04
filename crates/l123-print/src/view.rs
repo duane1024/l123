@@ -2,6 +2,7 @@
 //! workbook (today: `l123-ui::Workbook`). Keeps this crate off
 //! `Workbook` and off the engine.
 
+use l123_core::format::DateFormatTable;
 use l123_core::{Address, CellContents, Format, International, SheetId};
 
 /// Read-only access to the cells, column widths, and per-cell formats
@@ -12,4 +13,7 @@ pub trait WorkbookView {
     fn col_width(&self, sheet: SheetId, col: u16) -> u8;
     fn format_for_cell(&self, addr: Address) -> Format;
     fn international(&self) -> &International;
+    /// Workbook-scoped date pattern table — required to render
+    /// `FormatKind::DateCustom` cells back to their Excel pattern.
+    fn date_formats(&self) -> &DateFormatTable;
 }
