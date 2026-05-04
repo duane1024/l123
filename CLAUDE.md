@@ -142,6 +142,35 @@ No upward edges. If a type needs to cross layers, it probably belongs in
 
 ---
 
+## `crates/l123-ui/src/app/` module layout
+
+`App` has multiple `impl` blocks split across submodules. New code goes
+in the matching submodule, not into `mod.rs`.
+
+| File | Owns |
+|---|---|
+| `mod.rs` | `App` struct + remaining command impls (file/print/range/data/worksheet/global) |
+| `types.rs` | Leaf types: `Workbook`, `GlobalDefaults`, `PendingCommand`, `PromptNext`, `MenuState`, `JournalEntry`, … |
+| `keys.rs` | `handle_key` + per-mode `handle_key_*` |
+| `mouse.rs` | `handle_mouse`, icon-panel hit-testing, SmartIcon dispatch |
+| `macros.rs` | Macro lex/interpret, call stack, Learn recording, custom-menu |
+| `render.rs` | `render()`, panels, overlays, layout planners, buffer-probe accessors |
+| `async_ops.rs` | `tick`, async op queue, `worker_*` free fns |
+| `run.rs` | `run` / `run_with` / `event_loop` + `suspend_to_shell` |
+| `tests.rs` | The `#[cfg(test)] mod tests` body |
+
+Conventions:
+- A method called from another submodule needs `pub(super)`; otherwise
+  keep it private. Same for fields on types in `types.rs`.
+- Free helpers used in 2+ submodules live in `mod.rs` and are called as
+  `super::fn_name` from children. Submodule-local helpers stay private.
+- New leaf types go in `types.rs`. New unit tests append to `tests.rs`.
+- Keep `mod.rs` shrinking, not growing. The remaining `execute_*` /
+  `start_*` command families should keep moving into per-domain
+  submodules (e.g. `app/cmd/range.rs`) as the file grows further.
+
+---
+
 ## Project-specific conventions
 
 - `thiserror` for library error enums; `anyhow` only at binary edges.

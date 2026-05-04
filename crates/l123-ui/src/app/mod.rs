@@ -1,10 +1,12 @@
-//! The app loop: ratatui + crossterm, control panel + grid + status line.
+//! Top-level `App` state machine for the l123 TUI.
 //!
-//! Scope as of M1 cycle 2:
-//! - READY / LABEL / VALUE modes with first-character dispatch (LABEL only
-//!   implemented this cycle; VALUE lands in cycle 3).
-//! - `'` auto-prefixed labels. Enter commits; `/QY` quits.
-//! - Three-line control panel, mode indicator, cell readout.
+//! The implementation is split across submodules — see the
+//! "app/ module layout" section in `CLAUDE.md` for the full table and
+//! conventions. This file owns the `App` struct itself plus the
+//! remaining command impls (file / print / range / data / worksheet /
+//! global) that have not yet been split into per-domain submodules.
+//! Anything mode/render/macro/mouse/async/run-loop related lives in a
+//! sibling file; new code should land there too.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
