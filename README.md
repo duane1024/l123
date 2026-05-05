@@ -16,8 +16,8 @@ Its interaction model targets **Lotus 1-2-3 Release 3.4a for DOS**
 
 ## ✦ Status
 
-Actively developed. Tracking the milestone plan in
-[`docs/PLAN.md`](docs/PLAN.md):
+Currently `v1.1.1`, with all MVP milestones (M0–M10) shipped.
+Tracking the milestone plan in [`docs/PLAN.md`](docs/PLAN.md):
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -29,17 +29,27 @@ Actively developed. Tracking the milestone plan in
 | M5 | 3D sheets, GROUP, named ranges, undo | ✅ done |
 | M6 | Printing (ASCII, PDF, line-printer) and Range Search | ✅ done |
 | M7 | Graphs: 7 chart types, F10 view, SVG/PNG save | ✅ done |
-| M8 | R3.4 WYSIWYG icon panel with mouse support | ✅ done |
-| M9 | Macros: `/X`, `{BRANCH}`, `{IF}`, Learn | ✅ done |
-| M10 | Polish: startup splash, context help, themes | 🚧 in progress |
+| M8 | `/Data`: Fill, Sort, Query, Table, Distribution, Regression, Parse | ✅ done |
+| M9 | Macros: `/X`, `{BRANCH}`, `{IF}`, `{MENUBRANCH}`, Learn | ✅ done |
+| M10 | Polish: R3.4a WYSIWYG icon panel, startup splash, F1 context help, DOS theme | ✅ done |
+| M11 | Modern data import (JSON, Parquet, SQLite) and `/Range Compare` | 🚧 in progress |
+| M12 | `/Data External` (live SQL: SQLite, Postgres) | 📋 planned |
+| M13 | Alt-F10 ADDIN: Data Workbench transform overlay | 📋 planned |
 
-API, keybindings, and file paths may still change before v1.0.
+The MVP slice is feature-complete and stable. Currently 232 acceptance
+transcripts under `tests/acceptance/` lock the authenticity contract
+(SPEC §20) plus a tutorial-derived suite (T01–T12) tracking the 1-2-3
+R3.1 Tutorial chapters end-to-end.
 
 ---
 
 ## ✦ Install
 
 ### Homebrew (macOS / Linux)
+
+[Homebrew](https://brew.sh) is the standard package manager for macOS
+(and works on Linux too). If you don't already have it, install it
+first from [brew.sh](https://brew.sh), then:
 
 ```bash
 brew install duane1024/l123/l123
@@ -90,23 +100,32 @@ The keyboard *is* the product.
 | Key | What it does |
 |---|---|
 | `/` | Open the slash menu |
+| `:` | Open the `:` (WYSIWYG) menu |
 | First letter | Descend into a menu item (no `Enter` needed) |
 | Arrows / `Tab` | Move pointer; during entry, commit-and-move |
 | `Enter` | Commit cell entry |
 | `Esc` | Back out one level (menu, prompt, POINT anchor) |
-| `Ctrl-Break` | Abort to READY from anywhere |
+| `Ctrl-Break` | Abort to READY from anywhere; cancel a WAIT op |
 | `.` (in POINT) | Cycle which corner of the range is anchored |
-| `F1` | Context help |
+| `F1` | Context help (824-page R3.1 manual, navigable) |
 | `F2` | Edit current cell |
-| `F3` | List named ranges |
+| `F3` | List named ranges (overlay; works in GOTO and prompts) |
 | `F4` | Cycle `$` absoluteness in a reference |
-| `F5` | GOTO cell |
+| `F5` | GOTO cell or named range |
+| `F7` | Repeat last `/Data Query` |
+| `F8` | Repeat last `/Data Table` |
 | `F9` | Recalculate |
 | `F10` | Full-screen graph view |
+| `Alt-F2` | STEP — single-step macro execution |
+| `Alt-F3` | RUN — invoke a macro by name |
 | `Alt-F4` | Undo |
+| `Alt-F5` | LEARN — toggle keystroke recording |
+| `Alt-`*letter* | Run macro `\`*letter* (e.g. `Alt-A` → `\A`) |
 | `Ctrl-PgUp` / `Ctrl-PgDn` | Previous / next sheet |
+| `Ctrl-End` then `Ctrl-PgUp/PgDn` | Previous / next open file |
 
-Mouse is supported for the WYSIWYG icon panel (17 icons, R3.4a layout).
+Mouse is supported for the WYSIWYG icon panel (17 icons, R3.4a layout)
+plus cell click, drag-select, scroll wheel, and POINT extend.
 
 Formulas use 1-2-3 syntax: `@SUM(A1..A5)`, not `=SUM(A1:A5)`. The `@`
 sigil and `..` separator are required. `#AND#`, `#OR#`, `#NOT#` are the
@@ -121,36 +140,80 @@ cell with dashes.
 
 ## ✦ What works today
 
+**Core UX**
+
 - Three-line control panel with live mode indicator
 - 13 modes (READY, LABEL, VALUE, EDIT, POINT, MENU, FILES, NAMES, HELP,
   ERROR, WAIT, FIND, STAT)
 - Full slash-menu tree: every path in `docs/MENU.md` is reachable; MVP
   leaves execute, non-MVP leaves show "Not implemented yet" in line 3
-- `/Worksheet`, `/Range`, `/Copy`, `/Move`, `/File`, `/Quit` MVP slices
-- `.xlsx` round-trip through IronCalc; `.csv` import and export
+- POINT mode with `.` corner cycle, F3 named-range picker, typed
+  addresses, and mouse drag-select
+- Async WAIT mode for long ops (file load/save, recalc, large imports)
+  with progress bar and Ctrl-Break cancellation
+
+**Worksheet, Range, File**
+
+- `/Worksheet`, `/Range`, `/Copy`, `/Move`, `/File`, `/Quit` —
+  full menus implemented
+- `.xlsx` round-trip through IronCalc (formulas, alignment, borders,
+  comments, fills, fonts, frozen panes, hidden sheets, merges,
+  sheet color, tables); `.csv` import and export
+- `.WK3` read (values, formulas, basic styles, column widths) via the
+  optional `wk3` cargo feature, gated behind a local `ironcalc_lotus`
+  fork — see CLAUDE.md
 - 3D workbooks: `A..IV` sheets, `A:B3..C:D5` ranges, GROUP mode
-- Named ranges, `@` function MVP set (see `docs/SPEC.md` §15)
-- Command-journal undo, toggleable via `/WGD Other Undo`
-- Multi-file sessions (`/File Open Before|After`, Ctrl-End navigation)
+- Named ranges (Create/Delete/Reset/Labels/Note/Table/Undefine);
+  `@` function set including the legacy `@D360`, `@DGET`, `@REPLACE`
+- Command-journal undo (Alt-F4), toggleable via `/WGD Other Undo`
+- Multi-file sessions (`/File Open Before|After`, Ctrl-End navigation,
+  `/File List`)
+
+**Print, Graph, Data**
+
 - `/Print File` to ASCII, PDF, or line-printer output; headers, footers,
   margins, page-length, formatted / unformatted / as-displayed /
-  cell-formulas modes; `|` in first column hides rows from print
+  cell-formulas modes; column page breaks; `|` in first column hides
+  rows from print
 - `/Range Search Formulas|Labels|Both` Find and Replace
 - `/Graph` tree: Line, Bar, XY, Stack, Pie, HLCO, Mixed; Titles, Legend,
-  Scale, Grid, Color/B&W, Data-Labels
+  Scale, Grid, Color/B&W, Data-Labels; Name Create/Use/Delete/Reset/Table
 - F10 / `/Graph View` full-screen rendering with Unicode bar + line
-  output; Kitty / iTerm2 / Sixel image support via ratatui-image
+  output; Kitty / iTerm2 / Sixel image support via `ratatui-image`
 - `/Graph Save` to SVG (and plotters PNG output for all chart types)
-- R3.4a WYSIWYG icon panel: all 17 icons, mouse-wired
+- `/Data` tree (full): Fill, Sort (with extra keys), Query
+  (Find/Extract/Unique/Delete/Modify, F7 repeat), Table 1/2 (F8 repeat),
+  Distribution (with Unicode-bar histogram), Regression, Parse, Matrix
+
+**WYSIWYG, Macros, Help**
+
+- R3.4a WYSIWYG icon panel: all 17 icons, mouse-wired, hover hints
+- `:` (WYSIWYG) menu: Format (Bold, Color, Alignment), Display (Mode,
+  Grid), Special (Copy, Move, Color), Worksheet status; xlsx round-trip
+- Macros: `/X` legacy commands; `{BRANCH}`, `{IF}`, `{LET}`, `{PUT}`,
+  `{GETLABEL}`, `{GETNUMBER}`, `{MENUBRANCH}`, `{QUIT}`, `{?}` pause,
+  `{BEEP}`, special-key tokens, subroutines, `\0` autoexec
+- `/Worksheet Learn Range` keystroke recording (Alt-F5 toggle, Alt-F2
+  STEP, Alt-F3 RUN)
+- F1 context help: full 1-2-3 R3.1 reference manual (824 pages),
+  context-aware per mode
 - Startup splash screen
-- Column-width options (`/WGC`, range-level set/reset)
+- DOS theme (black-on-cyan headers) via `--theme dos`, `L123_THEME`,
+  or `theme=` in `~/.l123/L123.CNF`
+- Auto-contrast for xlsx cells with light fills on dark terminals
 
 ## ✦ Coming
 
-- Context help (F1), CRT themes, LMBCS compose key (M10, active)
-- `/Data` tree: Fill, Sort, Query, Table, Distribution, Regression, Parse
-- Macros: `/X`, `{BRANCH}`, `{IF}`, `{MENUBRANCH}`, `/Worksheet Learn`
-- `.wk3` read-only import (values)
+- **M11** `/File Import Json|Jsonl|Parquet|Sqlite` — modern data
+  loaders with type inference; `/Range Compare` for diffing two ranges
+- **M12** `/Data External` — live SQL backing ranges (SQLite, Postgres)
+  with `/DEC Connect`, `/DEU Use`, `/DER Refresh`; xlsx persistence of
+  the binding
+- **M13** Alt-F10 ADDIN — built-in Data Workbench overlay with a
+  VisiData-inspired transform stack (Sort, RegexFilter, Frequency,
+  Describe) and value write-back
+- Stretch: LMBCS compose key (Alt-F1), additional CRT themes (green,
+  amber, classic blue-on-black), APP1/APP2/APP3 plug-in slots
 
 ---
 
