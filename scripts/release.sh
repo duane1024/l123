@@ -101,10 +101,20 @@ if ! grep -q "^version = \"${new}\"$" Cargo.toml; then
   exit 1
 fi
 
+# Bump the man page's .TH header: date + version string.
+manpage="crates/l123/man/l123.1"
+today="$(date +%Y-%m-%d)"
+sed -i '' -E "s/^\.TH L123 1 \"[0-9-]+\" \"l123 [^\"]+\"/.TH L123 1 \"${today}\" \"l123 ${new}\"/" "$manpage"
+
+if ! grep -q "^\.TH L123 1 \"${today}\" \"l123 ${new}\"" "$manpage"; then
+  echo "error: ${manpage} .TH line did not get rewritten as expected" >&2
+  exit 1
+fi
+
 # Refresh lockfile so the new version flows through.
 cargo build --workspace --quiet
 
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock "$manpage"
 git commit -m "Bump to ${new}"
 
 git tag -a "$tag" -m "l123 ${new}"
