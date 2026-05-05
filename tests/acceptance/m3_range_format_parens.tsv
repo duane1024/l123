@@ -1,0 +1,71 @@
+# /Range Format Other Parentheses Yes/No — wrap numeric output in
+# parentheses regardless of sign. Toggleable independently of the
+# active format kind.
+
+# Widen column A so the parenthesized currency body fits (10 chars).
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 2
+ENTER
+
+KEYS 1234.5
+ENTER
+DOWN
+KEYS -1234.5
+ENTER
+HOME
+
+# Set Currency 2 first, then turn parens on.
+KEY /
+KEY R
+KEY F
+KEY C
+ENTER
+ENTER
+ASSERT_PANEL_L1   A:A1: (C2) [W12] 1234.5
+ASSERT_CELL       A:A1  $1234.50
+
+KEY /
+KEY R
+KEY F
+KEY O
+KEY P
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Yes
+ASSERT_PANEL_L2   No
+KEY Y
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+ASSERT_CELL       A:A1  ($1234.50)
+
+# Negative still wraps (parens flag wraps both signs).
+DOWN
+ASSERT_PANEL_L1   A:A2: (G) [W12] -1234.5
+KEY /
+KEY R
+KEY F
+KEY C
+ENTER
+ENTER
+KEY /
+KEY R
+KEY F
+KEY O
+KEY P
+KEY Y
+ENTER
+ASSERT_CELL       A:A2  (-$1234.50)
+
+# Turn parens off — back to plain.
+KEY /
+KEY R
+KEY F
+KEY O
+KEY P
+KEY N
+ENTER
+ASSERT_CELL       A:A2  -$1234.50

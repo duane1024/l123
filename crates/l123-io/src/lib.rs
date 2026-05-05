@@ -4,5 +4,6 @@
 //! crate owns the formats that sit outside the IronCalc backend — CSV
 //! today, and the legacy `.wk3` reader at stretch-tier.
 
+pub mod cell_formats;
 pub mod csv;
 pub mod formula_sources;

@@ -1,0 +1,40 @@
+# /Range Format Other Label — when (L) is set, value-style input is
+# coerced to a label. Typing `42` on a (L) cell stores it as a label,
+# not as a number.
+
+# Seed A1 with a number so the format tag has something to attach to.
+KEYS 1
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 1
+
+# Apply (L) to A1.
+KEY /
+KEY R
+KEY F
+KEY O
+KEY L
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (L) 1
+
+# Type `42` over the existing 1. Without (L) this would enter VALUE
+# mode; under (L) it enters LABEL mode (default `'` prefix) and
+# stores the digits as a label.
+KEYS 42
+ASSERT_MODE       LABEL
+ENTER
+ASSERT_MODE       READY
+
+# A1 is now a label. Format tag goes away (labels don't show one);
+# the cell renders left-aligned as text.
+ASSERT_PANEL_L1   A:A1: '42
+ASSERT_CELL       A:A1  42
+
+# A2 has no per-cell (L) — typing `99` enters VALUE mode as usual.
+DOWN
+KEYS 99
+ASSERT_MODE       VALUE
+ENTER
+ASSERT_PANEL_L1   A:A2: (G) 99

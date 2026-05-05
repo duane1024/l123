@@ -1086,6 +1086,7 @@ pub(super) enum QueuedOp {
         engine: IronCalcEngine,
         path: PathBuf,
         formula_sources: HashMap<Address, String>,
+        cell_format_extras: l123_io::cell_formats::CellFormatExtras,
     },
     /// `/File Import Numbers` — workbook engine taken out; the
     /// worker fills it from the parsed CSV starting at `origin`.
@@ -1579,6 +1580,21 @@ pub(super) enum PendingCommand {
     RangeFormat {
         format: Format,
     },
+    /// `/Range Format Other Parentheses Yes|No` — toggle the parens
+    /// flag on each cell's effective format. Preserves the cell's
+    /// existing kind/decimals (or inherits from global if no per-cell
+    /// format is set, then materializes the inherit).
+    RangeParens {
+        value: bool,
+    },
+    /// `/Range Format Other Color Negative <color>` (or Reset, with
+    /// `color: None`). Sets the per-cell format's `negative_color`
+    /// override; cells without a per-cell format inherit the global
+    /// before being modified, then store the result as a per-cell
+    /// override.
+    RangeNegColor {
+        color: Option<RgbColor>,
+    },
     /// `:Format Bold|Italic|Underline Set|Clear`: `bits` names which
     /// attributes the command touches; `set=true` ORs them in, `false`
     /// clears them.  `:Format Reset` sends `{bold,italic,underline}`
@@ -1807,6 +1823,8 @@ impl PendingCommand {
             PendingCommand::MoveTo { .. } => "Enter range to move TO:",
             PendingCommand::RangeLabel { .. } => "Enter range for label-prefix change:",
             PendingCommand::RangeFormat { .. } => "Enter range to format:",
+            PendingCommand::RangeParens { .. } => "Enter range for parentheses change:",
+            PendingCommand::RangeNegColor { .. } => "Enter range for negative-color change:",
             PendingCommand::RangeTextStyle { .. } => "Enter range for style:",
             PendingCommand::RangeAlignment { .. } => "Enter range for alignment:",
             PendingCommand::RangeColor { .. } => "Enter range for color:",

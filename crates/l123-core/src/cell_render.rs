@@ -285,6 +285,13 @@ pub fn render_value_in_cell(
                 Some(fmt_str) => crate::format_datetime_excel(*n, fmt_str),
                 None => crate::format_number(*n, format, intl),
             };
+            // `(L)` Label-only: render numerics like a label — left-aligned,
+            // truncate-to-width rather than the asterisk overflow that
+            // numeric formats use. The cell still stores the number; only
+            // the visual treatment changes.
+            if matches!(format.kind, FormatKind::LabelOnly) {
+                return Some(right_pad(&s, width, false));
+            }
             if s.chars().count() > width && !matches!(format.kind, FormatKind::General) {
                 Some("*".repeat(width))
             } else {

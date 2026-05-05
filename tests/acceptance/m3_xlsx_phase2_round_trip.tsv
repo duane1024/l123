@@ -1,0 +1,136 @@
+# Phase-2 cell-format extras round-trip through xlsx via the
+# l123/cell_formats.tsv sidecar. Covers:
+#   - (+) PlusMinus kind  (no Excel equivalent)
+#   - (T) Text-shows-formula kind
+#   - (L) Label-only kind
+#   - parens flag on a Currency cell
+#   - negative_color override
+
+SIZE 200 25
+RM_FILE $TMPDIR/m3_xlsx_phase2_round_trip.xlsx
+
+# Widen column A so parenthesized currency fits.
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 2
+ENTER
+
+# A1 = 3 with (+) bar-chart format.
+KEYS 3
+ENTER
+HOME
+KEY /
+KEY R
+KEY F
+KEY +
+ENTER
+ASSERT_PANEL_L1   A:A1: (+) [W12] 3
+ASSERT_CELL       A:A1  +++
+
+# A2 = 1234.5 with (C2) and Parentheses Yes.
+DOWN
+KEYS 1234.5
+ENTER
+HOME
+DOWN
+KEY /
+KEY R
+KEY F
+KEY C
+ENTER
+ENTER
+KEY /
+KEY R
+KEY F
+KEY O
+KEY P
+KEY Y
+ENTER
+ASSERT_PANEL_L1   A:A2: (C2) [W12] 1234.5
+ASSERT_CELL       A:A2  ($1234.50)
+
+# A3 = -50 with (C0) + negative-color Red.
+DOWN
+KEYS -50
+ENTER
+HOME
+DOWN
+DOWN
+KEY /
+KEY R
+KEY F
+KEY C
+KEY 0
+ENTER
+ENTER
+KEY /
+KEY R
+KEY F
+KEY O
+KEY C
+KEY N
+KEY R
+ENTER
+ASSERT_PANEL_L1   A:A3: (C0) [W12] -50
+HOME
+DOWN
+DOWN
+ASSERT_POINTER    A:A3
+
+# A4 = formula +A1*2, with (T) Text-shows-formula.
+DOWN
+ASSERT_POINTER    A:A4
+KEYS +A1*2
+ENTER
+HOME
+DOWN
+DOWN
+DOWN
+ASSERT_POINTER    A:A4
+KEY /
+KEY R
+KEY F
+KEY T
+ENTER
+ASSERT_PANEL_L1   A:A4: (T) [W12] +A1*2
+ASSERT_CELL       A:A4  +A1*2
+
+# Save → Retrieve.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m3_xlsx_phase2_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/m3_xlsx_phase2_round_trip.xlsx
+ENTER
+ASSERT_MODE       READY
+
+# Verify each phase-2 format survived the round-trip.
+ASSERT_POINTER    A:A1
+ASSERT_PANEL_L1   A:A1: (+) [W12] 3
+ASSERT_CELL       A:A1  +++
+
+DOWN
+ASSERT_PANEL_L1   A:A2: (C2) [W12] 1234.5
+ASSERT_CELL       A:A2  ($1234.50)
+
+DOWN
+ASSERT_POINTER    A:A3
+HOME
+DOWN
+DOWN
+ASSERT_PANEL_L1   A:A3: (C0) [W12] -50
+
+# A4 = formula reloaded with (T) format → renders the source.
+DOWN
+ASSERT_POINTER    A:A4
+ASSERT_PANEL_L1   A:A4: (T) [W12] +A1*2
+ASSERT_CELL       A:A4  +A1*2

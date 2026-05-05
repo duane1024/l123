@@ -1,6 +1,7 @@
 //! Cell display formats and their parenthesized tags as shown in the
 //! control panel (e.g. `(C2)` = Currency 2dp).  See SPEC §12.
 
+use crate::color::RgbColor;
 use crate::international::{CurrencyPosition, DateIntl, International, NegativeStyle, TimeIntl};
 use std::fmt;
 
@@ -35,40 +36,82 @@ pub struct Format {
     pub kind: FormatKind,
     /// Decimal places, 0..=15. Ignored for kinds that don't use it.
     pub decimals: u8,
+    /// `/Range Format Other Parentheses Yes` wraps the rendered numeric
+    /// body in `()` regardless of sign. Independent of `kind` so it can
+    /// layer on top of Fixed/Currency/Comma/etc. Ignored for the
+    /// non-numeric kinds (General/Text/Hidden/LabelOnly/Automatic/Reset).
+    pub parens: bool,
+    /// `/Range Format Other Color Negative <color>` — when set, negative
+    /// numeric values render with this foreground color, overriding any
+    /// explicit per-cell font color. `None` means inherit normally.
+    /// Ignored for non-numeric kinds.
+    pub negative_color: Option<RgbColor>,
 }
 
 impl Format {
     pub const GENERAL: Format = Format {
         kind: FormatKind::General,
         decimals: 0,
+        parens: false,
+        negative_color: None,
     };
     pub const RESET: Format = Format {
         kind: FormatKind::Reset,
         decimals: 0,
+        parens: false,
+        negative_color: None,
     };
 
     pub fn fixed(d: u8) -> Self {
         Self {
             kind: FormatKind::Fixed,
             decimals: d.min(15),
+            parens: false,
+            negative_color: None,
         }
     }
     pub fn currency(d: u8) -> Self {
         Self {
             kind: FormatKind::Currency,
             decimals: d.min(15),
+            parens: false,
+            negative_color: None,
         }
     }
     pub fn percent(d: u8) -> Self {
         Self {
             kind: FormatKind::Percent,
             decimals: d.min(15),
+            parens: false,
+            negative_color: None,
         }
     }
     pub fn comma(d: u8) -> Self {
         Self {
             kind: FormatKind::Comma,
             decimals: d.min(15),
+            parens: false,
+            negative_color: None,
+        }
+    }
+
+    /// Return a copy of `self` with the parentheses flag turned on.
+    pub fn with_parens(self) -> Self {
+        Self {
+            parens: true,
+            ..self
+        }
+    }
+
+    /// Construct a format from `kind` with default modifiers
+    /// (`decimals: 0`, no parens, no negative-color override).
+    /// Convenience for kinds that don't carry a decimals count.
+    pub fn from_kind(kind: FormatKind) -> Self {
+        Self {
+            kind,
+            decimals: 0,
+            parens: false,
+            negative_color: None,
         }
     }
 
@@ -130,7 +173,7 @@ pub fn format_number(n: f64, format: Format, intl: &International) -> String {
     let d = format.decimals as usize;
     let dec = intl.punctuation.decimal_char();
     let thou = intl.punctuation.thousands_sep();
-    match format.kind {
+    let body = match format.kind {
         Fixed => swap_decimal(format!("{n:.d$}"), dec),
         Scientific => swap_decimal(format!("{n:.d$e}"), dec),
         Currency => {
@@ -163,7 +206,19 @@ pub fn format_number(n: f64, format: Format, intl: &International) -> String {
         TimeHmsAmPm => format_time_12h(n, true),
         TimeHmAmPm => format_time_12h(n, false),
         Text | Hidden | LabelOnly => swap_decimal(crate::contents::format_number_general(n), dec),
+    };
+    if format.parens && parens_apply_to(format.kind) {
+        format!("({body})")
+    } else {
+        body
     }
+}
+
+/// `parens` is meaningful only for the numeric format kinds — wrapping
+/// dates/times or non-numeric tags would be visual noise.
+fn parens_apply_to(kind: FormatKind) -> bool {
+    use FormatKind::*;
+    matches!(kind, Fixed | Scientific | Currency | Comma | Percent)
 }
 
 /// Convert a Lotus serial date to (year, month, day). The serial is
@@ -775,55 +830,22 @@ mod format_number_tests {
     #[test]
     fn scientific_uses_e_notation() {
         let i = intl_default();
-        assert_eq!(
-            format_number(
-                1234.5,
-                Format {
-                    kind: FormatKind::Scientific,
-                    decimals: 2
-                },
-                &i
-            ),
-            "1.23e3"
-        );
+        let sci2 = Format {
+            kind: FormatKind::Scientific,
+            decimals: 2,
+            parens: false,
+            negative_color: None,
+        };
+        assert_eq!(format_number(1234.5, sci2, &i), "1.23e3");
     }
 
     #[test]
     fn plus_minus_bar_draws_bars() {
         let i = intl_default();
-        assert_eq!(
-            format_number(
-                3.0,
-                Format {
-                    kind: FormatKind::PlusMinus,
-                    decimals: 0
-                },
-                &i
-            ),
-            "+++"
-        );
-        assert_eq!(
-            format_number(
-                -2.0,
-                Format {
-                    kind: FormatKind::PlusMinus,
-                    decimals: 0
-                },
-                &i
-            ),
-            "--"
-        );
-        assert_eq!(
-            format_number(
-                0.0,
-                Format {
-                    kind: FormatKind::PlusMinus,
-                    decimals: 0
-                },
-                &i
-            ),
-            ""
-        );
+        let pm = Format::from_kind(FormatKind::PlusMinus);
+        assert_eq!(format_number(3.0, pm, &i), "+++");
+        assert_eq!(format_number(-2.0, pm, &i), "--");
+        assert_eq!(format_number(0.0, pm, &i), "");
     }
 
     fn intl_with(p: Punctuation) -> International {
@@ -880,17 +902,13 @@ mod format_number_tests {
     fn scientific_under_punct_b_swaps_decimal() {
         let i = intl_with(Punctuation::B);
         // The 'e' is just an exponent marker; the decimal is what swaps.
-        assert_eq!(
-            format_number(
-                1234.5,
-                Format {
-                    kind: FormatKind::Scientific,
-                    decimals: 2
-                },
-                &i
-            ),
-            "1,23e3"
-        );
+        let sci2 = Format {
+            kind: FormatKind::Scientific,
+            decimals: 2,
+            parens: false,
+            negative_color: None,
+        };
+        assert_eq!(format_number(1234.5, sci2, &i), "1,23e3");
     }
 
     use crate::international::{CurrencyConfig, CurrencyPosition, NegativeStyle};
@@ -957,6 +975,57 @@ mod format_number_tests {
     }
 
     #[test]
+    fn parens_flag_wraps_currency_positive() {
+        let i = intl_default();
+        let f = Format::currency(2).with_parens();
+        assert_eq!(format_number(1234.5, f, &i), "($1234.50)");
+    }
+
+    #[test]
+    fn parens_flag_wraps_currency_negative_too() {
+        // The flag wraps regardless of sign — the negative sign survives
+        // inside the parens (still distinguishable from a positive).
+        let i = intl_default();
+        let f = Format::currency(2).with_parens();
+        assert_eq!(format_number(-1234.5, f, &i), "(-$1234.50)");
+    }
+
+    #[test]
+    fn parens_flag_wraps_fixed() {
+        let i = intl_default();
+        let f = Format::fixed(2).with_parens();
+        assert_eq!(format_number(42.0, f, &i), "(42.00)");
+    }
+
+    #[test]
+    fn automatic_renders_identically_to_general() {
+        // SPEC §12 calls (A) "Automatic (type-sniffs)". L123's MVP
+        // delegates that sniffing to entry-time inference (see
+        // `parse_typed_value`'s `inferred_format`); the format-time
+        // path treats Automatic as an alias of General. This test
+        // locks that contract so a future change to either branch
+        // keeps the two in lockstep until real sniffing lands.
+        let i = intl_default();
+        let auto = Format::from_kind(FormatKind::Automatic);
+        for &n in &[0.0, 1.0, -1.0, 1.5, 1234567.89, 0.0001, -1e10, 36540.0] {
+            assert_eq!(
+                format_number(n, auto, &i),
+                format_number(n, Format::GENERAL, &i),
+                "Automatic must alias General for n={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn parens_flag_skips_general_and_text() {
+        // General/Text/Hidden/LabelOnly/Automatic/Reset don't wrap —
+        // parens is meaningful only for the numeric format kinds.
+        let i = intl_default();
+        let g = Format::GENERAL.with_parens();
+        assert_eq!(format_number(42.0, g, &i), "42");
+    }
+
+    #[test]
     fn currency_uses_configured_symbol() {
         let i = International {
             currency: CurrencyConfig {
@@ -974,16 +1043,10 @@ mod format_number_tests {
     use crate::international::DateIntl;
 
     fn fmt_d4() -> Format {
-        Format {
-            kind: FormatKind::DateLongIntl,
-            decimals: 0,
-        }
+        Format::from_kind(FormatKind::DateLongIntl)
     }
     fn fmt_d5() -> Format {
-        Format {
-            kind: FormatKind::DateShortIntl,
-            decimals: 0,
-        }
+        Format::from_kind(FormatKind::DateShortIntl)
     }
 
     fn intl_with_date(d: DateIntl) -> International {
@@ -1040,22 +1103,13 @@ mod format_number_tests {
     }
 
     fn fmt_d1() -> Format {
-        Format {
-            kind: FormatKind::DateDmy,
-            decimals: 0,
-        }
+        Format::from_kind(FormatKind::DateDmy)
     }
     fn fmt_d2() -> Format {
-        Format {
-            kind: FormatKind::DateDm,
-            decimals: 0,
-        }
+        Format::from_kind(FormatKind::DateDm)
     }
     fn fmt_d3() -> Format {
-        Format {
-            kind: FormatKind::DateMy,
-            decimals: 0,
-        }
+        Format::from_kind(FormatKind::DateMy)
     }
 
     #[test]
@@ -1085,16 +1139,10 @@ mod format_number_tests {
     use crate::international::TimeIntl;
 
     fn fmt_d8() -> Format {
-        Format {
-            kind: FormatKind::TimeLongIntl,
-            decimals: 0,
-        }
+        Format::from_kind(FormatKind::TimeLongIntl)
     }
     fn fmt_d9() -> Format {
-        Format {
-            kind: FormatKind::TimeShortIntl,
-            decimals: 0,
-        }
+        Format::from_kind(FormatKind::TimeShortIntl)
     }
 
     fn intl_with_time(t: TimeIntl) -> International {
@@ -1151,16 +1199,10 @@ mod format_number_tests {
     }
 
     fn fmt_d6() -> Format {
-        Format {
-            kind: FormatKind::TimeHmsAmPm,
-            decimals: 0,
-        }
+        Format::from_kind(FormatKind::TimeHmsAmPm)
     }
     fn fmt_d7() -> Format {
-        Format {
-            kind: FormatKind::TimeHmAmPm,
-            decimals: 0,
-        }
+        Format::from_kind(FormatKind::TimeHmAmPm)
     }
 
     #[test]

@@ -542,6 +542,19 @@ and is reused by every later milestone that needs it.
 | `.wk3` format underdocumented for writing | High | Low | Stretch goal; values-only read is the MVP-plus target; write deferred. |
 | Author (you) burns out on completeness | Med | High | MVP is sufficient as a real product. Complete / Stretch tiers are separable releases. |
 
+### 5.1 Known format-render stubs
+
+Format kinds that are wired through the menu/storage layer but render
+identically to General until smarter behavior lands. Locked by unit
+tests in `l123-core/src/format.rs` so the alias contract doesn't drift:
+
+- **`(A)` Automatic** — SPEC §12 calls it "type-sniffs". The MVP delegates
+  sniffing to entry-time inference (`parse_typed_value`'s `inferred_format`
+  picks Currency/Comma/Percent from typed `$ , %`). Setting `(A)` after
+  the fact today just renders as General. Future work: remember the
+  cell's typed-input shape (date glyphs, currency markers) and pick a
+  best format on render.
+
 ---
 
 ## 6. Test strategy

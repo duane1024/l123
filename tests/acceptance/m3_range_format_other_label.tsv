@@ -1,0 +1,19 @@
+# /Range Format Other Label — set the cell's format tag to (L).
+# Per SPEC §12, Label-only suppresses numeric type-sniffing. This
+# transcript locks down the tag wiring only; full input-coercion
+# semantics come in a later phase.
+
+KEYS 99
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 99
+
+KEY /
+KEY R
+KEY F
+KEY O
+KEY L
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (L) 99

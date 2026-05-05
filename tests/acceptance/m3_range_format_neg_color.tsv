@@ -1,0 +1,69 @@
+# /Range Format Other Color Negative <color> — tint negative values
+# in a per-format color. Reset clears the override.
+
+KEYS 50
+ENTER
+DOWN
+KEYS -50
+ENTER
+HOME
+
+# Currency 0 on both cells.
+KEY /
+KEY R
+KEY F
+KEY C
+KEY 0
+ENTER
+DOWN
+ENTER
+HOME
+
+ASSERT_PANEL_L1   A:A1: (C0) 50
+ASSERT_CELL_FG    A:A1  none
+
+# /Range Format Other Color Negative Red applied to A1..A2.
+KEY /
+KEY R
+KEY F
+KEY O
+KEY C
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Negative
+ASSERT_PANEL_L2   Reset
+KEY N
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Black
+ASSERT_PANEL_L2   White
+ASSERT_PANEL_L2   Red
+KEY R
+ASSERT_MODE       POINT
+DOWN
+ENTER
+ASSERT_MODE       READY
+
+# A1 is positive — no fg override applied.
+ASSERT_CELL_FG    A:A1  none
+
+# A2 is negative — rendered with the red override.
+# (Pointer must NOT be on A2, since the highlight style on the pointer
+# cell suppresses any per-cell color override — that's how 1-2-3 keeps
+# the selection visually loud.)
+HOME
+ASSERT_POINTER    A:A1
+ASSERT_CELL_FG    A:A2  FF0000
+
+# /Range Format Other Color Reset on A2 — drops the override. Move
+# pointer to A2 in POINT mode so the range is A2..A2 (single cell).
+DOWN
+KEY /
+KEY R
+KEY F
+KEY O
+KEY C
+KEY R
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+HOME
+ASSERT_CELL_FG    A:A2  none

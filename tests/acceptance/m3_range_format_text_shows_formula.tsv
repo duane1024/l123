@@ -1,0 +1,52 @@
+# /Range Format Text — show the formula source instead of the
+# computed value (SPEC §12).
+
+# Widen the column so the formula source `+A2*2` fits.
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 5
+ENTER
+
+# A1 = 5, A2 = +A1*2 (a formula), A3 = a constant.
+KEYS 5
+ENTER
+DOWN
+KEYS +A1*2
+ENTER
+DOWN
+KEYS 99
+ENTER
+
+HOME
+ASSERT_PANEL_L1   A:A1: (G) [W15] 5
+
+# Default (G) renders A2 as the computed value 10.
+DOWN
+ASSERT_CELL       A:A2  10
+
+# /RFT applied to A2 → cell shows the formula source `+A1*2`.
+KEY /
+KEY R
+KEY F
+KEY T
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A2: (T) [W15] +A1*2
+ASSERT_CELL       A:A2  +A1*2
+
+# Move off A2 to verify the formula text is still shown unhighlighted.
+DOWN
+ASSERT_CELL       A:A2  +A1*2
+
+# Constant cell with (T) keeps the numeric output (no formula source
+# to show).
+KEY /
+KEY R
+KEY F
+KEY T
+ENTER
+ASSERT_CELL       A:A3  99

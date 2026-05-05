@@ -57,7 +57,12 @@ pub fn parse(raw: &str) -> Option<Format> {
     // appear in numeric formats — once we've matched a date or time,
     // we don't fall through to the currency/scientific classifier.
     if let Some(kind) = classify_datetime(positive) {
-        return Some(Format { kind, decimals: 0 });
+        return Some(Format {
+            kind,
+            decimals: 0,
+            parens: false,
+            negative_color: None,
+        });
     }
 
     let stripped = strip_cosmetic(positive);
@@ -71,12 +76,16 @@ pub fn parse(raw: &str) -> Option<Format> {
         return Some(Format {
             kind: FormatKind::Percent,
             decimals,
+            parens: false,
+            negative_color: None,
         });
     }
     if stripped.contains('E') || stripped.contains('e') {
         return Some(Format {
             kind: FormatKind::Scientific,
             decimals,
+            parens: false,
+            negative_color: None,
         });
     }
     if stripped.contains('$')
@@ -87,18 +96,24 @@ pub fn parse(raw: &str) -> Option<Format> {
         return Some(Format {
             kind: FormatKind::Currency,
             decimals,
+            parens: false,
+            negative_color: None,
         });
     }
     if stripped.contains('#') || stripped.contains(',') {
         return Some(Format {
             kind: FormatKind::Comma,
             decimals,
+            parens: false,
+            negative_color: None,
         });
     }
     if stripped.contains('0') {
         return Some(Format {
             kind: FormatKind::Fixed,
             decimals,
+            parens: false,
+            negative_color: None,
         });
     }
 
@@ -414,14 +429,18 @@ mod tests {
             parse("0.00E+00"),
             Some(Format {
                 kind: FormatKind::Scientific,
-                decimals: 2
+                decimals: 2,
+                parens: false,
+                negative_color: None,
             })
         );
         assert_eq!(
             parse("0E+00"),
             Some(Format {
                 kind: FormatKind::Scientific,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -464,28 +483,36 @@ mod tests {
             parse("m/yyyy"),
             Some(Format {
                 kind: FormatKind::DateMy,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
         assert_eq!(
             parse("mmm-yyyy"),
             Some(Format {
                 kind: FormatKind::DateMy,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
         assert_eq!(
             parse("mmm yyyy"),
             Some(Format {
                 kind: FormatKind::DateMy,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
         assert_eq!(
             parse("mmm-yy"),
             Some(Format {
                 kind: FormatKind::DateMy,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -496,14 +523,18 @@ mod tests {
             parse("dd-mmm-yy"),
             Some(Format {
                 kind: FormatKind::DateDmy,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
         assert_eq!(
             parse("d-mmm-yyyy"),
             Some(Format {
                 kind: FormatKind::DateDmy,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -514,14 +545,18 @@ mod tests {
             parse("d-mmm"),
             Some(Format {
                 kind: FormatKind::DateDm,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
         assert_eq!(
             parse("dd-mmm"),
             Some(Format {
                 kind: FormatKind::DateDm,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -534,14 +569,18 @@ mod tests {
             parse("m/d/yyyy"),
             Some(Format {
                 kind: FormatKind::DateLongIntl,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
         assert_eq!(
             parse("m/d/yy"),
             Some(Format {
                 kind: FormatKind::DateLongIntl,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -552,7 +591,9 @@ mod tests {
             parse("m/d"),
             Some(Format {
                 kind: FormatKind::DateShortIntl,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -563,7 +604,9 @@ mod tests {
             parse("h:mm:ss"),
             Some(Format {
                 kind: FormatKind::TimeLongIntl,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -574,7 +617,9 @@ mod tests {
             parse("h:mm"),
             Some(Format {
                 kind: FormatKind::TimeShortIntl,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -585,7 +630,9 @@ mod tests {
             parse("h:mm:ss AM/PM"),
             Some(Format {
                 kind: FormatKind::TimeHmsAmPm,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
         // Lowercase variant.
@@ -593,7 +640,9 @@ mod tests {
             parse("h:mm:ss am/pm"),
             Some(Format {
                 kind: FormatKind::TimeHmsAmPm,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
         // Single-letter A/P short form Excel also accepts.
@@ -601,7 +650,9 @@ mod tests {
             parse("h:mm:ss A/P"),
             Some(Format {
                 kind: FormatKind::TimeHmsAmPm,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -612,14 +663,18 @@ mod tests {
             parse("h:mm AM/PM"),
             Some(Format {
                 kind: FormatKind::TimeHmAmPm,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
         assert_eq!(
             parse("h:mm am/pm"),
             Some(Format {
                 kind: FormatKind::TimeHmAmPm,
-                decimals: 0
+                decimals: 0,
+                parens: false,
+                negative_color: None,
             })
         );
     }
@@ -627,7 +682,12 @@ mod tests {
     #[test]
     fn time_ampm_round_trips_via_to_num_fmt() {
         for kind in [FormatKind::TimeHmsAmPm, FormatKind::TimeHmAmPm] {
-            let f = Format { kind, decimals: 0 };
+            let f = Format {
+                kind,
+                decimals: 0,
+                parens: false,
+                negative_color: None,
+            };
             let s = to_num_fmt(f);
             assert_eq!(parse(&s), Some(f), "round-trip for {f:?} via {s:?}");
         }
@@ -651,7 +711,12 @@ mod tests {
             FormatKind::TimeLongIntl,
             FormatKind::TimeShortIntl,
         ] {
-            let f = Format { kind, decimals: 0 };
+            let f = Format {
+                kind,
+                decimals: 0,
+                parens: false,
+                negative_color: None,
+            };
             let s = to_num_fmt(f);
             assert_eq!(parse(&s), Some(f), "round-trip for {f:?} via {s:?}");
         }
@@ -684,6 +749,8 @@ mod tests {
         let f = Format {
             kind: FormatKind::Scientific,
             decimals: 2,
+            parens: false,
+            negative_color: None,
         };
         assert_eq!(parse(&to_num_fmt(f)), Some(f));
     }

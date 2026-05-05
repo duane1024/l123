@@ -144,9 +144,16 @@ impl App {
                 engine,
                 path,
                 formula_sources,
+                cell_format_extras,
             } => {
                 self.runtime.spawn_blocking(move || {
-                    let _ = tx.send(worker_file_save(engine, path, formula_sources, progress));
+                    let _ = tx.send(worker_file_save(
+                        engine,
+                        path,
+                        formula_sources,
+                        cell_format_extras,
+                        progress,
+                    ));
                 });
             }
             QueuedOp::FileImportNumbers {
@@ -507,6 +514,7 @@ fn worker_file_save(
     engine: IronCalcEngine,
     path: std::path::PathBuf,
     formula_sources: HashMap<Address, String>,
+    cell_format_extras: l123_io::cell_formats::CellFormatExtras,
     progress: AsyncProgress,
 ) -> AsyncResult {
     if progress.cancel.load(Ordering::Relaxed) {
@@ -527,6 +535,7 @@ fn worker_file_save(
         };
     }
     let _ = l123_io::formula_sources::write_to_xlsx(&path, &formula_sources);
+    let _ = l123_io::cell_formats::write_to_xlsx(&path, &cell_format_extras);
     AsyncResult::FileSave {
         engine,
         path,

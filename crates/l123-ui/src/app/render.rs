@@ -6,7 +6,8 @@
 use l123_core::cell_render::{apply_halign_to_rendered, label_text_bounds};
 use l123_core::{
     address::col_to_letters, plan_row_spill, render_label, render_value_in_cell, Address,
-    CellContents, Format, HAlign, International, Mode, Range, SheetId, SpillSlot, TextStyle, Value,
+    CellContents, Format, HAlign, International, Mode, Range, RgbColor, SheetId, SpillSlot,
+    TextStyle, Value,
 };
 use l123_engine::{Engine, RecalcMode};
 use l123_menu::MenuBody;
@@ -238,6 +239,16 @@ fn render_own_width(
     intl: &International,
     excel_override: Option<&str>,
 ) -> String {
+    // `(T)` Text format on a formula cell shows the formula source
+    // (left-aligned, truncated to width) instead of the cached value
+    // — per SPEC §12: "Text — show formula, not value." Non-formula
+    // cells fall through to the normal numeric path; Text on a label
+    // is unreachable here (labels go through SpillSlot::Label).
+    if matches!(format.kind, l123_core::FormatKind::Text) {
+        if let CellContents::Formula { expr, .. } = contents {
+            return l123_core::cell_render::right_pad(expr, width, false);
+        }
+    }
     match contents {
         CellContents::Empty => " ".repeat(width),
         CellContents::Label { .. } => {
@@ -1583,6 +1594,30 @@ impl App {
         self.wb().format_for_cell(addr)
     }
 
+    /// Negative-value foreground override for the cell at `addr`.
+    /// Returns `Some(rgb)` only when (a) the format carries a
+    /// `negative_color` and (b) the cell's value is a negative number.
+    /// Anything else (no override, non-numeric value, zero, positive)
+    /// yields `None` so callers fall back to the cell's own font color.
+    pub(super) fn negative_color_override(&self, addr: Address) -> Option<RgbColor> {
+        let format = self.wb().format_for_cell(addr);
+        let color = format.negative_color?;
+        let cell = self.wb().cells.get(&addr)?;
+        let n = match cell {
+            CellContents::Constant(Value::Number(n)) => *n,
+            CellContents::Formula {
+                cached_value: Some(Value::Number(n)),
+                ..
+            } => *n,
+            _ => return None,
+        };
+        if n < 0.0 {
+            Some(color)
+        } else {
+            None
+        }
+    }
+
     /// `[Wn]` tag when the current column's width differs from the
     /// workbook's global default.
     pub(super) fn width_tag_for_line1(&self) -> String {
@@ -1866,7 +1901,12 @@ impl App {
                         .cell_font_styles
                         .get(&style_addr)
                         .and_then(|fs| fs.color);
-                    let resolved_fg = explicit_fg
+                    // `/Range Format Other Color Negative` wins over an
+                    // xlsx-imported font color when the cell's value is
+                    // negative — that's the whole point of the override.
+                    let neg_override = self.negative_color_override(addr);
+                    let resolved_fg = neg_override
+                        .or(explicit_fg)
                         .or_else(|| fill_bg.and_then(|bg| bg.auto_contrast_for_dark_terminal()));
                     if let Some(rgb) = resolved_fg {
                         cell_style = cell_style.fg(Color::Rgb(rgb.r, rgb.g, rgb.b));

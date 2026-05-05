@@ -1,0 +1,25 @@
+# /Worksheet Global Format +/- — set the workbook-wide default to bar-chart.
+
+KEYS 4
+ENTER
+DOWN
+KEYS -1
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 4
+
+# /WGF+ applies immediately (no decimals, no POINT).
+KEY /
+KEY W
+KEY G
+KEY F
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   +/-
+KEY +
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (+) 4
+ASSERT_CELL       A:A1  ++++
+
+DOWN
+ASSERT_PANEL_L1   A:A2: (+) -1
+ASSERT_CELL       A:A2  -

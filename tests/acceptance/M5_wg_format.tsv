@@ -2,7 +2,7 @@
 # Cells without an explicit per-cell format inherit the global; cells
 # with /Range Format applied still win over the global.
 
-SIZE 80 30
+SIZE 100 30
 
 # Seed two number cells (A1, A2).
 KEYS 0.5

@@ -1,0 +1,24 @@
+# /Range Format Other Automatic — set the cell's format tag to (A).
+# Per SPEC §12, Automatic renders like General until type-sniffing
+# lands; this transcript locks down the tag wiring only.
+
+KEYS 42
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 42
+
+KEY /
+KEY R
+KEY F
+KEY O
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   Automatic
+ASSERT_PANEL_L2   Color
+ASSERT_PANEL_L2   Label
+ASSERT_PANEL_L2   Parentheses
+KEY A
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (A) 42
+ASSERT_CELL       A:A1  42

@@ -1475,6 +1475,29 @@ impl App {
     }
 
     fn begin_entry(&mut self, c: char) {
+        // `(L)` Label-only on the target cell forces every entry into
+        // LABEL mode, including ones starting with a digit / minus /
+        // operator. The default label prefix is auto-inserted; the
+        // typed char is the first char of the label text. Explicit
+        // label-prefix chars (`'`/`"`/`^`/`\`/`|`) still pick their
+        // own prefix — the user is being explicit, so honor them.
+        let pointer = self.wb().pointer;
+        let label_only = matches!(
+            self.wb().cell_formats.get(&pointer).copied(),
+            Some(f) if matches!(f.kind, FormatKind::LabelOnly)
+        ) || (!self.wb().cell_formats.contains_key(&pointer)
+            && matches!(self.wb().global_format.kind, FormatKind::LabelOnly));
+        if label_only && !matches!(c, '\'' | '"' | '^' | '\\' | '|') {
+            let buffer = c.to_string();
+            let cursor = buffer.len();
+            self.entry = Some(Entry {
+                kind: EntryKind::Label(self.default_label_prefix),
+                buffer,
+                cursor,
+            });
+            self.mode = Mode::Label;
+            return;
+        }
         if is_value_starter(c) {
             let buffer = c.to_string();
             let cursor = buffer.len();
@@ -2544,6 +2567,30 @@ impl App {
             Action::RangeFormatGeneral => self.begin_point(PendingCommand::RangeFormat {
                 format: Format::GENERAL,
             }),
+            Action::RangeFormatPlusMinus => self.begin_point(PendingCommand::RangeFormat {
+                format: Format::from_kind(FormatKind::PlusMinus),
+            }),
+            Action::RangeFormatAutomatic => self.begin_point(PendingCommand::RangeFormat {
+                format: Format::from_kind(FormatKind::Automatic),
+            }),
+            Action::RangeFormatLabelOnly => self.begin_point(PendingCommand::RangeFormat {
+                format: Format::from_kind(FormatKind::LabelOnly),
+            }),
+            Action::RangeFormatParensYes => {
+                self.begin_point(PendingCommand::RangeParens { value: true })
+            }
+            Action::RangeFormatParensNo => {
+                self.begin_point(PendingCommand::RangeParens { value: false })
+            }
+            Action::RangeFormatNegColorBlack => self.begin_neg_color(Some(PALETTE_BLACK)),
+            Action::RangeFormatNegColorWhite => self.begin_neg_color(Some(PALETTE_WHITE)),
+            Action::RangeFormatNegColorRed => self.begin_neg_color(Some(PALETTE_RED)),
+            Action::RangeFormatNegColorGreen => self.begin_neg_color(Some(PALETTE_GREEN)),
+            Action::RangeFormatNegColorBlue => self.begin_neg_color(Some(PALETTE_BLUE)),
+            Action::RangeFormatNegColorYellow => self.begin_neg_color(Some(PALETTE_YELLOW)),
+            Action::RangeFormatNegColorCyan => self.begin_neg_color(Some(PALETTE_CYAN)),
+            Action::RangeFormatNegColorMagenta => self.begin_neg_color(Some(PALETTE_MAGENTA)),
+            Action::RangeFormatNegColorReset => self.begin_neg_color(None),
             Action::RangeFormatReset => self.begin_point(PendingCommand::RangeFormat {
                 format: Format::RESET,
             }),
@@ -2638,70 +2685,37 @@ impl App {
             Action::SpecialCopy => self.begin_point(PendingCommand::SpecialCopyFrom),
             Action::SpecialMove => self.begin_point(PendingCommand::SpecialMoveFrom),
             Action::RangeFormatText => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::Text,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::Text),
             }),
             Action::RangeFormatDateDmy => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::DateDmy,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::DateDmy),
             }),
             Action::RangeFormatDateDm => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::DateDm,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::DateDm),
             }),
             Action::RangeFormatDateMy => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::DateMy,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::DateMy),
             }),
             Action::RangeFormatDateLongIntl => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::DateLongIntl,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::DateLongIntl),
             }),
             Action::RangeFormatDateShortIntl => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::DateShortIntl,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::DateShortIntl),
             }),
             Action::RangeFormatHidden => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::Hidden,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::Hidden),
             }),
             Action::RangeFormatTimeHmsAmPm => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::TimeHmsAmPm,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::TimeHmsAmPm),
             }),
             Action::RangeFormatTimeHmAmPm => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::TimeHmAmPm,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::TimeHmAmPm),
             }),
             Action::RangeFormatTimeLongIntl => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::TimeLongIntl,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::TimeLongIntl),
             }),
             Action::RangeFormatTimeShortIntl => self.begin_point(PendingCommand::RangeFormat {
-                format: Format {
-                    kind: FormatKind::TimeShortIntl,
-                    decimals: 0,
-                },
+                format: Format::from_kind(FormatKind::TimeShortIntl),
             }),
             Action::WorksheetGlobalFormatFixed => {
                 self.start_global_decimals_prompt(FormatKind::Fixed)
@@ -2719,31 +2733,61 @@ impl App {
                 self.start_global_decimals_prompt(FormatKind::Percent)
             }
             Action::WorksheetGlobalFormatGeneral => self.set_global_format(Format::GENERAL),
+            Action::WorksheetGlobalFormatPlusMinus => {
+                self.set_global_format(Format::from_kind(FormatKind::PlusMinus))
+            }
+            Action::WorksheetGlobalFormatAutomatic => {
+                self.set_global_format(Format::from_kind(FormatKind::Automatic))
+            }
+            Action::WorksheetGlobalFormatLabelOnly => {
+                self.set_global_format(Format::from_kind(FormatKind::LabelOnly))
+            }
+            Action::WorksheetGlobalFormatParensYes => self.set_global_parens(true),
+            Action::WorksheetGlobalFormatParensNo => self.set_global_parens(false),
+            Action::WorksheetGlobalFormatNegColorBlack => {
+                self.set_global_neg_color(Some(PALETTE_BLACK))
+            }
+            Action::WorksheetGlobalFormatNegColorWhite => {
+                self.set_global_neg_color(Some(PALETTE_WHITE))
+            }
+            Action::WorksheetGlobalFormatNegColorRed => {
+                self.set_global_neg_color(Some(PALETTE_RED))
+            }
+            Action::WorksheetGlobalFormatNegColorGreen => {
+                self.set_global_neg_color(Some(PALETTE_GREEN))
+            }
+            Action::WorksheetGlobalFormatNegColorBlue => {
+                self.set_global_neg_color(Some(PALETTE_BLUE))
+            }
+            Action::WorksheetGlobalFormatNegColorYellow => {
+                self.set_global_neg_color(Some(PALETTE_YELLOW))
+            }
+            Action::WorksheetGlobalFormatNegColorCyan => {
+                self.set_global_neg_color(Some(PALETTE_CYAN))
+            }
+            Action::WorksheetGlobalFormatNegColorMagenta => {
+                self.set_global_neg_color(Some(PALETTE_MAGENTA))
+            }
+            Action::WorksheetGlobalFormatNegColorReset => self.set_global_neg_color(None),
             Action::WorksheetGlobalFormatReset => self.set_global_format(Format::GENERAL),
-            Action::WorksheetGlobalFormatText => self.set_global_format(Format {
-                kind: FormatKind::Text,
-                decimals: 0,
-            }),
-            Action::WorksheetGlobalFormatDateDmy => self.set_global_format(Format {
-                kind: FormatKind::DateDmy,
-                decimals: 0,
-            }),
-            Action::WorksheetGlobalFormatDateDm => self.set_global_format(Format {
-                kind: FormatKind::DateDm,
-                decimals: 0,
-            }),
-            Action::WorksheetGlobalFormatDateMy => self.set_global_format(Format {
-                kind: FormatKind::DateMy,
-                decimals: 0,
-            }),
-            Action::WorksheetGlobalFormatDateLongIntl => self.set_global_format(Format {
-                kind: FormatKind::DateLongIntl,
-                decimals: 0,
-            }),
-            Action::WorksheetGlobalFormatDateShortIntl => self.set_global_format(Format {
-                kind: FormatKind::DateShortIntl,
-                decimals: 0,
-            }),
+            Action::WorksheetGlobalFormatText => {
+                self.set_global_format(Format::from_kind(FormatKind::Text))
+            }
+            Action::WorksheetGlobalFormatDateDmy => {
+                self.set_global_format(Format::from_kind(FormatKind::DateDmy))
+            }
+            Action::WorksheetGlobalFormatDateDm => {
+                self.set_global_format(Format::from_kind(FormatKind::DateDm))
+            }
+            Action::WorksheetGlobalFormatDateMy => {
+                self.set_global_format(Format::from_kind(FormatKind::DateMy))
+            }
+            Action::WorksheetGlobalFormatDateLongIntl => {
+                self.set_global_format(Format::from_kind(FormatKind::DateLongIntl))
+            }
+            Action::WorksheetGlobalFormatDateShortIntl => {
+                self.set_global_format(Format::from_kind(FormatKind::DateShortIntl))
+            }
             Action::FileSave => self.start_file_save_prompt(),
             Action::FileRetrieve => self.start_file_retrieve_prompt(),
             Action::FileXtractFormulas => self.start_file_xtract_prompt(XtractKind::Formulas),
@@ -3659,6 +3703,15 @@ impl App {
         for (addr, raw) in engine.used_cell_format_strings() {
             cell_format_overrides.insert(addr, raw);
         }
+        // Layer the cell-format-extras sidecar (kind override for
+        // non-Excel kinds, parens flag, negative-color) on top of
+        // whatever the engine pulled from `num_fmt`. See
+        // `l123_io::cell_formats` for the on-disk shape.
+        let format_extras = l123_io::cell_formats::read_from_xlsx(&path).unwrap_or_default();
+        for (addr, fe) in &format_extras.cells {
+            let base = cell_formats.get(addr).copied().unwrap_or(Format::GENERAL);
+            cell_formats.insert(*addr, fe.apply_to(base));
+        }
         let mut cell_alignments: HashMap<Address, Alignment> = HashMap::new();
         for (addr, a) in engine.used_cell_alignments() {
             cell_alignments.insert(addr, a);
@@ -3715,7 +3768,10 @@ impl App {
             cells,
             cell_formats,
             cell_format_overrides,
-            global_format: Format::GENERAL,
+            global_format: format_extras
+                .global
+                .map(|fe| fe.apply_to(Format::GENERAL))
+                .unwrap_or(Format::GENERAL),
             international: International::default(),
             cell_text_styles,
             cell_alignments,
@@ -4127,6 +4183,22 @@ impl App {
         for (addr, raw) in self.wb_mut().engine.used_cell_format_strings() {
             self.wb_mut().cell_format_overrides.insert(addr, raw);
         }
+        // Layer the cell-format-extras sidecar on top of the engine's
+        // num_fmt-based view (kind override for non-Excel kinds, parens
+        // flag, negative-color). See `l123_io::cell_formats`.
+        let format_extras = l123_io::cell_formats::read_from_xlsx(&path).unwrap_or_default();
+        if let Some(g) = format_extras.global {
+            self.wb_mut().global_format = g.apply_to(self.wb().global_format);
+        }
+        for (addr, fe) in &format_extras.cells {
+            let base = self
+                .wb()
+                .cell_formats
+                .get(addr)
+                .copied()
+                .unwrap_or(Format::GENERAL);
+            self.wb_mut().cell_formats.insert(*addr, fe.apply_to(base));
+        }
         for (addr, a) in self.wb_mut().engine.used_cell_alignments() {
             self.wb_mut().cell_alignments.insert(addr, a);
         }
@@ -4369,6 +4441,8 @@ impl App {
         if self.wb_mut().engine.save_xlsx(&path).is_ok() {
             let sources = self.formula_sources_snapshot();
             let _ = l123_io::formula_sources::write_to_xlsx(&path, &sources);
+            let extras = self.cell_format_extras_snapshot();
+            let _ = l123_io::cell_formats::write_to_xlsx(&path, &extras);
             self.wb_mut().active_path = Some(path);
             self.wb_mut().dirty = false;
         }
@@ -4390,6 +4464,24 @@ impl App {
             .collect()
     }
 
+    /// Snapshot of every cell-format-extra (kind override for non-Excel
+    /// kinds, parens flag, negative-color override) plus the workbook
+    /// global default's extras. Written into `l123/cell_formats.tsv`
+    /// inside the xlsx zip so save → reload preserves what Excel's
+    /// `num_fmt` system can't represent. See
+    /// [`l123_io::cell_formats`] for the on-disk shape.
+    fn cell_format_extras_snapshot(&self) -> l123_io::cell_formats::CellFormatExtras {
+        use l123_io::cell_formats::{CellFormatExtras, FormatExtras};
+        let global = FormatExtras::from_format(self.wb().global_format);
+        let cells = self
+            .wb()
+            .cell_formats
+            .iter()
+            .filter_map(|(addr, fmt)| FormatExtras::from_format(*fmt).map(|fe| (*addr, fe)))
+            .collect();
+        CellFormatExtras { global, cells }
+    }
+
     /// Queue an async `/File Save`. Pushes UI overrides into the
     /// engine on the main thread (fast O(N-overridden-cells)), then
     /// hands ownership of the engine to a worker that does the
@@ -4399,6 +4491,7 @@ impl App {
     fn queue_file_save(&mut self, path: PathBuf) {
         self.push_ui_overrides_into_engine();
         let formula_sources = self.formula_sources_snapshot();
+        let cell_format_extras = self.cell_format_extras_snapshot();
         let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
         let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
         let name = display_basename(&path);
@@ -4409,6 +4502,7 @@ impl App {
                 engine,
                 path,
                 formula_sources,
+                cell_format_extras,
             },
         );
     }
@@ -4966,6 +5060,20 @@ impl App {
             PendingCommand::RangeFormat { format } => {
                 for r in ranges {
                     self.execute_range_format(*r, format);
+                }
+                self.wb_mut().dirty = true;
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::RangeParens { value } => {
+                for r in ranges {
+                    self.execute_range_parens(*r, value);
+                }
+                self.wb_mut().dirty = true;
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::RangeNegColor { color } => {
+                for r in ranges {
+                    self.execute_range_neg_color(*r, color);
                 }
                 self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
@@ -6839,6 +6947,30 @@ impl App {
         self.close_menu();
     }
 
+    /// `/Worksheet Global Format Other Parentheses Yes|No` — toggle the
+    /// parens flag on the workbook-wide default format. Cells inheriting
+    /// the global pick the new flag automatically; per-cell overrides
+    /// keep their own setting.
+    fn set_global_parens(&mut self, value: bool) {
+        let mut next = self.wb().global_format;
+        next.parens = value;
+        self.set_global_format(next);
+    }
+
+    /// Open POINT mode for `/Range Format Other Color Negative <color>`
+    /// (or `Reset` when `color: None`).
+    fn begin_neg_color(&mut self, color: Option<RgbColor>) {
+        self.begin_point(PendingCommand::RangeNegColor { color });
+    }
+
+    /// `/Worksheet Global Format Other Color Negative <color>` (or
+    /// Reset). Modifies the global default's `negative_color` field.
+    fn set_global_neg_color(&mut self, color: Option<RgbColor>) {
+        let mut next = self.wb().global_format;
+        next.negative_color = color;
+        self.set_global_format(next);
+    }
+
     /// `/Worksheet Global Default Other International <field>` — apply
     /// `mutator` to the workbook's `International` and journal a
     /// snapshot of the previous state for one-step undo.
@@ -7532,13 +7664,23 @@ impl App {
             PromptNext::RangeFormat { kind } => {
                 let decimals: u8 = p.buffer.parse().unwrap_or(2);
                 let decimals = decimals.min(15);
-                let format = Format { kind, decimals };
+                let format = Format {
+                    kind,
+                    decimals,
+                    parens: false,
+                    negative_color: None,
+                };
                 self.begin_point(PendingCommand::RangeFormat { format });
             }
             PromptNext::WorksheetGlobalFormat { kind } => {
                 let decimals: u8 = p.buffer.parse().unwrap_or(2);
                 let decimals = decimals.min(15);
-                self.set_global_format(Format { kind, decimals });
+                self.set_global_format(Format {
+                    kind,
+                    decimals,
+                    parens: false,
+                    negative_color: None,
+                });
             }
             PromptNext::WorksheetGlobalDefaultOtherIntlCurrencySymbol { position } => {
                 let symbol = p.buffer;
@@ -8032,6 +8174,70 @@ impl App {
                 .push(JournalEntry::RangeFormat { entries: prior });
         }
         // No recalc needed — format is presentation only.
+    }
+
+    /// `/Range Format Other Parentheses Yes|No` — toggle the parens
+    /// flag on each cell's effective format. Cells without a per-cell
+    /// override start from the global default; the modified format is
+    /// then stored as a per-cell override (we don't try to clear back
+    /// to the global if the result happens to equal it — keeps the
+    /// model simple and predictable).
+    fn execute_range_parens(&mut self, range: Range, value: bool) {
+        let r = range.normalized();
+        let sheets: Vec<SheetId> = if self.group_mode {
+            (0..self.wb().engine.sheet_count()).map(SheetId).collect()
+        } else {
+            vec![r.start.sheet]
+        };
+        let mut prior: Vec<(Address, Option<Format>)> = Vec::new();
+        for sheet in &sheets {
+            for row in r.start.row..=r.end.row {
+                for col in r.start.col..=r.end.col {
+                    let addr = Address::new(*sheet, col, row);
+                    let prev = self.wb().cell_formats.get(&addr).copied();
+                    prior.push((addr, prev));
+                    let mut next = prev.unwrap_or(self.wb().global_format);
+                    next.parens = value;
+                    self.wb_mut().set_cell_format(addr, next);
+                }
+            }
+        }
+        if self.undo_enabled && !prior.is_empty() {
+            self.wb_mut()
+                .journal
+                .push(JournalEntry::RangeFormat { entries: prior });
+        }
+    }
+
+    /// `/Range Format Other Color Negative <color>` (or Reset, with
+    /// `color: None`) — set the per-cell format's negative-color
+    /// override, materializing the global default first if the cell
+    /// has no per-cell format yet.
+    fn execute_range_neg_color(&mut self, range: Range, color: Option<RgbColor>) {
+        let r = range.normalized();
+        let sheets: Vec<SheetId> = if self.group_mode {
+            (0..self.wb().engine.sheet_count()).map(SheetId).collect()
+        } else {
+            vec![r.start.sheet]
+        };
+        let mut prior: Vec<(Address, Option<Format>)> = Vec::new();
+        for sheet in &sheets {
+            for row in r.start.row..=r.end.row {
+                for col in r.start.col..=r.end.col {
+                    let addr = Address::new(*sheet, col, row);
+                    let prev = self.wb().cell_formats.get(&addr).copied();
+                    prior.push((addr, prev));
+                    let mut next = prev.unwrap_or(self.wb().global_format);
+                    next.negative_color = color;
+                    self.wb_mut().set_cell_format(addr, next);
+                }
+            }
+        }
+        if self.undo_enabled && !prior.is_empty() {
+            self.wb_mut()
+                .journal
+                .push(JournalEntry::RangeFormat { entries: prior });
+        }
     }
 
     fn execute_range_color(&mut self, range: Range, target: ColorTarget, color: Option<RgbColor>) {

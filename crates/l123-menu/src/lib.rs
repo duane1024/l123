@@ -308,6 +308,20 @@ pub enum Action {
     RangeFormatTimeHmAmPm,
     RangeFormatTimeLongIntl,
     RangeFormatTimeShortIntl,
+    RangeFormatPlusMinus,
+    RangeFormatAutomatic,
+    RangeFormatLabelOnly,
+    RangeFormatParensYes,
+    RangeFormatParensNo,
+    RangeFormatNegColorBlack,
+    RangeFormatNegColorWhite,
+    RangeFormatNegColorRed,
+    RangeFormatNegColorGreen,
+    RangeFormatNegColorBlue,
+    RangeFormatNegColorYellow,
+    RangeFormatNegColorCyan,
+    RangeFormatNegColorMagenta,
+    RangeFormatNegColorReset,
     RangeFormatReset,
     /// `/Worksheet Global Format` leaves — set the workbook-wide default
     /// cell format that cells without a per-cell `/RF` override inherit.
@@ -327,6 +341,20 @@ pub enum Action {
     WorksheetGlobalFormatDateLongIntl,
     WorksheetGlobalFormatDateShortIntl,
     WorksheetGlobalFormatText,
+    WorksheetGlobalFormatPlusMinus,
+    WorksheetGlobalFormatAutomatic,
+    WorksheetGlobalFormatLabelOnly,
+    WorksheetGlobalFormatParensYes,
+    WorksheetGlobalFormatParensNo,
+    WorksheetGlobalFormatNegColorBlack,
+    WorksheetGlobalFormatNegColorWhite,
+    WorksheetGlobalFormatNegColorRed,
+    WorksheetGlobalFormatNegColorGreen,
+    WorksheetGlobalFormatNegColorBlue,
+    WorksheetGlobalFormatNegColorYellow,
+    WorksheetGlobalFormatNegColorCyan,
+    WorksheetGlobalFormatNegColorMagenta,
+    WorksheetGlobalFormatNegColorReset,
     WorksheetGlobalFormatReset,
     Copy,
     Move,
@@ -1759,6 +1787,12 @@ const RANGE_FORMAT_MENU: &[MenuItem] = &[
         body: MenuBody::Action(Action::RangeFormatPercent),
     },
     MenuItem {
+        letter: '+',
+        name: "+/-",
+        help: "Bar chart: each unit prints as + (positive) or - (negative)",
+        body: MenuBody::Action(Action::RangeFormatPlusMinus),
+    },
+    MenuItem {
         letter: 'D',
         name: "Date",
         help: "Date format (select D1..D5, Time for D6..D9)",
@@ -1777,10 +1811,124 @@ const RANGE_FORMAT_MENU: &[MenuItem] = &[
         body: MenuBody::Action(Action::RangeFormatHidden),
     },
     MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "Automatic, negative-color, label-only, parentheses",
+        body: MenuBody::Submenu(RANGE_FORMAT_OTHER_MENU),
+    },
+    MenuItem {
         letter: 'R',
         name: "Reset",
         help: "Revert to global format",
         body: MenuBody::Action(Action::RangeFormatReset),
+    },
+];
+
+const RANGE_FORMAT_OTHER_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "Automatic",
+        help: "Pick a format based on the cell's current value",
+        body: MenuBody::Action(Action::RangeFormatAutomatic),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Color",
+        help: "Color negative values; or reset to default",
+        body: MenuBody::Submenu(RANGE_FORMAT_OTHER_COLOR_MENU),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Label",
+        help: "Treat the cell as label-only (numeric input becomes a label)",
+        body: MenuBody::Action(Action::RangeFormatLabelOnly),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Parentheses",
+        help: "Wrap numeric output in parentheses",
+        body: MenuBody::Submenu(RANGE_FORMAT_OTHER_PAREN_MENU),
+    },
+];
+
+const RANGE_FORMAT_OTHER_COLOR_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'N',
+        name: "Negative",
+        help: "Render negative values in a distinct color",
+        body: MenuBody::Submenu(RANGE_FORMAT_OTHER_COLOR_NEG_MENU),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Drop the negative-value color override",
+        body: MenuBody::Action(Action::RangeFormatNegColorReset),
+    },
+];
+
+const RANGE_FORMAT_OTHER_COLOR_NEG_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Black",
+        help: "Tint negative values black",
+        body: MenuBody::Action(Action::RangeFormatNegColorBlack),
+    },
+    MenuItem {
+        letter: 'W',
+        name: "White",
+        help: "Tint negative values white",
+        body: MenuBody::Action(Action::RangeFormatNegColorWhite),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Red",
+        help: "Tint negative values red",
+        body: MenuBody::Action(Action::RangeFormatNegColorRed),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Green",
+        help: "Tint negative values green",
+        body: MenuBody::Action(Action::RangeFormatNegColorGreen),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Blue",
+        help: "Tint negative values blue",
+        body: MenuBody::Action(Action::RangeFormatNegColorBlue),
+    },
+    MenuItem {
+        letter: 'Y',
+        name: "Yellow",
+        help: "Tint negative values yellow",
+        body: MenuBody::Action(Action::RangeFormatNegColorYellow),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Cyan",
+        help: "Tint negative values cyan",
+        body: MenuBody::Action(Action::RangeFormatNegColorCyan),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Magenta",
+        help: "Tint negative values magenta",
+        body: MenuBody::Action(Action::RangeFormatNegColorMagenta),
+    },
+];
+
+const RANGE_FORMAT_OTHER_PAREN_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'Y',
+        name: "Yes",
+        help: "Wrap numeric output in parentheses",
+        body: MenuBody::Action(Action::RangeFormatParensYes),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "No",
+        help: "Stop wrapping numeric output in parentheses",
+        body: MenuBody::Action(Action::RangeFormatParensNo),
     },
 ];
 
@@ -1888,6 +2036,12 @@ const WG_FORMAT_MENU: &[MenuItem] = &[
         body: MenuBody::Action(Action::WorksheetGlobalFormatPercent),
     },
     MenuItem {
+        letter: '+',
+        name: "+/-",
+        help: "Default to bar chart (each unit prints as + or -)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatPlusMinus),
+    },
+    MenuItem {
         letter: 'D',
         name: "Date",
         help: "Default to a Date format (D1..D5, Time for D6..D9)",
@@ -1906,10 +2060,124 @@ const WG_FORMAT_MENU: &[MenuItem] = &[
         body: MenuBody::NotImplemented("wg-format-hidden"),
     },
     MenuItem {
+        letter: 'O',
+        name: "Other",
+        help: "Automatic, negative-color, label-only, parentheses",
+        body: MenuBody::Submenu(WG_FORMAT_OTHER_MENU),
+    },
+    MenuItem {
         letter: 'R',
         name: "Reset",
         help: "Reset global format to General",
         body: MenuBody::Action(Action::WorksheetGlobalFormatReset),
+    },
+];
+
+const WG_FORMAT_OTHER_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'A',
+        name: "Automatic",
+        help: "Default to picking a format from the cell's current value",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatAutomatic),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Color",
+        help: "Color negative values; or reset to default",
+        body: MenuBody::Submenu(WG_FORMAT_OTHER_COLOR_MENU),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Label",
+        help: "Default to treating new cells as label-only",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatLabelOnly),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Parentheses",
+        help: "Default to wrapping numeric output in parentheses",
+        body: MenuBody::Submenu(WG_FORMAT_OTHER_PAREN_MENU),
+    },
+];
+
+const WG_FORMAT_OTHER_COLOR_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'N',
+        name: "Negative",
+        help: "Render negative values in a distinct color",
+        body: MenuBody::Submenu(WG_FORMAT_OTHER_COLOR_NEG_MENU),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Reset",
+        help: "Drop the negative-value color override",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatNegColorReset),
+    },
+];
+
+const WG_FORMAT_OTHER_COLOR_NEG_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'B',
+        name: "Black",
+        help: "Default to tinting negative values black",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatNegColorBlack),
+    },
+    MenuItem {
+        letter: 'W',
+        name: "White",
+        help: "Default to tinting negative values white",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatNegColorWhite),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Red",
+        help: "Default to tinting negative values red",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatNegColorRed),
+    },
+    MenuItem {
+        letter: 'G',
+        name: "Green",
+        help: "Default to tinting negative values green",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatNegColorGreen),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Blue",
+        help: "Default to tinting negative values blue",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatNegColorBlue),
+    },
+    MenuItem {
+        letter: 'Y',
+        name: "Yellow",
+        help: "Default to tinting negative values yellow",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatNegColorYellow),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Cyan",
+        help: "Default to tinting negative values cyan",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatNegColorCyan),
+    },
+    MenuItem {
+        letter: 'M',
+        name: "Magenta",
+        help: "Default to tinting negative values magenta",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatNegColorMagenta),
+    },
+];
+
+const WG_FORMAT_OTHER_PAREN_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'Y',
+        name: "Yes",
+        help: "Wrap numeric output in parentheses",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatParensYes),
+    },
+    MenuItem {
+        letter: 'N',
+        name: "No",
+        help: "Stop wrapping numeric output in parentheses",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatParensNo),
     },
 ];
 
@@ -4318,6 +4586,141 @@ mod tests {
     }
 
     #[test]
+    fn resolve_range_format_plus_minus() {
+        let node = resolve(&['R', 'F', '+']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::RangeFormatPlusMinus)
+        ));
+    }
+
+    /// /Range Format Other exposes the four extras from SPEC §12 / MENU §43:
+    /// Automatic, Color, Label, Parentheses (in that order).
+    #[test]
+    fn range_format_other_has_four_leaves() {
+        let other = resolve(&['R', 'F', 'O']).unwrap();
+        let kids = children(other);
+        let names: Vec<&str> = kids.iter().map(|m| m.name).collect();
+        assert_eq!(names, vec!["Automatic", "Color", "Label", "Parentheses"]);
+    }
+
+    #[test]
+    fn resolve_range_format_other_automatic() {
+        let node = resolve(&['R', 'F', 'O', 'A']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::RangeFormatAutomatic)
+        ));
+    }
+
+    #[test]
+    fn resolve_wg_format_other_automatic() {
+        let node = resolve(&['W', 'G', 'F', 'O', 'A']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::WorksheetGlobalFormatAutomatic)
+        ));
+    }
+
+    #[test]
+    fn resolve_range_format_other_label() {
+        let node = resolve(&['R', 'F', 'O', 'L']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::RangeFormatLabelOnly)
+        ));
+    }
+
+    #[test]
+    fn resolve_wg_format_other_label() {
+        let node = resolve(&['W', 'G', 'F', 'O', 'L']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::WorksheetGlobalFormatLabelOnly)
+        ));
+    }
+
+    #[test]
+    fn resolve_range_format_other_parens_yes() {
+        let node = resolve(&['R', 'F', 'O', 'P', 'Y']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::RangeFormatParensYes)
+        ));
+    }
+
+    #[test]
+    fn resolve_range_format_other_parens_no() {
+        let node = resolve(&['R', 'F', 'O', 'P', 'N']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::RangeFormatParensNo)
+        ));
+    }
+
+    #[test]
+    fn resolve_range_format_other_color_neg_red() {
+        let node = resolve(&['R', 'F', 'O', 'C', 'N', 'R']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::RangeFormatNegColorRed)
+        ));
+    }
+
+    #[test]
+    fn resolve_range_format_other_color_reset() {
+        let node = resolve(&['R', 'F', 'O', 'C', 'R']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::RangeFormatNegColorReset)
+        ));
+    }
+
+    #[test]
+    fn range_format_other_color_negative_has_eight_palette_entries() {
+        let neg = resolve(&['R', 'F', 'O', 'C', 'N']).unwrap();
+        let kids = children(neg);
+        let names: Vec<&str> = kids.iter().map(|m| m.name).collect();
+        assert_eq!(
+            names,
+            vec!["Black", "White", "Red", "Green", "Blue", "Yellow", "Cyan", "Magenta",]
+        );
+    }
+
+    #[test]
+    fn resolve_wg_format_other_parens_yes() {
+        let node = resolve(&['W', 'G', 'F', 'O', 'P', 'Y']).unwrap();
+        assert!(matches!(
+            node.body,
+            MenuBody::Action(Action::WorksheetGlobalFormatParensYes)
+        ));
+    }
+
+    #[test]
+    fn range_format_other_color_has_negative_and_reset() {
+        let color = resolve(&['R', 'F', 'O', 'C']).unwrap();
+        let kids = children(color);
+        let names: Vec<&str> = kids.iter().map(|m| m.name).collect();
+        assert_eq!(names, vec!["Negative", "Reset"]);
+    }
+
+    #[test]
+    fn range_format_other_parens_has_yes_and_no() {
+        let parens = resolve(&['R', 'F', 'O', 'P']).unwrap();
+        let kids = children(parens);
+        let names: Vec<&str> = kids.iter().map(|m| m.name).collect();
+        assert_eq!(names, vec!["Yes", "No"]);
+    }
+
+    #[test]
+    fn wg_format_other_has_four_leaves() {
+        let other = resolve(&['W', 'G', 'F', 'O']).unwrap();
+        let kids = children(other);
+        let names: Vec<&str> = kids.iter().map(|m| m.name).collect();
+        assert_eq!(names, vec!["Automatic", "Color", "Label", "Parentheses"]);
+    }
+
+    #[test]
     fn resolve_worksheet_global_format_leaves() {
         let cases: &[(&[char], Action)] = &[
             (&['W', 'G', 'F', 'F'], Action::WorksheetGlobalFormatFixed),
@@ -4329,6 +4732,10 @@ mod tests {
             (&['W', 'G', 'F', ','], Action::WorksheetGlobalFormatComma),
             (&['W', 'G', 'F', 'G'], Action::WorksheetGlobalFormatGeneral),
             (&['W', 'G', 'F', 'P'], Action::WorksheetGlobalFormatPercent),
+            (
+                &['W', 'G', 'F', '+'],
+                Action::WorksheetGlobalFormatPlusMinus,
+            ),
             (&['W', 'G', 'F', 'T'], Action::WorksheetGlobalFormatText),
             (&['W', 'G', 'F', 'R'], Action::WorksheetGlobalFormatReset),
             (

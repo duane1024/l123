@@ -1,0 +1,15 @@
+# /Worksheet Global Format Other Label — set workbook-wide default to (L).
+
+KEYS 12
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 12
+
+KEY /
+KEY W
+KEY G
+KEY F
+KEY O
+KEY L
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (L) 12

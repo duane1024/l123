@@ -1,0 +1,45 @@
+# /Range Format +/- — bar-chart format. Each unit prints as `+` (positive)
+# or `-` (negative); zero prints empty. Authenticity Contract §12 (`(+)`).
+
+KEYS 3
+ENTER
+DOWN
+KEYS -2
+ENTER
+DOWN
+KEYS 0
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 3
+
+# /RF+ — no decimals prompt (no decimals concept for `+/-`), straight to POINT.
+KEY /
+KEY R
+KEY F
+ASSERT_MODE       MENU
+ASSERT_PANEL_L2   +/-
+KEY +
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (+) 3
+ASSERT_CELL       A:A1  +++
+
+DOWN
+ASSERT_PANEL_L1   A:A2: (G) -2
+KEY /
+KEY R
+KEY F
+KEY +
+ENTER
+ASSERT_PANEL_L1   A:A2: (+) -2
+ASSERT_CELL       A:A2  --
+
+DOWN
+ASSERT_PANEL_L1   A:A3: (G) 0
+KEY /
+KEY R
+KEY F
+KEY +
+ENTER
+ASSERT_PANEL_L1   A:A3: (+) 0

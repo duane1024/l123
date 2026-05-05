@@ -1,0 +1,17 @@
+# /Worksheet Global Format Other Automatic — set workbook-wide default
+# to (A). Applies immediately, no POINT step.
+
+KEYS 7
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 7
+
+KEY /
+KEY W
+KEY G
+KEY F
+KEY O
+KEY A
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (A) 7
+ASSERT_CELL       A:A1  7

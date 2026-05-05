@@ -1,0 +1,36 @@
+# /Range Format Other Label — `(L)` renders numerics left-aligned and
+# never asterisk-overflows. The cell still stores the number; only the
+# visual treatment changes.
+
+KEYS 42
+ENTER
+DOWN
+KEYS 1234567890
+ENTER
+HOME
+
+# Default (G) right-aligns numerics in width 9.
+ASSERT_PANEL_L1   A:A1: (G) 42
+ASSERT_CELL       A:A1         42
+
+# Apply (L) to A1..A2.
+KEY /
+KEY R
+KEY F
+KEY O
+KEY L
+ASSERT_MODE       POINT
+DOWN
+ENTER
+ASSERT_MODE       READY
+
+# A1: 42 in (L) renders left-aligned, truncated to width.
+HOME
+ASSERT_PANEL_L1   A:A1: (L) 42
+ASSERT_CELL       A:A1  42
+
+# A2: long number that would normally overflow to asterisks. Under
+# (L) it truncates to the column width instead.
+DOWN
+ASSERT_PANEL_L1   A:A2: (L) 1234567890
+ASSERT_CELL       A:A2  123456789
