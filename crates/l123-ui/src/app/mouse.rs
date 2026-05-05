@@ -1,9 +1,9 @@
 //! Mouse handling, icon-panel dispatch, and SmartIcon implementations.
 
-use crossterm::event::{
-    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use l123_core::{
+    Address, Border, BorderEdge, CellContents, Mode, Range, SheetId, TextStyle, Value,
 };
-use l123_core::{Address, Border, BorderEdge, CellContents, Mode, Range, SheetId, TextStyle, Value};
 use l123_engine::Engine;
 
 use super::types::*;

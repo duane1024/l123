@@ -34,7 +34,7 @@ pub use comment::Comment;
 pub use contents::{format_number_general, parse_typed_value, CellContents, InferredValue};
 pub use fill::{Fill, FillPattern};
 pub use font_style::FontStyle;
-pub use format::{format_number, Format, FormatKind};
+pub use format::{format_datetime_excel, format_number, Format, FormatKind};
 pub use international::{
     CurrencyConfig, CurrencyPosition, DateIntl, International, NegativeStyle, Punctuation, TimeIntl,
 };

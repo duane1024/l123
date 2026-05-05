@@ -341,6 +341,14 @@ pub(super) struct Workbook {
     pub(super) engine: IronCalcEngine,
     pub(super) cells: HashMap<Address, CellContents>,
     pub(super) cell_formats: HashMap<Address, Format>,
+    /// Per-cell raw Excel `num_fmt` strings preserved verbatim from
+    /// xlsx import — populated when the parsed `Format` would lose
+    /// information (e.g. `"yyyy-mm-dd"` and `"d-mmm-yyyy"` both
+    /// classify to date kinds but render very differently). Display
+    /// and `/File Save` consult this map first; any user-driven
+    /// `/Range Format` or `/Worksheet Global Format` change clears
+    /// the entry so canonical 1-2-3 strings get written.
+    pub(super) cell_format_overrides: HashMap<Address, String>,
     /// Workbook-wide default cell format set by `/Worksheet Global
     /// Format`. Cells without a `cell_formats` entry inherit this.
     /// Initialized to General.
@@ -475,11 +483,35 @@ impl Workbook {
             .copied()
     }
 
+    /// Apply an explicit user-driven format change to a cell. Clears
+    /// any xlsx-imported format-string override so subsequent saves
+    /// emit the canonical 1-2-3 string for the new format.
+    pub(super) fn set_cell_format(&mut self, addr: Address, fmt: Format) {
+        self.cell_formats.insert(addr, fmt);
+        self.cell_format_overrides.remove(&addr);
+    }
+
+    /// Clear the cell's format (back to global default). Drops the
+    /// xlsx override too — if the user removes the format, they're
+    /// signalling they don't want the imported one either.
+    pub(super) fn clear_cell_format(&mut self, addr: Address) {
+        self.cell_formats.remove(&addr);
+        self.cell_format_overrides.remove(&addr);
+    }
+
+    /// Wipe both per-cell format maps (used by `/File New` and the
+    /// pre-reload step of `/File Retrieve`).
+    pub(super) fn clear_all_cell_formats(&mut self) {
+        self.cell_formats.clear();
+        self.cell_format_overrides.clear();
+    }
+
     pub(super) fn new() -> Self {
         Self {
             engine: IronCalcEngine::new().expect("IronCalc engine init"),
             cells: HashMap::new(),
             cell_formats: HashMap::new(),
+            cell_format_overrides: HashMap::new(),
             global_format: Format::GENERAL,
             international: International::default(),
             cell_text_styles: HashMap::new(),
@@ -529,6 +561,10 @@ impl WorkbookView for Workbook {
 
     fn international(&self) -> &International {
         &self.international
+    }
+
+    fn format_override_for_cell(&self, addr: Address) -> Option<&str> {
+        self.cell_format_overrides.get(&addr).map(|s| s.as_str())
     }
 }
 

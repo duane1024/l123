@@ -6,7 +6,17 @@ KEYS .5
 ENTER
 HOME
 
-# /RFD T 1 → D6 (HH:MM:SS AM/PM).
+# Widen column A to 12 so the 11-char "12:00:00 PM" fits without
+# the overflow asterisks.
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 2
+ENTER
+
+# /RFD T 1 → D6 (h:mm:ss AM/PM). Noon (.5) renders as "12:00:00 PM".
 KEY /
 KEY R
 KEY F
@@ -16,8 +26,9 @@ KEY 1
 ENTER
 ASSERT_MODE       READY
 ASSERT_PANEL_L1   (D6)
+ASSERT_CELL       A:A1  12:00:00 PM
 
-# /RFD T 2 → D7.
+# /RFD T 2 → D7. Same value renders without seconds.
 KEY /
 KEY R
 KEY F
@@ -26,6 +37,7 @@ KEY T
 KEY 2
 ENTER
 ASSERT_PANEL_L1   (D7)
+ASSERT_CELL       A:A1  12:00 PM
 
 # D8.
 KEY /
@@ -36,6 +48,7 @@ KEY T
 KEY 3
 ENTER
 ASSERT_PANEL_L1   (D8)
+ASSERT_CELL       A:A1  12:00:00
 
 # D9.
 KEY /
@@ -46,3 +59,4 @@ KEY T
 KEY 4
 ENTER
 ASSERT_PANEL_L1   (D9)
+ASSERT_CELL       A:A1  12:00

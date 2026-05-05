@@ -41,7 +41,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     regen(&out_dir.join("frozen.xlsx"), build_frozen)?;
     regen(&out_dir.join("hidden_sheets.xlsx"), build_hidden_sheets)?;
     regen(&out_dir.join("tables.xlsx"), build_tables)?;
+    regen(&out_dir.join("date_formats.xlsx"), build_date_formats)?;
     println!("Wrote fixtures to {}", out_dir.display());
+    Ok(())
+}
+
+/// `date_formats.xlsx` — exercises the per-cell Excel `num_fmt`
+/// override: cells whose format string doesn't round-trip exactly
+/// through the canonical 1-2-3 D1..D9 mapping must display as Excel
+/// would and re-save with the original string intact.
+///
+///   A1 = 36540  num_fmt = "yyyy-mm-dd"   → renders "2000-01-15"
+///   A2 = 36540  num_fmt = "d-mmm-yyyy"   → renders "15-Jan-2000"
+///   A3 = 36540  num_fmt = "dddd"         → renders "Saturday"
+///   A4 = 36540  num_fmt = "dd-mmm-yy"    → canonical D1, no override
+fn build_date_formats(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = Model::new_empty("date_formats", "en", "UTC", "en")?;
+    write_cell_with_num_fmt(&mut model, 1, 1, "36540", "yyyy-mm-dd")?;
+    write_cell_with_num_fmt(&mut model, 2, 1, "36540", "d-mmm-yyyy")?;
+    write_cell_with_num_fmt(&mut model, 3, 1, "36540", "dddd")?;
+    write_cell_with_num_fmt(&mut model, 4, 1, "36540", "dd-mmm-yy")?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF8 path: {}", path.display()))?;
+    save_to_xlsx(&model, path_str)?;
+    println!("  {}", path.display());
+    Ok(())
+}
+
+fn write_cell_with_num_fmt(
+    model: &mut Model,
+    row_1b: i32,
+    col_1b: i32,
+    input: &str,
+    num_fmt: &str,
+) -> Result<(), String> {
+    model.set_user_input(0, row_1b, col_1b, input.to_string())?;
+    let mut style = model.get_style_for_cell(0, row_1b, col_1b)?;
+    style.num_fmt = num_fmt.to_string();
+    model.set_cell_style(0, row_1b, col_1b, &style)?;
     Ok(())
 }
 

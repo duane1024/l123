@@ -14,9 +14,7 @@ use tokio::sync::oneshot;
 use l123_core::{Address, CellContents, LabelPrefix, Mode, SheetId, Value};
 use l123_engine::{Engine, IronCalcEngine};
 
-use super::types::{
-    AsyncProgress, AsyncResult, OpState, PendingAsyncOp, QueuedOp,
-};
+use super::types::{AsyncProgress, AsyncResult, OpState, PendingAsyncOp, QueuedOp};
 use super::{is_wk3_path, App};
 
 impl App {
@@ -205,7 +203,7 @@ impl App {
                 // a dirty workbook lands at A:A1 with no leftover
                 // styles or pending modal state.
                 self.wb_mut().cells.clear();
-                self.wb_mut().cell_formats.clear();
+                self.wb_mut().clear_all_cell_formats();
                 self.wb_mut().cell_text_styles.clear();
                 self.wb_mut().cell_alignments.clear();
                 self.wb_mut().cell_fills.clear();

@@ -1,0 +1,92 @@
+# Per-cell Excel `num_fmt` override: when an .xlsx cell carries a date
+# format string that doesn't round-trip through the canonical 1-2-3
+# D1..D9 mapping (e.g. `yyyy-mm-dd`, `d-mmm-yyyy`, `dddd`), L123
+# should display the value the way Excel would — and re-save the
+# original `num_fmt` string verbatim if the cell hasn't been touched.
+#
+# Fixture: tests/acceptance/fixtures/xlsx/date_formats.xlsx (built by
+# `cargo run -p l123-engine --example build_fixtures`).
+#
+# Layout on sheet A (all cells = serial 36540 = Saturday, 2000-01-15):
+#   A1  num_fmt = "yyyy-mm-dd"   → "2000-01-15"   (override drives display)
+#   A2  num_fmt = "d-mmm-yyyy"   → "15-Jan-2000"  (override)
+#   A3  num_fmt = "dddd"         → "Saturday"     (override)
+#   A4  num_fmt = "dd-mmm-yy"    → "15-JAN-00"    (canonical D1, no override)
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY R
+ASSERT_MODE      MENU
+KEYS tests/acceptance/fixtures/xlsx/date_formats.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Widen column A so the long forms (10..12 chars) fit without overflow
+# asterisks. /WCS prompt → 12 → Enter.
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 2
+ENTER
+
+# A1 displays the Excel format string verbatim, not the canonical D-letter
+# rendering ("00-JAN-15" or similar would mean the override missed).
+ASSERT_CELL      A:A1  2000-01-15
+
+# A2: title-case month abbreviation, 4-digit year, no leading zero on day.
+DOWN
+ASSERT_CELL      A:A2  15-Jan-2000
+
+# A3: weekday name spelled out — only reachable through the override path.
+DOWN
+ASSERT_CELL      A:A3  Saturday
+
+# A4: canonical 1-2-3 D1 form. The xlsx string `dd-mmm-yy` matches
+# `to_num_fmt(DateDmy)` exactly so no override is stored — the cell
+# renders through the canonical D1 path (uppercase month abbrev).
+DOWN
+ASSERT_CELL      A:A4  15-JAN-00
+
+# Save → reload round-trip: write the workbook back to a temp xlsx,
+# then `/File Retrieve` it and verify the same renderings still appear.
+# A round-trip-safe override is the only way A3 survives — saving the
+# canonical `m/d` and reloading would render "1/15" not "Saturday".
+RM_FILE $TMPDIR/date_formats_out.xlsx
+HOME
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/date_formats_out.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Reload the just-saved file and re-check.
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/date_formats_out.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Need to widen column A again on the freshly-loaded workbook since
+# /File Retrieve resets column widths to whatever the xlsx carried
+# (the original fixture didn't set a custom width).
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 2
+ENTER
+
+ASSERT_CELL      A:A1  2000-01-15
+DOWN
+ASSERT_CELL      A:A2  15-Jan-2000
+DOWN
+ASSERT_CELL      A:A3  Saturday
+DOWN
+ASSERT_CELL      A:A4  15-JAN-00

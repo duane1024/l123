@@ -6,8 +6,7 @@
 use l123_core::cell_render::{apply_halign_to_rendered, label_text_bounds};
 use l123_core::{
     address::col_to_letters, plan_row_spill, render_label, render_value_in_cell, Address,
-    CellContents, Format, HAlign, International, Mode, Range, SheetId, SpillSlot, TextStyle,
-    Value,
+    CellContents, Format, HAlign, International, Mode, Range, SheetId, SpillSlot, TextStyle, Value,
 };
 use l123_engine::{Engine, RecalcMode};
 use l123_menu::MenuBody;
@@ -229,7 +228,6 @@ fn write_centered(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, styl
     }
 }
 
-
 /// Render non-label cell contents into exactly `width` chars. An
 /// `Empty` / `Value::Empty` / unevaluated formula produces blanks so
 /// the result can slot directly into [`SpillSlot::Rendered`].
@@ -238,6 +236,7 @@ fn render_own_width(
     width: usize,
     format: Format,
     intl: &International,
+    excel_override: Option<&str>,
 ) -> String {
     match contents {
         CellContents::Empty => " ".repeat(width),
@@ -246,13 +245,13 @@ fn render_own_width(
             // never hit this branch from the planner caller.
             " ".repeat(width)
         }
-        CellContents::Constant(v) => {
-            render_value_in_cell(v, width, format, intl).unwrap_or_else(|| " ".repeat(width))
-        }
+        CellContents::Constant(v) => render_value_in_cell(v, width, format, intl, excel_override)
+            .unwrap_or_else(|| " ".repeat(width)),
         CellContents::Formula {
             cached_value: Some(v),
             ..
-        } => render_value_in_cell(v, width, format, intl).unwrap_or_else(|| " ".repeat(width)),
+        } => render_value_in_cell(v, width, format, intl, excel_override)
+            .unwrap_or_else(|| " ".repeat(width)),
         CellContents::Formula {
             cached_value: None, ..
         } => " ".repeat(width),
@@ -1798,8 +1797,14 @@ impl App {
                         }
                         Some(other) => {
                             let fmt = self.format_for_cell(addr);
-                            let s =
-                                render_own_width(other, w as usize, fmt, &self.wb().international);
+                            let ovr = self.wb().format_override_for_cell(addr);
+                            let s = render_own_width(
+                                other,
+                                w as usize,
+                                fmt,
+                                &self.wb().international,
+                                ovr,
+                            );
                             RowInput::Rendered(apply_halign_to_rendered(&s, halign, w as usize))
                         }
                     }
@@ -2043,11 +2048,13 @@ impl App {
                             }
                             Some(other) => {
                                 let fmt = self.format_for_cell(m.anchor);
+                                let ovr = self.wb().format_override_for_cell(m.anchor);
                                 let s = render_own_width(
                                     other,
                                     span_w as usize,
                                     fmt,
                                     &self.wb().international,
+                                    ovr,
                                 );
                                 let painted = apply_halign_to_rendered(&s, halign, span_w as usize);
                                 // Rendered values (numbers, formulas) have

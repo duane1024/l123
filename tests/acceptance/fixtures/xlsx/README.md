@@ -38,3 +38,4 @@ documented per-file.
 | `frozen.xlsx` | Frozen rows + columns (§2.5) | frozen_rows=2, frozen_columns=1; top frozen-row band B1..AC1; left frozen-col band A3..A60; E5='BODY' as scrolling-region cue. Round-trips natively. |
 | `hidden_sheets.xlsx` | Sheet visibility (§3.3) | 4 sheets: A=Visible, B=Hidden, C=VeryHidden, D=Visible. Round-trips natively. |
 | `tables.xlsx` | Excel tables / autofilter (§3.2) | Sheet A has Table1 covering A1:D3 with header row Year/Q1/Q2/Q3 and an autoFilter. IronCalc's exporter doesn't write tables — table XML + sheet rels hand-injected. Style name doesn't round-trip (IronCalc importer reads from a mis-spelled `<tableInfo>`). |
+| `date_formats.xlsx` | Per-cell `num_fmt` override for non-canonical date strings | A1=36540 fmt `yyyy-mm-dd` → "2000-01-15"; A2=36540 fmt `d-mmm-yyyy` → "15-Jan-2000"; A3=36540 fmt `dddd` → "Saturday"; A4=36540 fmt `dd-mmm-yy` (canonical D1, no override). |

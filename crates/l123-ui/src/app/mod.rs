@@ -19,21 +19,21 @@ use tokio::runtime::{Builder as TokioBuilder, Runtime};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use l123_core::cell_render::halign_to_label_prefix;
 use l123_core::{
-    label::is_value_starter, Address, Alignment, Border, CellContents, Comment,
-    CurrencyPosition, DateIntl, ErrKind, Fill, FontStyle, Format, FormatKind, HAlign,
-    International, LabelPrefix, Merge, Mode, NegativeStyle, Punctuation, Range, RangeInput,
-    RgbColor, SheetId, SheetState, Table, TextStyle, TimeIntl, Value,
+    label::is_value_starter, Address, Alignment, Border, CellContents, Comment, CurrencyPosition,
+    DateIntl, ErrKind, Fill, FontStyle, Format, FormatKind, HAlign, International, LabelPrefix,
+    Merge, Mode, NegativeStyle, Punctuation, Range, RangeInput, RgbColor, SheetId, SheetState,
+    Table, TextStyle, TimeIntl, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
 use l123_menu::{self as menu, Action, MenuBody, MenuItem};
 use l123_print::{PrintContentMode, PrintFormatMode, PrintSettings};
+use ratatui::layout::Rect;
 #[cfg(test)]
 use ratatui::{
     buffer::Buffer,
     style::{Color, Modifier},
 };
-use ratatui::layout::Rect;
 use ratatui_image::{picker::Picker, picker::ProtocolType};
 
 use crate::help::HelpState;
@@ -51,21 +51,19 @@ mod tests;
 #[cfg(test)]
 use render::text_style_modifier;
 pub use types::{
-    ClockDisplay, DisplayMode, GlobalDefaults, GraphGroupOrientation, GraphSaveFormat,
-    RecalcOrder, SplashInfo, ZeroDisplay,
-};
-pub(crate) use types::{
-    CombineKind, FileListKind, FileListState, NameListOrigin, NameListState, TitlesKind,
-    XtractKind,
+    ClockDisplay, DisplayMode, GlobalDefaults, GraphGroupOrientation, GraphSaveFormat, RecalcOrder,
+    SplashInfo, ZeroDisplay,
 };
 use types::{
-    ColorTarget, CustomMenuState, DataParseState, DataQueryState,
-    DataRegressionState, DataSortState, Entry, EntryKind, EraseConfirmState, FormatField,
-    FormatSnapshot, GraphOverlay, IconPanelGeom, JournalEntry, LabelDirection,
-    MacroState, MenuState, PendingAsyncOp, PendingCommand, PointState,
-    PrintDestination, PrintSession, PromptNext, PromptState, QueuedOp,
+    ColorTarget, CustomMenuState, DataParseState, DataQueryState, DataRegressionState,
+    DataSortState, Entry, EntryKind, EraseConfirmState, FormatField, FormatSnapshot, GraphOverlay,
+    IconPanelGeom, JournalEntry, LabelDirection, MacroState, MenuState, PendingAsyncOp,
+    PendingCommand, PointState, PrintDestination, PrintSession, PromptNext, PromptState, QueuedOp,
     SaveConfirmState, SearchScope, SearchSession, SortDir, SortKeySlot, StatView, Workbook,
     FILE_LIST_PAGE_SIZE, NAME_LIST_PAGE_SIZE,
+};
+pub(crate) use types::{
+    CombineKind, FileListKind, FileListState, NameListOrigin, NameListState, TitlesKind, XtractKind,
 };
 
 // Grid geometry — kept as consts so both render and cell-address-probe agree.
@@ -156,7 +154,6 @@ fn effective_label_prefix(stored: LabelPrefix, halign: HAlign) -> LabelPrefix {
     }
     halign_to_label_prefix(halign).unwrap_or(stored)
 }
-
 
 pub struct App {
     mode: Mode,
@@ -412,11 +409,9 @@ pub struct App {
     recalc_wait_cell_threshold: usize,
 }
 
-
 fn parse_margin(buffer: &str, prev: u16) -> u16 {
     buffer.parse::<u16>().unwrap_or(prev).min(1000)
 }
-
 
 /// `/Data Query` criterion-vs-input comparator. Numbers compare
 /// numerically; labels and `Value::Text` constants compare
@@ -485,7 +480,6 @@ fn build_format_line(label: &str) -> String {
     }
     out
 }
-
 
 /// Parse a Lotus-style format line into a list of fields. The
 /// leading `|` is consumed; each marker char (L/V/D/T/S) opens a
@@ -976,7 +970,6 @@ fn is_retrievable_workbook(path: &Path) -> bool {
     false
 }
 
-
 /// Render a source-engine [`CellView`] into the `set_user_input`
 /// string shape appropriate for `/File Xtract`'s kind. Formulas keeps
 /// the formula string; Values flattens it to the cached scalar.
@@ -1077,7 +1070,6 @@ fn cell_view_to_contents(cv: &CellView, sheets: &[&str]) -> Option<CellContents>
         other => Some(CellContents::Constant(other.clone())),
     }
 }
-
 
 impl App {
     pub fn new() -> Self {
@@ -1361,18 +1353,12 @@ impl App {
 
     // ---------------- key handling ----------------
 
-
-
-
     fn set_error(&mut self, msg: impl Into<String>) {
         let msg = msg.into();
         tracing::error!(error = %msg, "user-visible error");
         self.error_message = Some(msg);
         self.mode = Mode::Error;
     }
-
-
-
 
     fn begin_goto_prompt(&mut self) {
         self.start_name_prompt("Enter address to go to:", PromptNext::Goto);
@@ -1407,7 +1393,6 @@ impl App {
             self.mode = Mode::Edit;
         }
     }
-
 
     /// Step `cursor` left by one char (UTF-8 safe).
     fn move_entry_cursor_left(&mut self) {
@@ -1604,7 +1589,7 @@ impl App {
         // numeric commit leaves any pre-existing format alone — re-typing
         // `100` over a `(C2)` cell keeps the C2 format, matching 1-2-3.
         if let Some(fmt) = inferred_format {
-            self.wb_mut().cell_formats.insert(p, fmt);
+            self.wb_mut().set_cell_format(p, fmt);
         }
         self.wb_mut().dirty = true;
         self.mode = Mode::Ready;
@@ -2185,7 +2170,6 @@ impl App {
         }
         out
     }
-
 
     fn descend_highlighted(&mut self) {
         let Some(state) = self.menu.as_ref() else {
@@ -3038,7 +3022,6 @@ impl App {
         self.mode = Mode::Files;
     }
 
-
     fn open_help(&mut self) {
         // Don't double-open if already in HELP (defensive — the
         // dispatcher gate above should have routed F1 to
@@ -3060,8 +3043,6 @@ impl App {
         };
         self.mode = state.return_mode;
     }
-
-
 
     /// Esc from the name list: clear the overlay and restore the
     /// underlying mode (POINT or the prompt's MENU mode).
@@ -3277,7 +3258,7 @@ impl App {
     /// true multi-file insertion is M5.
     fn execute_file_new(&mut self) {
         self.wb_mut().cells.clear();
-        self.wb_mut().cell_formats.clear();
+        self.wb_mut().clear_all_cell_formats();
         self.wb_mut().cell_text_styles.clear();
         self.wb_mut().cell_alignments.clear();
         self.wb_mut().cell_fills.clear();
@@ -3674,6 +3655,10 @@ impl App {
         for (addr, fmt) in engine.used_cell_formats() {
             cell_formats.insert(addr, fmt);
         }
+        let mut cell_format_overrides: HashMap<Address, String> = HashMap::new();
+        for (addr, raw) in engine.used_cell_format_strings() {
+            cell_format_overrides.insert(addr, raw);
+        }
         let mut cell_alignments: HashMap<Address, Alignment> = HashMap::new();
         for (addr, a) in engine.used_cell_alignments() {
             cell_alignments.insert(addr, a);
@@ -3729,6 +3714,7 @@ impl App {
             engine,
             cells,
             cell_formats,
+            cell_format_overrides,
             global_format: Format::GENERAL,
             international: International::default(),
             cell_text_styles,
@@ -4085,7 +4071,7 @@ impl App {
     fn repopulate_after_xlsx_load(&mut self, path: PathBuf, is_wk3: bool) {
         // Wipe UI state; the loaded engine is the new source of truth.
         self.wb_mut().cells.clear();
-        self.wb_mut().cell_formats.clear();
+        self.wb_mut().clear_all_cell_formats();
         self.wb_mut().cell_text_styles.clear();
         self.wb_mut().cell_alignments.clear();
         self.wb_mut().cell_fills.clear();
@@ -4137,6 +4123,9 @@ impl App {
         }
         for (addr, fmt) in self.wb_mut().engine.used_cell_formats() {
             self.wb_mut().cell_formats.insert(addr, fmt);
+        }
+        for (addr, raw) in self.wb_mut().engine.used_cell_format_strings() {
+            self.wb_mut().cell_format_overrides.insert(addr, raw);
         }
         for (addr, a) in self.wb_mut().engine.used_cell_alignments() {
             self.wb_mut().cell_alignments.insert(addr, a);
@@ -4236,7 +4225,10 @@ impl App {
             let _ = self.wb_mut().engine.set_cell_text_style(addr, style);
         }
         // Push per-cell number formats so xlsx carries the num_fmt
-        // that /File Retrieve reads back.
+        // that /File Retrieve reads back. Cells with an Excel-format
+        // override (loaded verbatim from xlsx and untouched by the
+        // user) bypass the canonical D-letter round-trip and write
+        // their original num_fmt string back unchanged.
         let formats: Vec<(Address, Format)> = self
             .wb()
             .cell_formats
@@ -4245,6 +4237,15 @@ impl App {
             .collect();
         for (addr, fmt) in formats {
             let _ = self.wb_mut().engine.set_cell_format(addr, fmt);
+        }
+        let overrides: Vec<(Address, String)> = self
+            .wb()
+            .cell_format_overrides
+            .iter()
+            .map(|(a, s)| (*a, s.clone()))
+            .collect();
+        for (addr, raw) in overrides {
+            let _ = self.wb_mut().engine.set_cell_format_string(addr, &raw);
         }
         // Push per-cell alignments so xlsx preserves the horizontal /
         // vertical / wrap settings imported (or assigned) on L123's side.
@@ -4461,7 +4462,6 @@ impl App {
         }
     }
 
-
     /// Execute the user's pick on the Cancel/Replace/Backup submenu.
     fn commit_save_confirm(&mut self, choice: usize) {
         let Some(sc) = self.save_confirm.take() else {
@@ -4614,6 +4614,7 @@ impl App {
             shift_sheets_from(
                 &mut wb.cells,
                 &mut wb.cell_formats,
+                &mut wb.cell_format_overrides,
                 &mut wb.cell_text_styles,
                 &mut wb.col_widths,
                 at,
@@ -4636,6 +4637,7 @@ impl App {
             shift_sheets_from(
                 &mut wb.cells,
                 &mut wb.cell_formats,
+                &mut wb.cell_format_overrides,
                 &mut wb.cell_text_styles,
                 &mut wb.col_widths,
                 at,
@@ -4661,6 +4663,7 @@ impl App {
             drop_sheet_from_caches(
                 &mut wb.cells,
                 &mut wb.cell_formats,
+                &mut wb.cell_format_overrides,
                 &mut wb.cell_text_styles,
                 &mut wb.col_widths,
                 at,
@@ -4782,7 +4785,6 @@ impl App {
             None => Range::single(self.wb().pointer),
         }
     }
-
 
     /// Esc during POINT: with a non-empty typed range buffer, first
     /// clear the buffer (returning to highlight POINT). Otherwise the
@@ -5250,7 +5252,6 @@ impl App {
         self.search = Some(session);
         self.mode = Mode::Find;
     }
-
 
     /// Collect the addresses within `session.range` whose content (per
     /// scope) contains `session.search` as a substring.
@@ -7505,7 +7506,6 @@ impl App {
             .unwrap_or(self.wb().default_col_width)
     }
 
-
     fn cancel_prompt(&mut self) {
         // Esc on a macro-driven prompt cancels the whole macro: the
         // user has bailed out of the input the macro asked for, so
@@ -8019,9 +8019,9 @@ impl App {
                     let addr = Address::new(*sheet, col, row);
                     prior.push((addr, self.wb().cell_formats.get(&addr).copied()));
                     if matches!(format.kind, FormatKind::Reset) {
-                        self.wb_mut().cell_formats.remove(&addr);
+                        self.wb_mut().clear_cell_format(addr);
                     } else {
-                        self.wb_mut().cell_formats.insert(addr, format);
+                        self.wb_mut().set_cell_format(addr, format);
                     }
                 }
             }
@@ -8819,8 +8819,6 @@ impl Default for App {
     }
 }
 
-
-
 fn shift_cells_rows(
     cells: &mut HashMap<Address, CellContents>,
     sheet: SheetId,
@@ -8854,12 +8852,14 @@ fn shift_cells_rows(
 fn drop_sheet_from_caches(
     cells: &mut HashMap<Address, CellContents>,
     cell_formats: &mut HashMap<Address, Format>,
+    cell_format_overrides: &mut HashMap<Address, String>,
     cell_text_styles: &mut HashMap<Address, TextStyle>,
     col_widths: &mut HashMap<(SheetId, u16), u8>,
     at: u16,
 ) {
     cells.retain(|a, _| a.sheet.0 != at);
     cell_formats.retain(|a, _| a.sheet.0 != at);
+    cell_format_overrides.retain(|a, _| a.sheet.0 != at);
     cell_text_styles.retain(|a, _| a.sheet.0 != at);
     col_widths.retain(|(s, _), _| s.0 != at);
 
@@ -8885,6 +8885,16 @@ fn drop_sheet_from_caches(
     for addr in fmt_affected {
         let f = cell_formats.remove(&addr).expect("present");
         cell_formats.insert(shift_addr(addr), f);
+    }
+    let mut ovr_affected: Vec<Address> = cell_format_overrides
+        .keys()
+        .filter(|a| a.sheet.0 > at)
+        .copied()
+        .collect();
+    ovr_affected.sort_by_key(|a| a.sheet.0);
+    for addr in ovr_affected {
+        let s = cell_format_overrides.remove(&addr).expect("present");
+        cell_format_overrides.insert(shift_addr(addr), s);
     }
     let mut style_affected: Vec<Address> = cell_text_styles
         .keys()
@@ -8914,6 +8924,7 @@ fn drop_sheet_from_caches(
 fn shift_sheets_from(
     cells: &mut HashMap<Address, CellContents>,
     cell_formats: &mut HashMap<Address, Format>,
+    cell_format_overrides: &mut HashMap<Address, String>,
     cell_text_styles: &mut HashMap<Address, TextStyle>,
     col_widths: &mut HashMap<(SheetId, u16), u8>,
     at: u16,
@@ -8944,6 +8955,16 @@ fn shift_sheets_from(
     for addr in fmt_affected {
         let f = cell_formats.remove(&addr).expect("present");
         cell_formats.insert(shift_addr(addr), f);
+    }
+    let mut ovr_affected: Vec<Address> = cell_format_overrides
+        .keys()
+        .filter(|a| a.sheet.0 >= at)
+        .copied()
+        .collect();
+    ovr_affected.sort_by_key(|a| std::cmp::Reverse(a.sheet.0));
+    for addr in ovr_affected {
+        let s = cell_format_overrides.remove(&addr).expect("present");
+        cell_format_overrides.insert(shift_addr(addr), s);
     }
     let mut style_affected: Vec<Address> = cell_text_styles
         .keys()
@@ -9026,7 +9047,6 @@ fn is_wk3_path(path: &Path) -> bool {
     }
 }
 
-
 fn is_iterm2_compatible_env(term_program: Option<&str>, lc_terminal: Option<&str>) -> bool {
     const HINTS: &[&str] = &[
         "iTerm",
@@ -9051,4 +9071,3 @@ fn is_iterm2_compatible_env(term_program: Option<&str>, lc_terminal: Option<&str
     }
     false
 }
-

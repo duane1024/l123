@@ -32,6 +32,7 @@ use l123_core::{
 
 use crate::engine::{CellView, Engine, EngineError, Result};
 use crate::num_fmt;
+use crate::num_fmt::is_date_or_time_kind;
 
 pub struct IronCalcEngine {
     model: Model<'static>,
@@ -1041,6 +1042,74 @@ impl IronCalcEngine {
         out
     }
 
+    /// Enumerate every cell whose style carries a date/time number
+    /// format string that does NOT round-trip exactly through the
+    /// canonical 1-2-3 D1..D9 mapping. Used by `load_xlsx` to
+    /// populate the UI's per-cell override map so a cell originally
+    /// formatted as `"yyyy-mm-dd"` displays and re-saves verbatim
+    /// rather than collapsing to the canonical D-letter form.
+    ///
+    /// Numeric formats (Currency / Percent / Comma / etc.) are
+    /// deliberately excluded — they round-trip through the canonical
+    /// path well enough today, and skipping them keeps the override
+    /// map small.
+    pub fn used_cell_format_strings(&self) -> Vec<(Address, String)> {
+        let mut out = Vec::new();
+        for (sheet_idx, ws) in self.model.workbook.worksheets.iter().enumerate() {
+            let sheet = SheetId(sheet_idx as u16);
+            for (&row_1b, row_cells) in &ws.sheet_data {
+                if row_1b < 1 {
+                    continue;
+                }
+                let row_0b = (row_1b - 1) as u32;
+                for &col_1b in row_cells.keys() {
+                    if col_1b < 1 {
+                        continue;
+                    }
+                    let col_0b = (col_1b - 1) as u16;
+                    let addr = Address::new(sheet, col_0b, row_0b);
+                    let Ok(style) = self
+                        .model
+                        .get_style_for_cell(sheet_idx as u32, row_1b, col_1b)
+                    else {
+                        continue;
+                    };
+                    let Some(fmt) = num_fmt::parse(&style.num_fmt) else {
+                        continue;
+                    };
+                    if !is_date_or_time_kind(fmt.kind) {
+                        continue;
+                    }
+                    let canonical = num_fmt::to_num_fmt(fmt);
+                    if style.num_fmt != canonical {
+                        out.push((addr, style.num_fmt.clone()));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Stamp a raw Excel `num_fmt` string onto a cell, bypassing the
+    /// canonical D1..D9 round-trip. The save path uses this for cells
+    /// that arrived from xlsx with a non-canonical date/time format —
+    /// writing the original string back verbatim preserves the
+    /// original author's intent.
+    pub fn set_cell_format_string(&mut self, addr: Address, num_fmt: &str) -> Result<()> {
+        self.extend_sheets_to(addr.sheet)?;
+        let sheet = self.sheet_index(addr.sheet);
+        let row = Self::row_1based(addr);
+        let col = Self::col_1based(addr);
+        let mut s = self
+            .model
+            .get_style_for_cell(sheet, row, col)
+            .map_err(EngineError::Backend)?;
+        s.num_fmt = num_fmt.to_string();
+        self.model
+            .set_cell_style(sheet, row, col, &s)
+            .map_err(EngineError::Backend)
+    }
+
     /// Enumerate every cell whose style carries a non-default
     /// alignment. Used after `load_xlsx` to repopulate the UI's
     /// `cell_alignments` map so xlsx files authored in Excel survive
@@ -1938,6 +2007,66 @@ mod tests {
         assert!(
             !fmts.contains_key(&Address::new(SheetId::A, 0, 2)),
             "General-format cell should not surface in used_cell_formats"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn cell_format_string_round_trips_non_canonical_dates() {
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir =
+            std::env::temp_dir().join(format!("l123_engine_fmtstr_rt_{}_{}", process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fmtstr_rt.xlsx");
+
+        let mut e = IronCalcEngine::new().unwrap();
+        // A1 carries a date format string that does NOT match any
+        // canonical D1..D9 → to_num_fmt output, so it must surface in
+        // used_cell_format_strings as an override.
+        e.set_user_input(Address::new(SheetId::A, 0, 0), "36540")
+            .unwrap();
+        e.set_cell_format_string(Address::new(SheetId::A, 0, 0), "yyyy-mm-dd")
+            .unwrap();
+        // A2 carries a canonical D1 string ("dd-mmm-yy") which DOES
+        // match `to_num_fmt(DateDmy)` — should NOT show up as override.
+        e.set_user_input(Address::new(SheetId::A, 0, 1), "36540")
+            .unwrap();
+        e.set_cell_format_string(Address::new(SheetId::A, 0, 1), "dd-mmm-yy")
+            .unwrap();
+        // A3 carries a numeric format — also excluded (non-date kind).
+        e.set_user_input(Address::new(SheetId::A, 0, 2), "1000")
+            .unwrap();
+        e.set_cell_format(Address::new(SheetId::A, 0, 2), Format::currency(2))
+            .unwrap();
+
+        e.save_xlsx(&path).unwrap();
+
+        let mut e2 = IronCalcEngine::new().unwrap();
+        e2.load_xlsx(&path).unwrap();
+        let overrides: std::collections::HashMap<Address, String> =
+            e2.used_cell_format_strings().into_iter().collect();
+
+        assert_eq!(
+            overrides
+                .get(&Address::new(SheetId::A, 0, 0))
+                .map(String::as_str),
+            Some("yyyy-mm-dd"),
+            "non-canonical date format must round-trip verbatim"
+        );
+        assert!(
+            !overrides.contains_key(&Address::new(SheetId::A, 0, 1)),
+            "canonical D1 format string should NOT surface as override"
+        );
+        assert!(
+            !overrides.contains_key(&Address::new(SheetId::A, 0, 2)),
+            "numeric (currency) format should NOT surface as override"
         );
 
         let _ = std::fs::remove_file(&path);

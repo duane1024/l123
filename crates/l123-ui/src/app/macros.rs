@@ -605,7 +605,12 @@ impl App {
 
     /// Open a prompt in service of `{GETLABEL}` / `{GETNUMBER}` and
     /// park the macro until the user commits or cancels.
-    pub(super) fn start_macro_get_input(&mut self, prompt_text: String, loc: String, numeric: bool) {
+    pub(super) fn start_macro_get_input(
+        &mut self,
+        prompt_text: String,
+        loc: String,
+        numeric: bool,
+    ) {
         if let Some(s) = self.macro_state.as_mut() {
             s.suspend = Some(MacroSuspend::GetInput);
         }

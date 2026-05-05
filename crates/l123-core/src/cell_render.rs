@@ -262,18 +262,29 @@ fn spill_extent(
 /// yields `None` so callers can decide whether to blank or leave the
 /// slot untouched. `intl` supplies punctuation, currency, and negative
 /// style for `format_number`.
+///
+/// `excel_override`, when present, is the raw Excel `num_fmt` string
+/// from an xlsx import that didn't round-trip exactly through the
+/// canonical 1-2-3 D1..D9 mapping. Numeric values render through
+/// [`format_datetime_excel`] in that case so the on-screen text
+/// matches the original Excel author's intent. Non-number values
+/// ignore the override.
 pub fn render_value_in_cell(
     v: &Value,
     width: usize,
     format: Format,
     intl: &crate::International,
+    excel_override: Option<&str>,
 ) -> Option<String> {
     if matches!(format.kind, FormatKind::Hidden) {
         return Some(" ".repeat(width));
     }
     match v {
         Value::Number(n) => {
-            let s = crate::format_number(*n, format, intl);
+            let s = match excel_override {
+                Some(fmt_str) => crate::format_datetime_excel(*n, fmt_str),
+                None => crate::format_number(*n, format, intl),
+            };
             if s.chars().count() > width && !matches!(format.kind, FormatKind::General) {
                 Some("*".repeat(width))
             } else {

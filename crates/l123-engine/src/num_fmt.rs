@@ -18,6 +18,26 @@
 
 use l123_core::{Format, FormatKind};
 
+/// True for the `FormatKind` variants that represent a date or time
+/// rendering (D1..D9). The override pipeline only stores raw Excel
+/// format strings for these; numeric formats stay on the canonical
+/// kind path.
+pub fn is_date_or_time_kind(kind: FormatKind) -> bool {
+    use FormatKind::*;
+    matches!(
+        kind,
+        DateDmy
+            | DateDm
+            | DateMy
+            | DateLongIntl
+            | DateShortIntl
+            | TimeHmsAmPm
+            | TimeHmAmPm
+            | TimeLongIntl
+            | TimeShortIntl
+    )
+}
+
 /// Parse an Excel `num_fmt` string to an L123 `Format`.
 ///
 /// Returns `None` if the string is empty, `"general"`, or otherwise
@@ -106,12 +126,12 @@ pub fn to_num_fmt(format: Format) -> String {
         FormatKind::DateShortIntl => "m/d".to_string(),
         FormatKind::TimeLongIntl => "h:mm:ss".to_string(),
         FormatKind::TimeShortIntl => "h:mm".to_string(),
+        FormatKind::TimeHmsAmPm => "h:mm:ss AM/PM".to_string(),
+        FormatKind::TimeHmAmPm => "h:mm AM/PM".to_string(),
         // Kinds we don't yet render to Excel fall back to General so the
         // cell at least opens without an error in Excel.
         FormatKind::General
         | FormatKind::PlusMinus
-        | FormatKind::TimeHmsAmPm
-        | FormatKind::TimeHmAmPm
         | FormatKind::Text
         | FormatKind::Hidden
         | FormatKind::Automatic
@@ -158,63 +178,100 @@ fn classify_datetime(positive: &str) -> Option<l123_core::FormatKind> {
     let mut has_s = false;
     let mut has_m = false;
     let mut has_mmm = false;
+    let mut has_ampm = false;
 
-    let mut chars = positive.chars().peekable();
-    while let Some(c) = chars.next() {
+    let bytes = positive.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
         match c {
             // Quoted literal — skip the inner chars entirely so a
             // literal "moon" doesn't trigger month detection.
             '"' => {
-                for inner in chars.by_ref() {
-                    if inner == '"' {
-                        break;
-                    }
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
                 }
             }
             // Backslash-escape consumes the next char literally.
             '\\' => {
-                chars.next();
+                i += 2;
             }
             // Width-spacer / fill-repeat — drop the next char.
             '_' | '*' => {
-                chars.next();
+                i += 2;
             }
             // `[Red]`, `[h]`, `[$-409]` — cosmetic / locale tags. We
             // skip the entire bracketed run; the contents do not count
             // as date glyphs.
             '[' => {
-                for inner in chars.by_ref() {
-                    if inner == ']' {
-                        break;
-                    }
+                i += 1;
+                while i < bytes.len() && bytes[i] != b']' {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
                 }
             }
             'm' | 'M' => {
                 let mut run = 1;
-                while matches!(chars.peek(), Some('m') | Some('M')) {
-                    chars.next();
+                while i + run < bytes.len() && matches!(bytes[i + run], b'm' | b'M') {
                     run += 1;
                 }
                 has_m = true;
                 if run >= 3 {
                     has_mmm = true;
                 }
+                i += run;
             }
-            'd' | 'D' => has_d = true,
-            'y' | 'Y' => has_y = true,
-            'h' | 'H' => has_h = true,
-            's' | 'S' => has_s = true,
-            _ => {}
+            'd' | 'D' => {
+                has_d = true;
+                i += 1;
+            }
+            'y' | 'Y' => {
+                has_y = true;
+                i += 1;
+            }
+            'h' | 'H' => {
+                has_h = true;
+                i += 1;
+            }
+            's' | 'S' => {
+                has_s = true;
+                i += 1;
+            }
+            // `AM/PM` (or `am/pm`) and `A/P` (or `a/p`) — literal AM/PM
+            // markers Excel uses to flag a 12-hour time format.
+            'A' | 'a' => {
+                let lower = positive[i..].to_ascii_lowercase();
+                if lower.starts_with("am/pm") {
+                    has_ampm = true;
+                    i += 5;
+                } else if lower.starts_with("a/p") {
+                    has_ampm = true;
+                    i += 3;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
 
     // Time wins over date. `[h]:mm:ss` (elapsed time) hides `h` inside
-    // brackets — `s` alone is enough to mark it as time.
+    // brackets — `s` alone is enough to mark it as time. AM/PM marker
+    // selects the 12-hour kinds (D6/D7) over the international ones.
     if has_h || has_s {
-        return Some(if has_s {
-            FormatKind::TimeLongIntl
-        } else {
-            FormatKind::TimeShortIntl
+        return Some(match (has_s, has_ampm) {
+            (true, true) => FormatKind::TimeHmsAmPm,
+            (false, true) => FormatKind::TimeHmAmPm,
+            (true, false) => FormatKind::TimeLongIntl,
+            (false, false) => FormatKind::TimeShortIntl,
         });
     }
 
@@ -230,6 +287,13 @@ fn classify_datetime(positive: &str) -> Option<l123_core::FormatKind> {
             FormatKind::DateShortIntl
         }),
         (true, true, false) => Some(FormatKind::DateMy),
+        // Day-only (`d`, `dd`, `ddd`, `dddd`) and year-only (`yyyy`)
+        // are valid date formats too — collapse to a sensible D-letter
+        // for the canonical-tag fallback. The actual rendering goes
+        // through the override path because `to_num_fmt(D5)` = "m/d"
+        // doesn't match the original.
+        (false, false, true) => Some(FormatKind::DateShortIntl),
+        (true, false, false) => Some(FormatKind::DateMy),
         _ => None,
     }
 }
@@ -513,6 +577,60 @@ mod tests {
                 decimals: 0
             })
         );
+    }
+
+    #[test]
+    fn time_hms_ampm_for_h_m_s_with_ampm_marker() {
+        assert_eq!(
+            parse("h:mm:ss AM/PM"),
+            Some(Format {
+                kind: FormatKind::TimeHmsAmPm,
+                decimals: 0
+            })
+        );
+        // Lowercase variant.
+        assert_eq!(
+            parse("h:mm:ss am/pm"),
+            Some(Format {
+                kind: FormatKind::TimeHmsAmPm,
+                decimals: 0
+            })
+        );
+        // Single-letter A/P short form Excel also accepts.
+        assert_eq!(
+            parse("h:mm:ss A/P"),
+            Some(Format {
+                kind: FormatKind::TimeHmsAmPm,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn time_hm_ampm_for_h_m_with_ampm_marker() {
+        assert_eq!(
+            parse("h:mm AM/PM"),
+            Some(Format {
+                kind: FormatKind::TimeHmAmPm,
+                decimals: 0
+            })
+        );
+        assert_eq!(
+            parse("h:mm am/pm"),
+            Some(Format {
+                kind: FormatKind::TimeHmAmPm,
+                decimals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn time_ampm_round_trips_via_to_num_fmt() {
+        for kind in [FormatKind::TimeHmsAmPm, FormatKind::TimeHmAmPm] {
+            let f = Format { kind, decimals: 0 };
+            let s = to_num_fmt(f);
+            assert_eq!(parse(&s), Some(f), "round-trip for {f:?} via {s:?}");
+        }
     }
 
     #[test]

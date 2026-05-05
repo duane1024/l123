@@ -10,9 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind,
-    },
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };

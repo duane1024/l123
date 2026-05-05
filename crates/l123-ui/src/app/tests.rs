@@ -839,8 +839,7 @@ fn temp_test_dir(tag: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir =
-        std::env::temp_dir().join(format!("l123_test_{}_{}_{}", tag, process::id(), nanos,));
+    let dir = std::env::temp_dir().join(format!("l123_test_{}_{}_{}", tag, process::id(), nanos,));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -1359,10 +1358,11 @@ fn file_retrieve_replaces_memory_with_saved_contents() {
     app2.test_resume_async_op();
 
     assert_eq!(app2.mode, Mode::Ready);
-    let stored =
-        app2.wb().cells.get(&Address::A1).unwrap_or_else(|| {
-            panic!("A1 not populated after /FR — have: {:?}", app2.wb().cells)
-        });
+    let stored = app2
+        .wb()
+        .cells
+        .get(&Address::A1)
+        .unwrap_or_else(|| panic!("A1 not populated after /FR — have: {:?}", app2.wb().cells));
     match stored {
         CellContents::Constant(Value::Number(n)) => assert_eq!(n, &42.0),
         other => panic!("expected Constant(42), got {other:?}"),
@@ -4156,8 +4156,7 @@ fn text_style_survives_xlsx_save_and_retrieve() {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir =
-        std::env::temp_dir().join(format!("l123_ui_style_rt_{}_{}", process::id(), nanos));
+    let dir = std::env::temp_dir().join(format!("l123_ui_style_rt_{}_{}", process::id(), nanos));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("style.xlsx");
 

@@ -12,4 +12,12 @@ pub trait WorkbookView {
     fn col_width(&self, sheet: SheetId, col: u16) -> u8;
     fn format_for_cell(&self, addr: Address) -> Format;
     fn international(&self) -> &International;
+    /// Raw Excel `num_fmt` string preserved verbatim from xlsx import.
+    /// `Some(_)` means render numeric values through the Excel format
+    /// evaluator instead of the canonical 1-2-3 D1..D9 renderer.
+    /// Default impl returns `None` for backends that don't track xlsx
+    /// originals (tests, simple in-memory views).
+    fn format_override_for_cell(&self, _addr: Address) -> Option<&str> {
+        None
+    }
 }
