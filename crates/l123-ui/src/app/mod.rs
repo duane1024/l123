@@ -689,11 +689,43 @@ fn copy_paste_anchors(src: Range, dest: Range) -> Result<Vec<Address>, &'static 
 /// Resolve a user-typed filename into a save-target path. If the input
 /// has no extension, default to `.xlsx` (L123's modern save format).
 fn resolve_save_path(input: &str) -> PathBuf {
-    let mut p = PathBuf::from(input);
+    let mut p = PathBuf::from(clean_dropped_path(input));
     if p.extension().is_none() {
         p.set_extension("xlsx");
     }
     p
+}
+
+/// Strip the shell-quoting that terminals add when a user drags a
+/// file into the prompt. macOS Terminal/iTerm2 backslash-escape any
+/// space, `~`, `(`, etc., and some terminals wrap the whole path in
+/// matched quotes. `PathBuf::from` takes those bytes literally, so
+/// `Mobile\ Documents` becomes a non-existent directory. We unescape
+/// `\X` → `X` and strip a single layer of outer matched `'…'` or
+/// `"…"`. Trailing backslash with no follower is dropped (matches
+/// shell behavior).
+fn clean_dropped_path(input: &str) -> String {
+    let trimmed = input.trim();
+    let core = if trimmed.len() >= 2
+        && ((trimmed.starts_with('\'') && trimmed.ends_with('\''))
+            || (trimmed.starts_with('"') && trimmed.ends_with('"')))
+    {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
+    };
+    let mut out = String::with_capacity(core.len());
+    let mut chars = core.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// 1-2-3 R3.4a range-name rules: 1..=15 chars, first char is a
@@ -7836,7 +7868,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                let path = PathBuf::from(&p.buffer);
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 let name = display_basename(&path);
                 self.queue_async_op("Loading", name, QueuedOp::FileRetrieve { path });
             }
@@ -7854,7 +7886,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                let path = PathBuf::from(&p.buffer);
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.queue_file_import(path, /* numeric_split = */ true);
             }
             PromptNext::FileImportTextFilename => {
@@ -7862,7 +7894,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                let path = PathBuf::from(&p.buffer);
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.queue_file_import(path, /* numeric_split = */ false);
             }
             PromptNext::FileEraseFilename => {
@@ -7870,7 +7902,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                let path = PathBuf::from(&p.buffer);
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.erase_confirm = Some(EraseConfirmState { path, highlight: 0 });
                 self.mode = Mode::Menu;
             }
@@ -7879,7 +7911,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                let path = PathBuf::from(&p.buffer);
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 if entire {
                     self.combine_from(path, kind, None);
                 } else {
@@ -7903,7 +7935,7 @@ impl App {
             }
             PromptNext::FileDirPath => {
                 if !p.buffer.is_empty() {
-                    let _ = std::env::set_current_dir(PathBuf::from(&p.buffer));
+                    let _ = std::env::set_current_dir(PathBuf::from(clean_dropped_path(&p.buffer)));
                 }
                 self.mode = Mode::Ready;
             }
@@ -7912,7 +7944,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                let path = PathBuf::from(&p.buffer);
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.open_file_alongside(path, before);
             }
             PromptNext::PrintFileFilename => {
@@ -7920,7 +7952,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                let path = PathBuf::from(&p.buffer);
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.print = Some(PrintSession::new_file(path));
                 self.enter_print_file_menu();
             }
@@ -7929,7 +7961,7 @@ impl App {
                     self.mode = Mode::Ready;
                     return;
                 }
-                let path = PathBuf::from(&p.buffer);
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.print = Some(PrintSession::new_encoded(path));
                 self.enter_print_file_menu();
             }

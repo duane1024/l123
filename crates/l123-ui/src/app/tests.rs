@@ -4420,3 +4420,83 @@ fn set_theme_round_trips() {
     app.set_theme(crate::Theme::Default);
     assert_eq!(app.theme(), crate::Theme::Default);
 }
+
+#[test]
+fn clean_dropped_path_unescapes_backslashes_from_drag_and_drop() {
+    // Terminal drag-and-drop on macOS escapes spaces and `~` with
+    // backslashes. PathBuf::from sees those literally, so the file
+    // can't be found.
+    let input = "/Users/ddmoore/Library/Mobile\\ Documents/com\\~apple\\~CloudDocs/channel19/Factoring\\ Model.xlsx";
+    assert_eq!(
+        clean_dropped_path(input),
+        "/Users/ddmoore/Library/Mobile Documents/com~apple~CloudDocs/channel19/Factoring Model.xlsx",
+    );
+}
+
+#[test]
+fn clean_dropped_path_strips_outer_single_quotes() {
+    assert_eq!(
+        clean_dropped_path("'/tmp/has space.xlsx'"),
+        "/tmp/has space.xlsx",
+    );
+}
+
+#[test]
+fn clean_dropped_path_strips_outer_double_quotes() {
+    assert_eq!(
+        clean_dropped_path("\"/tmp/has space.xlsx\""),
+        "/tmp/has space.xlsx",
+    );
+}
+
+#[test]
+fn clean_dropped_path_trims_surrounding_whitespace() {
+    // Drag-and-drop on macOS often leaves a trailing space.
+    assert_eq!(clean_dropped_path("  /tmp/x.xlsx  "), "/tmp/x.xlsx");
+}
+
+#[test]
+fn clean_dropped_path_passes_through_plain_paths_unchanged() {
+    assert_eq!(clean_dropped_path("/tmp/plain.xlsx"), "/tmp/plain.xlsx");
+}
+
+#[test]
+fn clean_dropped_path_collapses_double_backslashes_to_one() {
+    // `\\` in shell-escape is a single literal backslash.
+    assert_eq!(clean_dropped_path("/tmp/odd\\\\name"), "/tmp/odd\\name");
+}
+
+#[test]
+fn file_retrieve_prompt_unescapes_drag_and_drop_path() {
+    // Reproduces the bug: macOS Terminal drag-and-drop produces a
+    // backslash-escaped path. Without unescaping, /File Retrieve
+    // queues a non-existent path and the load fails.
+    let mut app = App::new();
+    app.test_block_next_async_op();
+    app.prompt = Some(PromptState {
+        label: "Enter file to retrieve:".into(),
+        buffer:
+            "/Users/ddmoore/Library/Mobile\\ Documents/com\\~apple\\~CloudDocs/channel19/Factoring\\ Model.xlsx"
+                .into(),
+        next: PromptNext::FileRetrieveFilename,
+        fresh: false,
+    });
+    app.commit_prompt();
+
+    let pending = app.pending_async_op.as_ref().expect("op should be queued");
+    assert_eq!(pending.verb, "Loading");
+    assert_eq!(pending.display_name, "Factoring Model.xlsx");
+    let queued = match &pending.state {
+        crate::app::types::OpState::Queued(q) => q,
+        _ => panic!("op should still be in Queued state (block_next_async_op set)"),
+    };
+    match queued.as_ref() {
+        QueuedOp::FileRetrieve { path } => assert_eq!(
+            path.as_path(),
+            Path::new(
+                "/Users/ddmoore/Library/Mobile Documents/com~apple~CloudDocs/channel19/Factoring Model.xlsx",
+            ),
+        ),
+        _ => panic!("expected QueuedOp::FileRetrieve"),
+    }
+}
