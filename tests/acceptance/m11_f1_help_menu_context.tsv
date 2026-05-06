@@ -1,0 +1,85 @@
+# Context-sensitive F1 in MENU mode (the slash menu).
+#
+# F1 from inside the slash menu opens the help page for the deepest
+# wired item along the current menu path, falling back to "l123
+# Commands" at the empty-path root and walking up the chain when the
+# current item itself isn't wired yet.
+
+ASSERT_MODE       READY
+
+# `/` opens MENU at the empty path. F1 → "l123 Commands" overview.
+KEY /
+ASSERT_MODE       MENU
+F 1
+ASSERT_MODE       HELP
+ASSERT_SCREEN     l123 Commands
+ESC
+ASSERT_MODE       MENU
+
+# Descend into Worksheet. F1 → "The Worksheet Commands".
+KEY W
+ASSERT_MODE       MENU
+F 1
+ASSERT_MODE       HELP
+ASSERT_SCREEN     The Worksheet Commands
+ESC
+ASSERT_MODE       MENU
+ESC
+ESC
+ASSERT_MODE       READY
+
+# /Range — F1 → "The Range Commands".
+KEY /
+KEY R
+ASSERT_MODE       MENU
+F 1
+ASSERT_MODE       HELP
+ASSERT_SCREEN     The Range Commands
+ESC
+ESC
+ESC
+ASSERT_MODE       READY
+
+# Drill into /Worksheet Global → its own page (regression: previously
+# walked up to /Worksheet).
+KEY /
+KEY W
+KEY G
+ASSERT_MODE       MENU
+F 1
+ASSERT_MODE       HELP
+ASSERT_SCREEN     /Worksheet Global
+ESC
+ESC
+ESC
+ESC
+ASSERT_MODE       READY
+
+# Drill further into /Worksheet Global Format → its own page.
+KEY /
+KEY W
+KEY G
+KEY F
+ASSERT_MODE       MENU
+F 1
+ASSERT_MODE       HELP
+ASSERT_SCREEN     /Worksheet Global Format
+ESC
+ESC
+ESC
+ESC
+ESC
+ASSERT_MODE       READY
+
+# Walk-up: at /Q (the Quit submenu) the visible items No/Yes have no
+# help_page wired, so F1 falls back to /Q's own page.
+KEY /
+KEY Q
+ASSERT_MODE       MENU
+F 1
+ASSERT_MODE       HELP
+ASSERT_SCREEN     /Quit
+ESC
+ESC
+ESC
+ASSERT_MODE       READY

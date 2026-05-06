@@ -3169,11 +3169,31 @@ impl App {
             return;
         }
         let return_mode = self.mode;
-        let Some(state) = HelpState::open(return_mode) else {
+        let target = self.help_target();
+        let Some(state) = HelpState::open_to(target, return_mode)
+            .or_else(|| HelpState::open(return_mode))
+        else {
             return;
         };
         self.help = Some(state);
         self.mode = Mode::Help;
+    }
+
+    /// Pick the help page F1 should land on for the current context.
+    /// Inside the slash menu we follow the wired `help_page` of the
+    /// deepest `MenuItem` along the path, walking up to the parent
+    /// when the current item isn't wired yet, and finally to the
+    /// root "l123 Commands" overview at the empty path. Outside MENU
+    /// mode we land on the index page.
+    fn help_target(&self) -> &'static str {
+        if let Some(state) = self.menu.as_ref() {
+            let resolved = match state.override_root {
+                Some(root) => menu::help_page_within(root, &state.path),
+                None => menu::help_page_for_path(&state.path),
+            };
+            return resolved.unwrap_or(menu::ROOT_HELP_PAGE);
+        }
+        l123_help::INDEX_FILENAME
     }
 
     fn close_help(&mut self) {

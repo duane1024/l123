@@ -29,8 +29,10 @@ pub(crate) struct HelpState {
 }
 
 impl HelpState {
-    pub(crate) fn open(return_mode: Mode) -> Option<Self> {
-        let page = l123_help::load_page(l123_help::INDEX_FILENAME)?;
+    /// Open the overlay on the given help page. Returns `None` if the
+    /// filename isn't in the embedded corpus.
+    pub(crate) fn open_to(filename: &str, return_mode: Mode) -> Option<Self> {
+        let page = l123_help::load_page(filename)?;
         Some(Self {
             page,
             focus: 0,
@@ -38,6 +40,10 @@ impl HelpState {
             history: Vec::new(),
             return_mode,
         })
+    }
+
+    pub(crate) fn open(return_mode: Mode) -> Option<Self> {
+        Self::open_to(l123_help::INDEX_FILENAME, return_mode)
     }
 
     /// Navigate to `target`, pushing the current page onto the history
@@ -143,6 +149,7 @@ impl HelpState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use l123_menu::{MenuBody, MenuItem};
 
     #[test]
     fn open_loads_index() {
@@ -150,6 +157,67 @@ mod tests {
         assert_eq!(s.page.filename, l123_help::INDEX_FILENAME);
         assert!(!s.page.links.is_empty());
         assert!(s.history.is_empty());
+    }
+
+    /// Diagnostic: print every menu path whose `help_page` is empty.
+    /// Used while wiring up coverage; not a real assertion.
+    #[test]
+    #[ignore = "diagnostic only — run with --ignored to dump"]
+    fn dump_unwired_menu_paths() {
+        fn walk(items: &[MenuItem], prefix: &str, path: &mut Vec<char>, out: &mut Vec<String>) {
+            for it in items {
+                path.push(it.letter);
+                if it.help_page.is_empty() {
+                    let p: String = path.iter().collect();
+                    out.push(format!("{prefix}{p}\t{}", it.name));
+                }
+                if let MenuBody::Submenu(sub) = it.body {
+                    walk(sub, prefix, path, out);
+                }
+                path.pop();
+            }
+        }
+        let mut out = Vec::new();
+        walk(l123_menu::ROOT, "/", &mut Vec::new(), &mut out);
+        walk(l123_menu::WYSIWYG_ROOT, ":", &mut Vec::new(), &mut out);
+        for line in &out {
+            println!("{line}");
+        }
+        eprintln!("UNWIRED_COUNT={}", out.len());
+    }
+
+    /// Walk every menu tree (slash + WYSIWYG) and assert that any
+    /// non-empty `help_page` filename actually corresponds to an
+    /// embedded help page. Catches typos at the seam between the
+    /// menu definitions and the help corpus — without this, a typo
+    /// silently degrades to walk-up.
+    #[test]
+    fn every_wired_help_page_is_embedded() {
+        fn walk(items: &[MenuItem], path: &mut Vec<char>, missing: &mut Vec<(String, String)>) {
+            for it in items {
+                path.push(it.letter);
+                if !it.help_page.is_empty() && l123_help::raw(it.help_page).is_none() {
+                    let p: String = path.iter().collect();
+                    missing.push((p, it.help_page.to_string()));
+                }
+                if let MenuBody::Submenu(sub) = it.body {
+                    walk(sub, path, missing);
+                }
+                path.pop();
+            }
+        }
+        let mut missing = Vec::new();
+        walk(l123_menu::ROOT, &mut Vec::new(), &mut missing);
+        walk(l123_menu::WYSIWYG_ROOT, &mut Vec::new(), &mut missing);
+        assert!(
+            missing.is_empty(),
+            "menu items reference help pages not in the corpus: {missing:?}"
+        );
+        assert!(
+            l123_help::raw(l123_menu::ROOT_HELP_PAGE).is_some(),
+            "ROOT_HELP_PAGE {:?} is not embedded",
+            l123_menu::ROOT_HELP_PAGE,
+        );
     }
 
     #[test]
