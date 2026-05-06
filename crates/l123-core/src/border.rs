@@ -117,6 +117,19 @@ impl Border {
     }
 }
 
+/// Which edge(s) of a range a `:Format Lines` command targets.
+/// `Outline` is the only kind that depends on the cell's position
+/// inside the range; the rest apply uniformly to every cell.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BorderKind {
+    Outline,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    All,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

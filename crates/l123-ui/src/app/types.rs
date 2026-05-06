@@ -13,9 +13,9 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 
 use l123_core::{
-    Address, Alignment, Border, CellContents, CurrencyPosition, Fill, FontStyle, Format,
-    FormatKind, HAlign, International, LabelPrefix, Merge, Range, RgbColor, SheetId, SheetState,
-    Table, TextStyle,
+    Address, Alignment, Border, BorderKind, CellContents, CurrencyPosition, Fill, FontStyle,
+    Format, FormatKind, HAlign, International, LabelPrefix, Merge, Range, RgbColor, SheetId,
+    SheetState, Table, TextStyle,
 };
 use l123_engine::IronCalcEngine;
 use l123_graph::{GraphDef, Series};
@@ -1617,6 +1617,13 @@ pub(super) enum PendingCommand {
         target: ColorTarget,
         color: Option<RgbColor>,
     },
+    /// `:Format Lines <Outline|Left|Right|Top|Bottom|All>` and the
+    /// matching `Clear` submenu. `set=true` adds the edges; `set=false`
+    /// removes them.
+    RangeBorder {
+        kind: BorderKind,
+        set: bool,
+    },
     /// First POINT of `:Special Copy` — pick the source range whose
     /// formatting will be replicated.
     SpecialCopyFrom,
@@ -1828,6 +1835,8 @@ impl PendingCommand {
             PendingCommand::RangeTextStyle { .. } => "Enter range for style:",
             PendingCommand::RangeAlignment { .. } => "Enter range for alignment:",
             PendingCommand::RangeColor { .. } => "Enter range for color:",
+            PendingCommand::RangeBorder { set: true, .. } => "Enter range for lines:",
+            PendingCommand::RangeBorder { set: false, .. } => "Enter range to clear lines:",
             PendingCommand::SpecialCopyFrom => "Enter range to copy formatting FROM:",
             PendingCommand::SpecialCopyTo { .. } => "Enter range to copy formatting TO:",
             PendingCommand::SpecialMoveFrom => "Enter range to move formatting FROM:",

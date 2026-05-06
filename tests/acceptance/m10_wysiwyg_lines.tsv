@@ -1,0 +1,63 @@
+# WYSIWYG `:Format Lines` — draw and clear cell borders on a range.
+#
+# `:FLR` (Right) sets a thin right edge on every cell of the picked range.
+# `:FLCR` (Clear Right) removes it.  Top/bottom edges are stored and
+# round-trip via xlsx but the TTY only renders the vertical seams (see
+# l123-core::border).
+
+KEYS hello
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: 'hello
+
+# :FLR → Lines → Right.  POINT A1, commit.
+KEY :
+ASSERT_MODE       MENU
+KEY F
+ASSERT_PANEL_L2   Lines
+KEY L
+ASSERT_PANEL_L2   Outline
+ASSERT_PANEL_L2   Right
+KEY R
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+
+# Park the pointer off A1 so its border isn't suppressed by the
+# highlight (existing render rule, see xlsx_borders.tsv).
+RIGHT
+ASSERT_POINTER          A:B1
+ASSERT_CELL_RIGHT_GLYPH A:A1  │
+
+# :FLCR → Clear → Right.  POINT A1, commit.  Right edge clears.
+HOME
+KEY :
+KEY F
+KEY L
+KEY C
+ASSERT_PANEL_L2   Outline
+ASSERT_PANEL_L2   Right
+KEY R
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+RIGHT
+ASSERT_CELL_RIGHT_GLYPH A:A1  SPACE
+
+# :FLO Outline on a 1-cell range = all four edges (left + right
+# render visibly; top + bottom are stored).
+HOME
+KEY :
+KEY F
+KEY L
+KEY O
+ASSERT_MODE       POINT
+ENTER
+ASSERT_MODE       READY
+RIGHT
+ASSERT_CELL_RIGHT_GLYPH A:A1  │
+
+# Alt-F4 undo reverts the Outline.
+ALT_F 4
+RIGHT
+ASSERT_CELL_RIGHT_GLYPH A:A1  SPACE

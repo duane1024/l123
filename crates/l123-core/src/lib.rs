@@ -24,7 +24,7 @@ pub mod value;
 
 pub use address::{Address, Range, RangeInput, SheetId};
 pub use alignment::{Alignment, HAlign, VAlign};
-pub use border::{Border, BorderEdge, BorderStyle};
+pub use border::{Border, BorderEdge, BorderKind, BorderStyle};
 pub use cell_render::{
     center_pad, plan_row_spill, render_label, render_value_in_cell, repeat_to_width, right_pad,
     PaintedSlot, SpillSlot,

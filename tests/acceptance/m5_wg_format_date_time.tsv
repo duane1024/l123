@@ -1,0 +1,60 @@
+# /Worksheet Global Format Date Time — workbook-wide default time format
+# (D6..D9). Mirrors /RFD T 1..4 but applies as the global, with no POINT.
+
+KEYS .5
+ENTER
+HOME
+
+# Widen column A to 12 so "12:00:00 PM" fits without overflow asterisks.
+KEY /
+KEY W
+KEY C
+KEY S
+KEY 1
+KEY 2
+ENTER
+
+# /WGFDT 1 → D6 (h:mm:ss AM/PM). Noon (.5) renders as "12:00:00 PM".
+KEY /
+KEY W
+KEY G
+KEY F
+KEY D
+KEY T
+KEY 1
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   (D6)
+ASSERT_CELL       A:A1  12:00:00 PM
+
+# /WGFDT 2 → D7. Same value renders without seconds.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY D
+KEY T
+KEY 2
+ASSERT_PANEL_L1   (D7)
+ASSERT_CELL       A:A1  12:00 PM
+
+# D8.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY D
+KEY T
+KEY 3
+ASSERT_PANEL_L1   (D8)
+ASSERT_CELL       A:A1  12:00:00
+
+# D9.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY D
+KEY T
+KEY 4
+ASSERT_PANEL_L1   (D9)
+ASSERT_CELL       A:A1  12:00

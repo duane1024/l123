@@ -1,0 +1,32 @@
+# /Worksheet Global Format Hidden — workbook-wide default Hidden.
+# Cells without a per-cell format render blank but the value is preserved
+# in the control panel (and in formulas).
+
+KEYS 42
+ENTER
+HOME
+ASSERT_PANEL_L1   A:A1: (G) 42
+ASSERT_CELL       A:A1  42
+
+# /WGFH — set global format to Hidden. No decimals prompt, no POINT.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY H
+ASSERT_MODE       READY
+
+# A1 (no per-cell override) inherits the new global. Tag is (H); cell
+# renders blank.
+ASSERT_PANEL_L1   A:A1: (H) 42
+ASSERT_CELL       A:A1
+
+# /WGFR resets the global back to General; the value reappears.
+KEY /
+KEY W
+KEY G
+KEY F
+KEY R
+ASSERT_MODE       READY
+ASSERT_PANEL_L1   A:A1: (G) 42
+ASSERT_CELL       A:A1  42

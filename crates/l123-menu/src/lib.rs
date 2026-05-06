@@ -340,7 +340,12 @@ pub enum Action {
     WorksheetGlobalFormatDateMy,
     WorksheetGlobalFormatDateLongIntl,
     WorksheetGlobalFormatDateShortIntl,
+    WorksheetGlobalFormatTimeHmsAmPm,
+    WorksheetGlobalFormatTimeHmAmPm,
+    WorksheetGlobalFormatTimeLongIntl,
+    WorksheetGlobalFormatTimeShortIntl,
     WorksheetGlobalFormatText,
+    WorksheetGlobalFormatHidden,
     WorksheetGlobalFormatPlusMinus,
     WorksheetGlobalFormatAutomatic,
     WorksheetGlobalFormatLabelOnly,
@@ -522,6 +527,26 @@ pub enum Action {
     FormatUnderlineClear,
     /// `:Format Reset` — clear bold + italic + underline on a range.
     FormatReset,
+    /// `:Format Lines` — paint thin borders on a POINT-selected range.
+    /// Each `*Set` variant adds the corresponding edges; each `*Clear`
+    /// removes them. `Outline` touches the perimeter of the range
+    /// (top of top row, bottom of bottom row, left of leftmost col,
+    /// right of rightmost col); `Left/Right/Top/Bottom` touch that one
+    /// edge of every cell; `All` is every edge of every cell. Top and
+    /// bottom edges are stored and round-trip via xlsx but the TTY
+    /// renders only the vertical seams.
+    FormatLinesOutlineSet,
+    FormatLinesLeftSet,
+    FormatLinesRightSet,
+    FormatLinesTopSet,
+    FormatLinesBottomSet,
+    FormatLinesAllSet,
+    FormatLinesOutlineClear,
+    FormatLinesLeftClear,
+    FormatLinesRightClear,
+    FormatLinesTopClear,
+    FormatLinesBottomClear,
+    FormatLinesAllClear,
     /// `:Format Alignment Left` — left-align text in a range.
     FormatAlignmentLeft,
     /// `:Format Alignment Right` — right-align text in a range.
@@ -2057,7 +2082,7 @@ const WG_FORMAT_MENU: &[MenuItem] = &[
         letter: 'H',
         name: "Hidden",
         help: "Default to hiding cell display",
-        body: MenuBody::NotImplemented("wg-format-hidden"),
+        body: MenuBody::Action(Action::WorksheetGlobalFormatHidden),
     },
     MenuItem {
         letter: 'O',
@@ -2216,7 +2241,34 @@ const WG_FORMAT_DATE_MENU: &[MenuItem] = &[
         letter: 'T',
         name: "Time",
         help: "Time format (D6..D9)",
-        body: MenuBody::NotImplemented("wg-format-date-time"),
+        body: MenuBody::Submenu(WG_FORMAT_DATE_TIME_MENU),
+    },
+];
+
+const WG_FORMAT_DATE_TIME_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: '1',
+        name: "1",
+        help: "HH:MM:SS AM/PM (D6)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatTimeHmsAmPm),
+    },
+    MenuItem {
+        letter: '2',
+        name: "2",
+        help: "HH:MM AM/PM (D7)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatTimeHmAmPm),
+    },
+    MenuItem {
+        letter: '3',
+        name: "3",
+        help: "Long international time (D8)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatTimeLongIntl),
+    },
+    MenuItem {
+        letter: '4',
+        name: "4",
+        help: "Short international time (D9)",
+        body: MenuBody::Action(Action::WorksheetGlobalFormatTimeShortIntl),
     },
 ];
 
@@ -3882,6 +3934,102 @@ const WYSIWYG_FORMAT_ALIGNMENT_MENU: &[MenuItem] = &[
     },
 ];
 
+const WYSIWYG_FORMAT_LINES_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'O',
+        name: "Outline",
+        help: "Draw a thin border around the perimeter of the range",
+        body: MenuBody::Action(Action::FormatLinesOutlineSet),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Left",
+        help: "Draw a thin border on the left edge of every cell",
+        body: MenuBody::Action(Action::FormatLinesLeftSet),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Right",
+        help: "Draw a thin border on the right edge of every cell",
+        body: MenuBody::Action(Action::FormatLinesRightSet),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Top",
+        help: "Draw a thin border on the top edge of every cell",
+        body: MenuBody::Action(Action::FormatLinesTopSet),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "Bottom",
+        help: "Draw a thin border on the bottom edge of every cell",
+        body: MenuBody::Action(Action::FormatLinesBottomSet),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "All",
+        help: "Draw thin borders on every edge of every cell",
+        body: MenuBody::Action(Action::FormatLinesAllSet),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Clear",
+        help: "Clear lines from a range",
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_LINES_CLEAR_MENU),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
+const WYSIWYG_FORMAT_LINES_CLEAR_MENU: &[MenuItem] = &[
+    MenuItem {
+        letter: 'O',
+        name: "Outline",
+        help: "Clear the perimeter outline on a range",
+        body: MenuBody::Action(Action::FormatLinesOutlineClear),
+    },
+    MenuItem {
+        letter: 'L',
+        name: "Left",
+        help: "Clear left edges on every cell of a range",
+        body: MenuBody::Action(Action::FormatLinesLeftClear),
+    },
+    MenuItem {
+        letter: 'R',
+        name: "Right",
+        help: "Clear right edges on every cell of a range",
+        body: MenuBody::Action(Action::FormatLinesRightClear),
+    },
+    MenuItem {
+        letter: 'T',
+        name: "Top",
+        help: "Clear top edges on every cell of a range",
+        body: MenuBody::Action(Action::FormatLinesTopClear),
+    },
+    MenuItem {
+        letter: 'B',
+        name: "Bottom",
+        help: "Clear bottom edges on every cell of a range",
+        body: MenuBody::Action(Action::FormatLinesBottomClear),
+    },
+    MenuItem {
+        letter: 'A',
+        name: "All",
+        help: "Clear every edge on every cell of a range",
+        body: MenuBody::Action(Action::FormatLinesAllClear),
+    },
+    MenuItem {
+        letter: 'Q',
+        name: "Quit",
+        help: "Return to READY",
+        body: MenuBody::Action(Action::Cancel),
+    },
+];
+
 const WYSIWYG_FORMAT_MENU: &[MenuItem] = &[
     MenuItem {
         letter: 'B',
@@ -3911,7 +4059,7 @@ const WYSIWYG_FORMAT_MENU: &[MenuItem] = &[
         letter: 'L',
         name: "Lines",
         help: "Draw lines around a range",
-        body: MenuBody::NotImplemented("wysiwyg-format-lines"),
+        body: MenuBody::Submenu(WYSIWYG_FORMAT_LINES_MENU),
     },
     MenuItem {
         letter: 'C',
@@ -4737,6 +4885,7 @@ mod tests {
                 Action::WorksheetGlobalFormatPlusMinus,
             ),
             (&['W', 'G', 'F', 'T'], Action::WorksheetGlobalFormatText),
+            (&['W', 'G', 'F', 'H'], Action::WorksheetGlobalFormatHidden),
             (&['W', 'G', 'F', 'R'], Action::WorksheetGlobalFormatReset),
             (
                 &['W', 'G', 'F', 'D', '1'],
@@ -4745,6 +4894,22 @@ mod tests {
             (
                 &['W', 'G', 'F', 'D', '5'],
                 Action::WorksheetGlobalFormatDateShortIntl,
+            ),
+            (
+                &['W', 'G', 'F', 'D', 'T', '1'],
+                Action::WorksheetGlobalFormatTimeHmsAmPm,
+            ),
+            (
+                &['W', 'G', 'F', 'D', 'T', '2'],
+                Action::WorksheetGlobalFormatTimeHmAmPm,
+            ),
+            (
+                &['W', 'G', 'F', 'D', 'T', '3'],
+                Action::WorksheetGlobalFormatTimeLongIntl,
+            ),
+            (
+                &['W', 'G', 'F', 'D', 'T', '4'],
+                Action::WorksheetGlobalFormatTimeShortIntl,
             ),
         ];
         for (path, expected) in cases {
@@ -4932,6 +5097,32 @@ mod tests {
     fn wysiwyg_format_font_is_not_implemented() {
         let f = resolve_within(WYSIWYG_ROOT, &['F', 'F']).unwrap();
         assert!(matches!(f.body, MenuBody::NotImplemented(_)));
+    }
+
+    #[test]
+    fn resolve_wysiwyg_format_lines_leaves() {
+        let cases: &[(&[char], Action)] = &[
+            (&['F', 'L', 'O'], Action::FormatLinesOutlineSet),
+            (&['F', 'L', 'L'], Action::FormatLinesLeftSet),
+            (&['F', 'L', 'R'], Action::FormatLinesRightSet),
+            (&['F', 'L', 'T'], Action::FormatLinesTopSet),
+            (&['F', 'L', 'B'], Action::FormatLinesBottomSet),
+            (&['F', 'L', 'A'], Action::FormatLinesAllSet),
+            (&['F', 'L', 'C', 'O'], Action::FormatLinesOutlineClear),
+            (&['F', 'L', 'C', 'L'], Action::FormatLinesLeftClear),
+            (&['F', 'L', 'C', 'R'], Action::FormatLinesRightClear),
+            (&['F', 'L', 'C', 'T'], Action::FormatLinesTopClear),
+            (&['F', 'L', 'C', 'B'], Action::FormatLinesBottomClear),
+            (&['F', 'L', 'C', 'A'], Action::FormatLinesAllClear),
+        ];
+        for (path, expected) in cases {
+            let node = resolve_within(WYSIWYG_ROOT, path)
+                .unwrap_or_else(|| panic!("resolve {path:?}"));
+            match node.body {
+                MenuBody::Action(actual) => assert_eq!(actual, *expected, "{path:?}"),
+                other => panic!("expected Action for {path:?}, got {other:?}"),
+            }
+        }
     }
 
     #[test]

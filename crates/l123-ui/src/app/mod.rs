@@ -19,10 +19,10 @@ use tokio::runtime::{Builder as TokioBuilder, Runtime};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use l123_core::cell_render::halign_to_label_prefix;
 use l123_core::{
-    label::is_value_starter, Address, Alignment, Border, CellContents, Comment, CurrencyPosition,
-    DateIntl, ErrKind, Fill, FontStyle, Format, FormatKind, HAlign, International, LabelPrefix,
-    Merge, Mode, NegativeStyle, Punctuation, Range, RangeInput, RgbColor, SheetId, SheetState,
-    Table, TextStyle, TimeIntl, Value,
+    label::is_value_starter, Address, Alignment, Border, BorderEdge, BorderKind, CellContents,
+    Comment, CurrencyPosition, DateIntl, ErrKind, Fill, FontStyle, Format, FormatKind, HAlign,
+    International, LabelPrefix, Merge, Mode, NegativeStyle, Punctuation, Range, RangeInput,
+    RgbColor, SheetId, SheetState, Table, TextStyle, TimeIntl, Value,
 };
 use l123_engine::{CellView, Engine, IronCalcEngine, RecalcMode};
 use l123_graph::{GraphDef, GraphType, Series};
@@ -2658,6 +2658,54 @@ impl App {
                 },
                 set: false,
             }),
+            Action::FormatLinesOutlineSet => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Outline,
+                set: true,
+            }),
+            Action::FormatLinesLeftSet => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Left,
+                set: true,
+            }),
+            Action::FormatLinesRightSet => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Right,
+                set: true,
+            }),
+            Action::FormatLinesTopSet => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Top,
+                set: true,
+            }),
+            Action::FormatLinesBottomSet => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Bottom,
+                set: true,
+            }),
+            Action::FormatLinesAllSet => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::All,
+                set: true,
+            }),
+            Action::FormatLinesOutlineClear => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Outline,
+                set: false,
+            }),
+            Action::FormatLinesLeftClear => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Left,
+                set: false,
+            }),
+            Action::FormatLinesRightClear => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Right,
+                set: false,
+            }),
+            Action::FormatLinesTopClear => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Top,
+                set: false,
+            }),
+            Action::FormatLinesBottomClear => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::Bottom,
+                set: false,
+            }),
+            Action::FormatLinesAllClear => self.begin_point(PendingCommand::RangeBorder {
+                kind: BorderKind::All,
+                set: false,
+            }),
             Action::FormatAlignmentLeft => self.begin_point(PendingCommand::RangeAlignment {
                 halign: HAlign::Left,
             }),
@@ -2819,6 +2867,21 @@ impl App {
             }
             Action::WorksheetGlobalFormatDateShortIntl => {
                 self.set_global_format(Format::from_kind(FormatKind::DateShortIntl))
+            }
+            Action::WorksheetGlobalFormatTimeHmsAmPm => {
+                self.set_global_format(Format::from_kind(FormatKind::TimeHmsAmPm))
+            }
+            Action::WorksheetGlobalFormatTimeHmAmPm => {
+                self.set_global_format(Format::from_kind(FormatKind::TimeHmAmPm))
+            }
+            Action::WorksheetGlobalFormatTimeLongIntl => {
+                self.set_global_format(Format::from_kind(FormatKind::TimeLongIntl))
+            }
+            Action::WorksheetGlobalFormatTimeShortIntl => {
+                self.set_global_format(Format::from_kind(FormatKind::TimeShortIntl))
+            }
+            Action::WorksheetGlobalFormatHidden => {
+                self.set_global_format(Format::from_kind(FormatKind::Hidden))
             }
             Action::FileSave => self.start_file_save_prompt(),
             Action::FileRetrieve => self.start_file_retrieve_prompt(),
@@ -5127,6 +5190,13 @@ impl App {
             PendingCommand::RangeColor { target, color } => {
                 for r in ranges {
                     self.execute_range_color(*r, target, color);
+                }
+                self.wb_mut().dirty = true;
+                self.mode = Mode::Ready;
+            }
+            PendingCommand::RangeBorder { kind, set } => {
+                for r in ranges {
+                    self.execute_range_border(*r, kind, set);
                 }
                 self.wb_mut().dirty = true;
                 self.mode = Mode::Ready;
@@ -8345,6 +8415,57 @@ impl App {
             self.wb_mut()
                 .journal
                 .push(JournalEntry::RangeAlignment { entries: prior });
+        }
+    }
+
+    fn execute_range_border(&mut self, range: Range, kind: BorderKind, set: bool) {
+        let r = range.normalized();
+        let new_edge: Option<BorderEdge> = if set {
+            Some(BorderEdge::default())
+        } else {
+            None
+        };
+        let mut prior: Vec<(Address, Option<Border>)> = Vec::new();
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                let prev = self.wb().cell_borders.get(&addr).copied();
+                let mut next = prev.unwrap_or_default();
+                let touch_top = matches!(kind, BorderKind::All | BorderKind::Top)
+                    || (matches!(kind, BorderKind::Outline) && row == r.start.row);
+                let touch_bottom = matches!(kind, BorderKind::All | BorderKind::Bottom)
+                    || (matches!(kind, BorderKind::Outline) && row == r.end.row);
+                let touch_left = matches!(kind, BorderKind::All | BorderKind::Left)
+                    || (matches!(kind, BorderKind::Outline) && col == r.start.col);
+                let touch_right = matches!(kind, BorderKind::All | BorderKind::Right)
+                    || (matches!(kind, BorderKind::Outline) && col == r.end.col);
+                if touch_top {
+                    next.top = new_edge;
+                }
+                if touch_bottom {
+                    next.bottom = new_edge;
+                }
+                if touch_left {
+                    next.left = new_edge;
+                }
+                if touch_right {
+                    next.right = new_edge;
+                }
+                if next == prev.unwrap_or_default() {
+                    continue;
+                }
+                prior.push((addr, prev));
+                if next.is_default() {
+                    self.wb_mut().cell_borders.remove(&addr);
+                } else {
+                    self.wb_mut().cell_borders.insert(addr, next);
+                }
+            }
+        }
+        if self.undo_enabled && !prior.is_empty() {
+            self.wb_mut()
+                .journal
+                .push(JournalEntry::RangeBorder { entries: prior });
         }
     }
 
