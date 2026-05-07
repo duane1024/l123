@@ -4500,3 +4500,34 @@ fn file_retrieve_prompt_unescapes_drag_and_drop_path() {
         _ => panic!("expected QueuedOp::FileRetrieve"),
     }
 }
+
+fn corner_text(buf: &Buffer) -> String {
+    (0..ROW_GUTTER)
+        .map(|i| buf[(i, PANEL_HEIGHT)].symbol().to_string())
+        .collect()
+}
+
+#[test]
+fn corner_paints_active_sheet_letter() {
+    let app = App::new();
+    let buf = app.render_to_buffer(80, 25);
+    let corner = corner_text(&buf);
+    assert_eq!(
+        corner.trim(),
+        "A",
+        "corner shows active sheet letter; got {corner:?}"
+    );
+}
+
+#[test]
+fn corner_follows_active_sheet_after_insert() {
+    let mut app = App::new();
+    drive_chord(&mut app, &['/', 'W', 'I', 'S', 'B']);
+    let buf = app.render_to_buffer(80, 25);
+    let corner = corner_text(&buf);
+    assert_eq!(
+        corner.trim(),
+        "B",
+        "after /WISB the original sheet shifts to B and the pointer follows; got {corner:?}"
+    );
+}

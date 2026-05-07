@@ -1756,12 +1756,12 @@ impl App {
         }
         // Top-left gutter corner — sheet-identity area; wears the
         // active style so DOS paints the corner CGA blue alongside
-        // the active column header and active row gutter.
-        for k in 0..ROW_GUTTER {
-            buf[(area.x + k, area.y)]
-                .set_char(' ')
-                .set_style(header_active);
-        }
+        // the active column header and active row gutter.  The
+        // active sheet's letter (A..IV) is centered in the gutter so
+        // the user can see at a glance which sheet they're on, the
+        // way 1-2-3 R3 stamps the worksheet identifier on the frame.
+        let sheet_label = self.wb().pointer.sheet.letter();
+        write_centered(buf, area.x, area.y, ROW_GUTTER, &sheet_label, header_active);
 
         // Body rows: frozen rows pinned at the top, then scrolling
         // rows starting at the viewport offset (clamped to skip past
