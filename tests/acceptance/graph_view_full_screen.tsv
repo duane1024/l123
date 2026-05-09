@@ -1,0 +1,53 @@
+# /Graph View (F10) takes the full screen — no control panel at top,
+# no status line at bottom, mirroring 1-2-3 R3.4a's full-screen graph
+# display. Reference p. 2-156.
+#
+# In READY the panel shows "A:A1: " and the status line carries the
+# unsaved-marker `*` plus indicators like UNDO. Once F10 enters GRAPH
+# mode, none of that chrome should be visible — the entire terminal
+# belongs to the graph.
+
+SIZE 80 25
+
+# Seed A1..A3 = 1, 2, 3 so we have something to plot. Dirties the
+# workbook so the status line would show the `*` unsaved marker.
+KEYS 1
+ENTER
+KEYS 2
+ENTER
+KEYS 3
+ENTER
+HOME
+ASSERT_POINTER  A:A1
+
+# /GTB — Bar; /GA over A1..A3.
+KEY /
+KEY G
+KEY T
+KEY B
+KEY /
+KEY G
+KEY A
+DOWN
+DOWN
+ENTER
+ASSERT_GRAPH_SERIES A  A:A1..A:A3
+
+# Sanity: in READY the panel and status are visible. /GA leaves the
+# pointer on the anchor end of the committed range (A:A3 here).
+ASSERT_PANEL_L1     A:A3:
+ASSERT_STATUS       UNDO
+
+# F10 → GRAPH. Panel address indicator and status indicators must
+# disappear because the graph claims the entire screen.
+F 10
+ASSERT_MODE        GRAPH
+ASSERT_SCREEN      █
+ASSERT_SCREEN_NOT_CONTAINS  A:A3:
+ASSERT_SCREEN_NOT_CONTAINS  UNDO
+
+# Esc returns to READY and the chrome reappears.
+ESC
+ASSERT_MODE        READY
+ASSERT_PANEL_L1    A:A3:
+ASSERT_STATUS      UNDO

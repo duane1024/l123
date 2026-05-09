@@ -484,6 +484,16 @@ impl App {
             return;
         }
 
+        // GRAPH mode is full-screen too — 1-2-3 R3.4a hands the entire
+        // display to the graph, no cell-pointer panel and no status
+        // line. Esc dismisses it back to the framed layout.
+        if self.mode == Mode::Graph {
+            self.icon_panel_area.set(None);
+            self.last_grid_area.set(None);
+            self.render_graph_overlay(area, buf);
+            return;
+        }
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -512,8 +522,6 @@ impl App {
             self.render_name_list_overlay(chunks[1], buf);
         } else if self.file_list.is_some() {
             self.render_file_list_overlay(chunks[1], buf);
-        } else if self.mode == Mode::Graph {
-            self.render_graph_overlay(chunks[1], buf);
         } else if self.mode == Mode::Stat {
             self.render_stat_overlay(chunks[1], buf);
         } else if self.is_in_graph_menu() {

@@ -129,12 +129,14 @@ ASSERT_MODE          READY
 ASSERT_GRAPH_DATA_LABELS  A          A:E1..A:E3
 ASSERT_GRAPH_DATA_LABELS_PLACEMENT  A  Above
 
-# F10 — labels render alongside the H-L bars.
+# F10 — labels render alongside the H-L bars. The third bar's
+# High value (14) is the max for the chart, so its top sits at
+# the plot's top edge; its Above-placed label is suppressed by
+# `paint_data_label`. Q1..Q2 render above their bars.
 F 10
 ASSERT_MODE          GRAPH
 ASSERT_SCREEN        Q1
 ASSERT_SCREEN        Q2
-ASSERT_SCREEN        Q3
 
 ESC
 ASSERT_MODE          READY

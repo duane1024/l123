@@ -129,8 +129,10 @@ where
     Ok(())
 }
 
-/// Series colours A..F. Cycles if more series somehow appear.
-const SERIES_PALETTE: &[RGBColor] = &[BLUE, RED, GREEN, MAGENTA, CYAN, BLACK];
+/// Series colours A..F. Eyeball-matched to the 1-2-3 R3.4a graph
+/// view in DOS VGA mode 12h: A=red, B=green, C=blue, D=yellow,
+/// E=magenta, F=cyan. Cycles if more series somehow appear.
+const SERIES_PALETTE: &[RGBColor] = &[RED, GREEN, BLUE, YELLOW, MAGENTA, CYAN];
 
 fn axis_bounds(series: &[&[f64]]) -> (f64, f64) {
     let mut lo = f64::INFINITY;
@@ -1113,6 +1115,31 @@ mod tests {
     }
 
     #[test]
+    fn svg_pie_slice_colors_match_lotus_palette() {
+        // 1-2-3 R3.4a assigned slice colors from a fixed palette in
+        // series-A order. Eyeball-matched from the reference
+        // screenshot in docs/SPEC: A=red, B=green, C=blue, D=yellow,
+        // E=magenta, F=cyan. Plotters emits each slice's fill via the
+        // `<polygon ... fill="#RRGGBB"` SVG attribute.
+        let def = GraphDef {
+            graph_type: GraphType::Pie,
+            ..Default::default()
+        };
+        let svg = render_svg(&def, &a(vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]));
+        let expected = [
+            "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF",
+        ];
+        for color in expected {
+            let needle = format!("fill=\"{color}\"");
+            assert!(
+                svg.contains(&needle),
+                "pie SVG should contain a {color} slice; got: {}",
+                &svg[..svg.len().min(400)]
+            );
+        }
+    }
+
+    #[test]
     fn svg_pie_uses_x_labels_for_wedges() {
         let def = GraphDef {
             graph_type: GraphType::Pie,
@@ -1563,7 +1590,7 @@ mod tests {
         let v_svg = render_svg(&v_def, &vals);
         let h_svg = render_svg(&h_def, &vals);
 
-        // Pull every bar-coloured rect (#0000FF fill from
+        // Pull every bar-coloured rect (#FF0000 fill from
         // SERIES_PALETTE[0]) and find the LARGEST one in each SVG.
         // Plotters emits the rect attrs as `x=".." y=".." width="N"
         // height="N"`. The largest such rect is the tallest bar in
@@ -1572,7 +1599,7 @@ mod tests {
         fn largest_bar_dims(svg: &str) -> Option<(u32, u32)> {
             let mut best: Option<(u32, u32, u32)> = None;
             for piece in svg.split("<rect ").skip(1) {
-                if !piece.contains("fill=\"#0000FF\"") {
+                if !piece.contains("fill=\"#FF0000\"") {
                     continue;
                 }
                 let pull = |name: &str| -> Option<u32> {
@@ -1593,9 +1620,9 @@ mod tests {
         }
 
         let (v_w, v_h) =
-            largest_bar_dims(&v_svg).expect("vertical SVG missing #0000FF bar rect");
+            largest_bar_dims(&v_svg).expect("vertical SVG missing #FF0000 bar rect");
         let (h_w, h_h) =
-            largest_bar_dims(&h_svg).expect("horizontal SVG missing #0000FF bar rect");
+            largest_bar_dims(&h_svg).expect("horizontal SVG missing #FF0000 bar rect");
         assert!(
             v_h > v_w * 2,
             "vertical bar should be much taller than wide; got {v_w}x{v_h}"

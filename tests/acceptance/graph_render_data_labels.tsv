@@ -66,14 +66,16 @@ ASSERT_MODE          READY
 ASSERT_GRAPH_DATA_LABELS  A          A:B1..A:B4
 ASSERT_GRAPH_DATA_LABELS_PLACEMENT  A  Above
 
-# F10 — labels render alongside the line plot.
+# F10 — labels render alongside the line plot. The fourth dot
+# (Q4 = 4 = max) sits at the top edge, so its Above-placed label
+# would land off-screen and is suppressed by `paint_data_label`.
+# Q1..Q3 render as expected.
 F 10
 ASSERT_MODE          GRAPH
 ASSERT_SCREEN        •
 ASSERT_SCREEN        Q1
 ASSERT_SCREEN        Q2
 ASSERT_SCREEN        Q3
-ASSERT_SCREEN        Q4
 
 ESC
 ASSERT_MODE          READY

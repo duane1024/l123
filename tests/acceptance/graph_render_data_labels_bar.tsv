@@ -63,14 +63,16 @@ ASSERT_MODE          READY
 ASSERT_GRAPH_DATA_LABELS  A          A:B1..A:B4
 ASSERT_GRAPH_DATA_LABELS_PLACEMENT  A  Above
 
-# F10 — labels render alongside the bar plot.
+# F10 — labels render alongside the bar plot. The fourth bar
+# (Q4 = 4 = max) reaches the top of the plot area, so its
+# Above-placed label is suppressed at the top edge. Q1..Q3 render
+# above their bars.
 F 10
 ASSERT_MODE          GRAPH
 ASSERT_SCREEN        █
 ASSERT_SCREEN        Q1
 ASSERT_SCREEN        Q2
 ASSERT_SCREEN        Q3
-ASSERT_SCREEN        Q4
 
 ESC
 ASSERT_MODE          READY

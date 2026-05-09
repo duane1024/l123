@@ -1397,6 +1397,7 @@ transcripts! {
     m7_graph_series     => "M7_graph_series.tsv",
     m7_graph_reset      => "M7_graph_reset.tsv",
     m7_graph_view_f10   => "M7_graph_view_f10.tsv",
+    graph_view_full_screen => "graph_view_full_screen.tsv",
     m7_graph_save       => "M7_graph_save.tsv",
     graph_settings_visible => "graph_settings_visible.tsv",
     graph_features_toggles => "graph_features_toggles.tsv",

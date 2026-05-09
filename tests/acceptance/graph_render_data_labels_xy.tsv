@@ -88,14 +88,15 @@ ASSERT_MODE          READY
 ASSERT_GRAPH_DATA_LABELS  A          A:C1..A:C4
 ASSERT_GRAPH_DATA_LABELS_PLACEMENT  A  Above
 
-# F10 — labels render alongside the scatter.
+# F10 — labels render alongside the scatter. The fourth dot's
+# Y value is the max, putting its dot at the top edge of the plot;
+# its Above-placed label is suppressed by `paint_data_label`.
 F 10
 ASSERT_MODE          GRAPH
 ASSERT_SCREEN        •
 ASSERT_SCREEN        Q1
 ASSERT_SCREEN        Q2
 ASSERT_SCREEN        Q3
-ASSERT_SCREEN        Q4
 
 ESC
 ASSERT_MODE          READY

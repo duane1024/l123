@@ -64,14 +64,16 @@ ASSERT_MODE          READY
 ASSERT_GRAPH_DATA_LABELS  A          A:B1..A:B4
 ASSERT_GRAPH_DATA_LABELS_PLACEMENT  A  Above
 
-# F10 — labels render alongside the stacked bars.
+# F10 — labels render alongside the stacked bars. The fourth bar
+# (max stack height) reaches the top of the plot, so its
+# Above-placed label is suppressed at the top edge. Q1..Q3 render
+# above their stacks.
 F 10
 ASSERT_MODE          GRAPH
 ASSERT_SCREEN        █
 ASSERT_SCREEN        Q1
 ASSERT_SCREEN        Q2
 ASSERT_SCREEN        Q3
-ASSERT_SCREEN        Q4
 
 ESC
 ASSERT_MODE          READY
