@@ -56,6 +56,32 @@ pub fn render_png(def: &GraphDef, vals: &GraphValues) -> Vec<u8> {
 }
 
 pub fn render_png_sized(def: &GraphDef, vals: &GraphValues, w: u32, h: u32) -> Vec<u8> {
+    let img = match render_dynamic_image_sized(def, vals, w, h) {
+        Some(i) => i,
+        None => return Vec::new(),
+    };
+    let mut out = Cursor::new(Vec::new());
+    match img.write_to(&mut out, image::ImageFormat::Png) {
+        Ok(_) => out.into_inner(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Render the graph straight to a [`image::DynamicImage`], skipping
+/// the PNG encode/decode round-trip. The graph view feeds this
+/// directly to ratatui-image's Picker so the image is sized to the
+/// terminal at render time. Returns `None` only when `w`/`h` is zero
+/// or `RgbImage::from_raw` rejects the buffer (the buffer is sized
+/// to match `(w, h)`, so this is a degenerate-input guard).
+pub fn render_dynamic_image_sized(
+    def: &GraphDef,
+    vals: &GraphValues,
+    w: u32,
+    h: u32,
+) -> Option<image::DynamicImage> {
+    if w == 0 || h == 0 {
+        return None;
+    }
     let pixels = (w as usize) * (h as usize) * 3;
     let mut rgb = vec![0u8; pixels];
     {
@@ -66,15 +92,7 @@ pub fn render_png_sized(def: &GraphDef, vals: &GraphValues, w: u32, h: u32) -> V
         }
         let _ = root.present();
     }
-    let img = match image::RgbImage::from_raw(w, h, rgb) {
-        Some(i) => i,
-        None => return Vec::new(),
-    };
-    let mut out = Cursor::new(Vec::new());
-    match img.write_to(&mut out, image::ImageFormat::Png) {
-        Ok(_) => out.into_inner(),
-        Err(_) => Vec::new(),
-    }
+    image::RgbImage::from_raw(w, h, rgb).map(image::DynamicImage::ImageRgb8)
 }
 
 fn draw_graph<DB>(
@@ -1222,6 +1240,28 @@ mod tests {
         let img = image::load_from_memory(&bytes).expect("valid PNG");
         assert_eq!(img.width(), DEFAULT_WIDTH);
         assert_eq!(img.height(), DEFAULT_HEIGHT);
+    }
+
+    #[test]
+    fn dynamic_image_sized_returns_image_at_requested_dims() {
+        let def = GraphDef {
+            graph_type: GraphType::Pie,
+            ..Default::default()
+        };
+        let img = render_dynamic_image_sized(&def, &a(vec![10.0, 20.0, 30.0]), 1280, 720)
+            .expect("valid image");
+        assert_eq!(img.width(), 1280);
+        assert_eq!(img.height(), 720);
+    }
+
+    #[test]
+    fn dynamic_image_sized_rejects_zero_dims() {
+        let def = GraphDef {
+            graph_type: GraphType::Bar,
+            ..Default::default()
+        };
+        assert!(render_dynamic_image_sized(&def, &a(vec![1.0]), 0, 100).is_none());
+        assert!(render_dynamic_image_sized(&def, &a(vec![1.0]), 100, 0).is_none());
     }
 
     #[test]

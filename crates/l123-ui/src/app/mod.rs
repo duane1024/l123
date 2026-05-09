@@ -2618,13 +2618,10 @@ impl App {
     fn enter_graph_view(&mut self) {
         let def = self.wb().current_graph.clone();
         let values = self.collect_graph_values(&def);
-        let img = if self.picker_is_graphical() && !values.is_empty() {
-            let png = l123_graph::render_png(&def, &values);
-            image::load_from_memory(&png).ok()
-        } else {
-            None
-        };
-        self.graph_view = Some(GraphOverlay { values, img });
+        self.graph_view = Some(GraphOverlay {
+            values,
+            img_cache: std::cell::RefCell::new(None),
+        });
         self.menu = None;
         self.mode = Mode::Graph;
     }

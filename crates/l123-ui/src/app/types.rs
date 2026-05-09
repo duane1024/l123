@@ -594,10 +594,13 @@ pub struct SplashInfo {
 pub(super) struct GraphOverlay {
     /// Numeric values snapshotted off the engine at enter time.
     pub(super) values: l123_graph::GraphValues,
-    /// Pre-rendered PNG (via plotters) decoded into a DynamicImage.
-    /// Populated only when the app has a graphical picker — feeds
-    /// ratatui-image's `Image` widget at render time.
-    pub(super) img: Option<image::DynamicImage>,
+    /// Cache of the last-rendered raster image, keyed by the pixel
+    /// dimensions it was rendered at. The render path re-renders
+    /// when the cached dims don't match the current frame's area —
+    /// so the image follows terminal resizes — and reuses the
+    /// cached one when they do, to avoid a fresh plotters pass on
+    /// every redraw tick.
+    pub(super) img_cache: std::cell::RefCell<Option<(u32, u32, image::DynamicImage)>>,
 }
 
 /// `/Data Sort` direction: ascending = low→high, descending = high→low.

@@ -738,20 +738,57 @@ impl App {
             self.render_grid(area, buf);
             return;
         };
-        // Graphical path: ratatui-image with a freshly-built Protocol
-        // sized to this frame's content area. Protocol creation can
-        // fail (encoding error, terminal query hiccup); on any failure
-        // we fall through to the unicode path so the user still sees
-        // something.
-        if let (Some(picker), Some(img)) = (self.image_picker.as_ref(), overlay.img.as_ref()) {
-            if picker.protocol_type() != ProtocolType::Halfblocks {
-                if let Ok(protocol) = picker.new_protocol(img.clone(), area, Resize::Fit(None)) {
-                    Image::new(&protocol).render(area, buf);
-                    return;
+        // Graphical path: render the chart at the area's pixel size
+        // so the image and area aspect ratios match — `Resize::Fit`
+        // then scales 1:1 instead of leaving letterbox bars on a
+        // terminal whose aspect doesn't match plotters' default 4:3.
+        // Cached by pixel dims via `overlay.img_cache` so static
+        // graph view doesn't re-rasterize on every 100ms event-loop
+        // tick. Protocol creation can fail (encoding error, terminal
+        // query hiccup); on any failure we fall through to the
+        // unicode path so the user still sees something.
+        if let Some(picker) = self.image_picker.as_ref() {
+            if picker.protocol_type() != ProtocolType::Halfblocks && !overlay.values.is_empty() {
+                let (cell_w, cell_h) = picker.font_size();
+                let target_w = (area.width as u32) * (cell_w as u32);
+                let target_h = (area.height as u32) * (cell_h as u32);
+                if target_w > 0 && target_h > 0 {
+                    let img = self.graph_image_for_dims(overlay, target_w, target_h);
+                    if let Some(img) = img {
+                        if let Ok(protocol) = picker.new_protocol(img, area, Resize::Fit(None)) {
+                            Image::new(&protocol).render(area, buf);
+                            return;
+                        }
+                    }
                 }
             }
         }
         l123_graph::render_unicode(&self.wb().current_graph, &overlay.values, area, buf);
+    }
+
+    /// Pull a graph raster from `overlay.img_cache` if its dims match
+    /// `(w, h)`; otherwise rasterize fresh and update the cache.
+    /// Returns the image to hand to the picker. The clone is cheap —
+    /// `DynamicImage` is reference-counted internally for the buffer.
+    fn graph_image_for_dims(
+        &self,
+        overlay: &GraphOverlay,
+        w: u32,
+        h: u32,
+    ) -> Option<image::DynamicImage> {
+        if let Some((cw, ch, img)) = overlay.img_cache.borrow().as_ref() {
+            if *cw == w && *ch == h {
+                return Some(img.clone());
+            }
+        }
+        let img = l123_graph::render_dynamic_image_sized(
+            &self.wb().current_graph,
+            &overlay.values,
+            w,
+            h,
+        )?;
+        *overlay.img_cache.borrow_mut() = Some((w, h, img.clone()));
+        Some(img)
     }
 
     /// True when the user has descended into the top-level `/Graph`
