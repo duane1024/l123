@@ -1,0 +1,64 @@
+# /Range Compare — identical ranges produce no diff rows (v0.4)
+# When every cell pair is equal, no rows are written at the output
+# anchor and line 3 reports the clean result.
+
+# Left A:A1..A:A3 = 1, 2, 3
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+DOWN
+KEYS 3
+ENTER
+
+# Right A:C1..A:C3 = 1, 2, 3
+HOME
+RIGHT
+RIGHT
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+DOWN
+KEYS 3
+ENTER
+
+HOME
+KEY /
+KEY R
+KEY C
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  LEFT
+DOWN
+DOWN
+ENTER
+
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  RIGHT
+ASSERT_POINTER   A:A1
+RIGHT
+RIGHT
+ASSERT_POINTER   A:C1
+KEY .
+DOWN
+DOWN
+ENTER
+
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  OUTPUT
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ENTER
+
+ASSERT_MODE      READY
+# No diff rows written at the anchor — absence of output IS the signal
+# that the two ranges were identical.
+ASSERT_CELL      A:E1
+ASSERT_CELL      A:F1
+ASSERT_CELL      A:G1
+ASSERT_CELL      A:H1

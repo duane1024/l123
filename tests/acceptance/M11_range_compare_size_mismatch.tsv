@@ -1,0 +1,63 @@
+# /Range Compare — size-mismatch raises ERROR (v0.4)
+# Left and right ranges with different shapes can't be compared
+# element-wise; harness drops to ERROR mode with a one-line cause and
+# writes nothing to the output anchor.
+
+# Left A:A1..A:A3 = 1, 2, 3
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+DOWN
+KEYS 3
+ENTER
+
+# Right A:C1..A:C2 = 1, 2  (shorter by one row)
+HOME
+RIGHT
+RIGHT
+KEYS 1
+ENTER
+DOWN
+KEYS 2
+ENTER
+
+HOME
+KEY /
+KEY R
+KEY C
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  LEFT
+DOWN
+DOWN
+ASSERT_PANEL_L3  A:A1..A:A3
+ENTER
+
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  RIGHT
+ASSERT_POINTER   A:A1
+RIGHT
+RIGHT
+ASSERT_POINTER   A:C1
+KEY .
+DOWN
+ASSERT_PANEL_L3  A:C1..A:C2
+ENTER
+
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  OUTPUT
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ENTER
+
+# Shape mismatch → ERROR mode; nothing written at the anchor.
+ASSERT_MODE      ERROR
+ASSERT_PANEL_L2  different shape
+
+# Originals preserved.
+ASSERT_CELL      A:A1  1
+ASSERT_CELL      A:C1  1

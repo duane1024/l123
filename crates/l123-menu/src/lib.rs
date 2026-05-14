@@ -295,6 +295,13 @@ pub enum Action {
     /// values at the new orientation; absolute references travel
     /// unchanged.
     RangeTrans,
+    /// `/Range Compare` — three-POINT diff between two ranges (v0.4).
+    /// Prompts LEFT range, RIGHT range, OUTPUT anchor; writes one row
+    /// per differing cell as `(addr, left_value, right_value,
+    /// diff_kind)`. Equal cells produce no row; identical ranges
+    /// report "No differences" on line 3 and write nothing. Shape
+    /// mismatch raises ERROR mode.
+    RangeCompare,
     RangeFormatFixed,
     RangeFormatScientific,
     RangeFormatCurrency,
@@ -3032,6 +3039,13 @@ const RANGE_MENU: &[MenuItem] = &[
         help: "Find / Replace across formulas and labels",
         help_page: "0388-range-search.html",
         body: MenuBody::Submenu(RANGE_SEARCH_MENU),
+    },
+    MenuItem {
+        letter: 'C',
+        name: "Compare",
+        help: "Compare two ranges into a third (POINT both, then anchor)",
+        help_page: "",
+        body: MenuBody::Action(Action::RangeCompare),
     },
 ];
 

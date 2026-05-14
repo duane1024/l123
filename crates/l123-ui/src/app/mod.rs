@@ -815,6 +815,22 @@ fn freeze_to_value(c: Option<CellContents>) -> CellContents {
     }
 }
 
+/// Wrap a `Value` as `CellContents` suitable for writing into a result
+/// range (`/Range Compare` etc.). `Value::Empty` returns `None` so the
+/// caller can skip the write and leave the target cell untouched.
+fn value_to_cell_contents(v: &Value) -> Option<CellContents> {
+    match v {
+        Value::Empty => None,
+        Value::Number(_) | Value::Bool(_) | Value::Error(_) => {
+            Some(CellContents::Constant(v.clone()))
+        }
+        Value::Text(s) => Some(CellContents::Label {
+            prefix: LabelPrefix::Apostrophe,
+            text: s.clone(),
+        }),
+    }
+}
+
 /// Greedy word-wrap of `text` into chunks no wider than `width`
 /// columns. Words longer than `width` are emitted on their own line
 /// and may exceed the limit (1-2-3 R3.4a same-cell behavior — long
@@ -3193,6 +3209,7 @@ impl App {
             Action::RangeInput => self.begin_point(PendingCommand::RangeInput),
             Action::RangeValue => self.begin_point(PendingCommand::RangeValueFrom),
             Action::RangeTrans => self.begin_point(PendingCommand::RangeTransFrom),
+            Action::RangeCompare => self.begin_point(PendingCommand::RangeCompareLeft),
             Action::RangeJustify => self.begin_point(PendingCommand::RangeJustify),
             Action::RangeErase => self.begin_point(PendingCommand::RangeErase),
             Action::Copy => self.begin_point(PendingCommand::CopyFrom),
@@ -6077,6 +6094,15 @@ impl App {
                     self.mode = Mode::Ready;
                 }
             }
+            PendingCommand::RangeCompareLeft => {
+                self.transition_point(PendingCommand::RangeCompareRight { left: first })
+            }
+            PendingCommand::RangeCompareRight { left } => {
+                self.transition_point(PendingCommand::RangeCompareOutput { left, right: first })
+            }
+            PendingCommand::RangeCompareOutput { left, right } => {
+                self.execute_range_compare(left, right, first.start);
+            }
             PendingCommand::SpecialCopyFrom => {
                 self.transition_point(PendingCommand::SpecialCopyTo { source: first })
             }
@@ -8358,6 +8384,94 @@ impl App {
         self.finish_range_write(writes);
     }
 
+    /// `/Range Compare` (v0.4) — three-POINT diff. The left and right
+    /// ranges' values are collected via the engine, fed to the pure
+    /// diff in `l123-cmd::range_compare`, and each differing pair is
+    /// written as a row of `(addr, left, right, diff-kind)` starting
+    /// at `anchor`. Equal cells produce no row; identical ranges
+    /// write nothing and return to READY. Shape mismatch drops to
+    /// ERROR mode with the diff error as the cause.
+    fn execute_range_compare(&mut self, left: Range, right: Range, anchor: Address) {
+        let left_n = left.normalized();
+        let right_n = right.normalized();
+        let left_values = self.collect_values_in_range(left_n);
+        let right_values = self.collect_values_in_range(right_n);
+
+        let rows = match l123_cmd::range_compare::diff_ranges(
+            left_n,
+            right_n,
+            &left_values,
+            &right_values,
+        ) {
+            Ok(rows) => rows,
+            Err(e) => {
+                self.set_error(format!("/Range Compare: {e}"));
+                return;
+            }
+        };
+
+        let mut writes: Vec<(Address, Option<CellContents>)> = Vec::new();
+        for (i, row) in rows.iter().enumerate() {
+            let base_row = anchor.row + i as u32;
+            let addr_col = anchor.col;
+            let addr_cell = Address::new(anchor.sheet, addr_col, base_row);
+            self.write_cell_with_undo(
+                addr_cell,
+                CellContents::Label {
+                    prefix: LabelPrefix::Apostrophe,
+                    text: row.addr.display_full(),
+                },
+                &mut writes,
+            );
+            if let Some(c) = value_to_cell_contents(&row.left) {
+                self.write_cell_with_undo(
+                    Address::new(anchor.sheet, addr_col + 1, base_row),
+                    c,
+                    &mut writes,
+                );
+            }
+            if let Some(c) = value_to_cell_contents(&row.right) {
+                self.write_cell_with_undo(
+                    Address::new(anchor.sheet, addr_col + 2, base_row),
+                    c,
+                    &mut writes,
+                );
+            }
+            self.write_cell_with_undo(
+                Address::new(anchor.sheet, addr_col + 3, base_row),
+                CellContents::Label {
+                    prefix: LabelPrefix::Apostrophe,
+                    text: row.kind.label().to_string(),
+                },
+                &mut writes,
+            );
+        }
+
+        self.finish_range_write(writes);
+        self.mode = Mode::Ready;
+    }
+
+    /// Read every cell in a normalized range, returning their values in
+    /// row-major order with `Value::Empty` for unset cells.
+    fn collect_values_in_range(&mut self, range: Range) -> Vec<Value> {
+        let r = range.normalized();
+        let mut out = Vec::new();
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                let v = self
+                    .wb_mut()
+                    .engine
+                    .get_cell(addr)
+                    .ok()
+                    .map(|cv| cv.value)
+                    .unwrap_or(Value::Empty);
+                out.push(v);
+            }
+        }
+        out
+    }
+
     fn execute_range_justify(&mut self, range: Range) {
         let r = range.normalized();
         let sheet = r.start.sheet;
@@ -9702,6 +9816,11 @@ impl App {
             PendingCommand::RangeValueTo { src } | PendingCommand::RangeTransTo { src } => {
                 src.start
             }
+            // /Range Compare: snap back to the left range's TL so the
+            // user navigates from a familiar landmark to the right
+            // range and then to the output anchor.
+            PendingCommand::RangeCompareRight { left } => left.start,
+            PendingCommand::RangeCompareOutput { left, .. } => left.start,
             _ => self.wb_mut().pointer,
         };
         self.wb_mut().pointer = source_tl;
@@ -9717,7 +9836,9 @@ impl App {
             | PendingCommand::SpecialMoveTo { .. }
             | PendingCommand::DataDistributionBins { .. }
             | PendingCommand::RangeValueTo { .. }
-            | PendingCommand::RangeTransTo { .. } => None,
+            | PendingCommand::RangeTransTo { .. }
+            | PendingCommand::RangeCompareRight { .. }
+            | PendingCommand::RangeCompareOutput { .. } => None,
             _ => Some(self.wb().pointer),
         };
         self.point = Some(PointState {

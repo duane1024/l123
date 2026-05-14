@@ -1680,6 +1680,19 @@ pub(super) enum PendingCommand {
     MoveTo {
         source: Range,
     },
+    /// First POINT of `/Range Compare` (v0.4) — pick the LEFT range.
+    RangeCompareLeft,
+    /// Second POINT — pick the RIGHT range. The user navigates to the
+    /// right range's anchor and presses `.` to anchor, then extends.
+    RangeCompareRight {
+        left: Range,
+    },
+    /// Third POINT — pick the OUTPUT anchor cell where the diff rows
+    /// will be written.
+    RangeCompareOutput {
+        left: Range,
+        right: Range,
+    },
     RangeLabel {
         new_prefix: LabelPrefix,
     },
@@ -1956,6 +1969,9 @@ impl PendingCommand {
             PendingCommand::CopyTo { .. } => "Enter range to copy TO:",
             PendingCommand::MoveFrom => "Enter range to move FROM:",
             PendingCommand::MoveTo { .. } => "Enter range to move TO:",
+            PendingCommand::RangeCompareLeft => "Enter LEFT range to compare:",
+            PendingCommand::RangeCompareRight { .. } => "Enter RIGHT range to compare:",
+            PendingCommand::RangeCompareOutput { .. } => "Enter OUTPUT anchor:",
             PendingCommand::RangeLabel { .. } => "Enter range for label-prefix change:",
             PendingCommand::RangeFormat { .. } => "Enter range to format:",
             PendingCommand::RangeParens { .. } => "Enter range for parentheses change:",

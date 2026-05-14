@@ -1536,6 +1536,10 @@ transcripts! {
     function_emulations => "function_emulations.tsv",
     function_reload_round_trip => "function_reload_round_trip.tsv",
     function_sidecar_round_trip => "function_sidecar_round_trip.tsv",
+    m11_range_compare_basic          => "M11_range_compare_basic.tsv",
+    m11_range_compare_type_mismatch  => "M11_range_compare_type_mismatch.tsv",
+    m11_range_compare_size_mismatch  => "M11_range_compare_size_mismatch.tsv",
+    m11_range_compare_clean          => "M11_range_compare_clean.tsv",
 }
 
 #[cfg(feature = "wk3")]
