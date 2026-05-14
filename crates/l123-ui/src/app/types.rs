@@ -469,6 +469,22 @@ pub(super) struct Workbook {
     /// in this set are "protected" by default. Has no effect unless
     /// `super::App::global_protection` is on.
     pub(super) cell_unprotected: HashSet<Address>,
+    /// `/Data External` sources registered via `Connect` (M12 v0.4).
+    /// Keyed by lowercased source name; `Use` looks up the connection
+    /// string here and re-parses it on each query. Slice 1 keeps the
+    /// registry session-local; xlsx custom-property round-trip lands
+    /// in a later slice.
+    pub(super) external_sources: HashMap<String, ExternalSource>,
+}
+
+/// One row in the workbook's `/Data External` source registry. The
+/// connection string is stored verbatim; the typed [`DataSource`]
+/// (in `l123-io`) is recreated on demand from it so we don't have to
+/// hold a live db handle across the prompt chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExternalSource {
+    pub(super) name: String,
+    pub(super) connection: String,
 }
 
 impl Workbook {
@@ -539,6 +555,7 @@ impl Workbook {
             named_ranges: HashMap::new(),
             name_notes: HashMap::new(),
             cell_unprotected: HashSet::new(),
+            external_sources: HashMap::new(),
         }
     }
 }
@@ -1280,6 +1297,19 @@ pub(super) enum PromptNext {
     /// `/File Import Sqlite` — second prompt: pick a table from the
     /// path stashed in `App::pending_sqlite_import_path`.
     FileImportSqliteTable,
+    /// `/Data External Connect` (M12 v0.4) — first prompt: source
+    /// name (≤15 ASCII chars, named-range rules).
+    DataExternalConnectName,
+    /// `/Data External Connect` — second prompt: connection string
+    /// (`sqlite:<path>`). The name is stashed in
+    /// `App::pending_external_name` between the two steps.
+    DataExternalConnectString,
+    /// `/Data External Use` (M12 v0.4) — first prompt: registered
+    /// source name.
+    DataExternalUseName,
+    /// `/Data External Use` — second prompt: SQL query. The source
+    /// name is stashed in `App::pending_external_name`.
+    DataExternalUseQuery,
     /// After the user types a filename, read the file as plain text and
     /// paint each line as a label down a single column starting at the
     /// pointer (no CSV semantics — the whole line, including embedded
@@ -1569,6 +1599,8 @@ impl PromptNext {
             | PromptNext::FileImportParquetFilename
             | PromptNext::FileImportSqliteFilename
             | PromptNext::FileImportSqliteTable
+            | PromptNext::DataExternalConnectName
+            | PromptNext::DataExternalUseName
             | PromptNext::FileEraseFilename
             | PromptNext::FileCombineFilename { .. }
             | PromptNext::FileDirPath
@@ -1584,6 +1616,13 @@ impl PromptNext {
             PromptNext::PrintFileHeader
             | PromptNext::PrintFileFooter
             | PromptNext::PrintFileSetup => c != '\n' && c != '\t',
+            // `/Data External` connection strings (`sqlite:<path>`,
+            // `postgres://…`) and free-form SQL bodies need colons,
+            // slashes, parens, commas, etc. Accept any non-control
+            // printable, same shape as Print Header/Footer.
+            PromptNext::DataExternalConnectString | PromptNext::DataExternalUseQuery => {
+                c != '\n' && c != '\t'
+            }
             // CUPS queue names are conventionally alphanumeric with
             // `_`/`-`; reject whitespace so a stray space doesn't end
             // up as part of the `lp -d` argument.

@@ -1039,6 +1039,15 @@ pub enum Action {
     /// Shared by every `/Data External` leaf — no external
     /// database driver is configured in L123.
     DataExternalStub,
+    /// `/Data External Connect` (M12 v0.4) — register a named
+    /// external data source. Prompts for name + connection string;
+    /// tests connectivity before adding it to the workbook's source
+    /// registry.
+    DataExternalConnect,
+    /// `/Data External Use` (M12 v0.4) — run a SQL query against a
+    /// registered source and write the result starting at the cell
+    /// pointer.
+    DataExternalUse,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -5731,24 +5740,24 @@ const DATA_MATRIX_MENU: &[MenuItem] = &[
 
 const DATA_EXTERNAL_MENU: &[MenuItem] = &[
     MenuItem {
+        letter: 'C',
+        name: "Connect",
+        help: "Register a named external data source (v0.4)",
+        help_page: "0194-data-external-create.html",
+        body: MenuBody::Action(Action::DataExternalConnect),
+    },
+    MenuItem {
         letter: 'U',
         name: "Use",
-        help: "Connect to an external database driver",
+        help: "Run SQL against a registered source; result at pointer",
         help_page: "0212-data-external-use.html",
-        body: MenuBody::Action(Action::DataExternalStub),
+        body: MenuBody::Action(Action::DataExternalUse),
     },
     MenuItem {
         letter: 'L',
         name: "List",
         help: "List available external tables / fields",
         help_page: "0191-data-external-list.html",
-        body: MenuBody::Action(Action::DataExternalStub),
-    },
-    MenuItem {
-        letter: 'C',
-        name: "Create",
-        help: "Create an external table",
-        help_page: "0194-data-external-create.html",
         body: MenuBody::Action(Action::DataExternalStub),
     },
     MenuItem {

@@ -1561,6 +1561,7 @@ transcripts! {
     m11_range_compare_type_mismatch  => "M11_range_compare_type_mismatch.tsv",
     m11_range_compare_size_mismatch  => "M11_range_compare_size_mismatch.tsv",
     m11_range_compare_clean          => "M11_range_compare_clean.tsv",
+    m12_external_sqlite_connect      => "M12_external_sqlite_connect.tsv",
 }
 
 #[cfg(feature = "wk3")]

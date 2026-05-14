@@ -96,6 +96,40 @@ pub fn load(path: &Path, table: &str) -> Result<LoadedRecords, LoadError> {
     Ok(LoadedRecords { header, rows })
 }
 
+/// Run an arbitrary SQL statement against `path` and return the
+/// resulting rows as a [`LoadedRecords`]. Used by `/Data External
+/// Use` (M12); unlike [`load`], the SQL is user-supplied so there
+/// is no identifier sanitization — the caller drives the connection
+/// (e.g. opens it read-only) and accepts the SQL as-is.
+pub fn query_raw(path: &Path, sql: &str) -> Result<LoadedRecords, LoadError> {
+    let conn = open(path)?;
+    let mut stmt = conn.prepare(sql).map_err(|e| LoadError::Parse {
+        location: "query".into(),
+        message: e.to_string(),
+    })?;
+    let header: Vec<String> = stmt.column_names().into_iter().map(String::from).collect();
+    let col_count = header.len();
+    let mut rows: Vec<Vec<Value>> = Vec::new();
+    let mut sqlite_rows = stmt.query([]).map_err(|e| LoadError::Parse {
+        location: "query".into(),
+        message: e.to_string(),
+    })?;
+    while let Some(row) = sqlite_rows.next().map_err(|e| LoadError::Parse {
+        location: "row".into(),
+        message: e.to_string(),
+    })? {
+        let mut out_row = Vec::with_capacity(col_count);
+        for c in 0..col_count {
+            out_row.push(map_value_ref(row.get_ref(c).map_err(|e| LoadError::Parse {
+                location: format!("col {c}"),
+                message: e.to_string(),
+            })?));
+        }
+        rows.push(out_row);
+    }
+    Ok(LoadedRecords { header, rows })
+}
+
 fn map_value_ref(v: rusqlite::types::ValueRef<'_>) -> Value {
     use rusqlite::types::ValueRef::*;
     match v {

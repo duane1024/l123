@@ -64,7 +64,8 @@ use types::{
     FILE_LIST_PAGE_SIZE, NAME_LIST_PAGE_SIZE,
 };
 pub(crate) use types::{
-    CombineKind, FileListKind, FileListState, NameListOrigin, NameListState, TitlesKind, XtractKind,
+    CombineKind, ExternalSource, FileListKind, FileListState, NameListOrigin, NameListState,
+    TitlesKind, XtractKind,
 };
 pub use types::GraphTitleSlot;
 
@@ -243,6 +244,11 @@ pub struct App {
     /// Named/Specified-Range` flow — after the filename prompt commits,
     /// the path is stashed here while the user types the source range.
     pending_combine_path: Option<PathBuf>,
+    /// Transient slot shared by the two-step `/Data External Connect`
+    /// and `/Data External Use` flows (M12 v0.4). Holds the source
+    /// name typed in the first prompt while the user types the
+    /// connection string / SQL in the second.
+    pending_external_name: Option<String>,
     /// Transient slot for the two-step `/File Import Sqlite` flow —
     /// the sqlite path is stashed here while the user picks a table
     /// from the second prompt.
@@ -1189,6 +1195,7 @@ impl App {
             erase_confirm: None,
             pending_xtract_path: None,
             pending_combine_path: None,
+            pending_external_name: None,
             pending_sqlite_import_path: None,
             file_list: None,
             name_list: None,
@@ -4084,6 +4091,8 @@ impl App {
             Action::DataExternalStub => {
                 self.set_error("Data External: no external-database driver configured")
             }
+            Action::DataExternalConnect => self.start_data_external_connect_prompt(),
+            Action::DataExternalUse => self.start_data_external_use_prompt(),
         }
     }
 
@@ -4878,6 +4887,7 @@ impl App {
             named_ranges: HashMap::new(),
             name_notes: HashMap::new(),
             cell_unprotected: HashSet::new(),
+            external_sources: HashMap::new(),
         };
         // If the active sheet is hidden / very-hidden, redirect to the
         // first visible sheet so the user lands somewhere they can
@@ -4969,6 +4979,34 @@ impl App {
             label: "Enter import file name:".into(),
             buffer: String::new(),
             next: PromptNext::FileImportSqliteFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Data External Connect` — first prompt: name. The second
+    /// prompt (connection string) opens after this commits.
+    fn start_data_external_connect_prompt(&mut self) {
+        self.menu = None;
+        self.pending_external_name = None;
+        self.prompt = Some(PromptState {
+            label: "Enter connection name:".into(),
+            buffer: String::new(),
+            next: PromptNext::DataExternalConnectName,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Data External Use` — first prompt: pick a registered source
+    /// by name. The second prompt (SQL) opens after this commits.
+    fn start_data_external_use_prompt(&mut self) {
+        self.menu = None;
+        self.pending_external_name = None;
+        self.prompt = Some(PromptState {
+            label: "Enter source name:".into(),
+            buffer: String::new(),
+            next: PromptNext::DataExternalUseName,
             fresh: false,
         });
         self.mode = Mode::Menu;
@@ -8655,6 +8693,49 @@ impl App {
         self.finish_range_write(writes);
     }
 
+    /// `/Data External Use` — write the result of a query starting at
+    /// `origin`. Header at row 0, values below. Slice 1 keeps the
+    /// write synchronous (sqlite is fast); WAIT-mode async refresh
+    /// lands with `/DER` in a later slice. Goes through
+    /// `write_cell_with_undo` so Alt-F4 can revert the binding write.
+    fn write_external_records(&mut self, origin: Address, records: &l123_io::records::LoadedRecords) {
+        let mut writes: Vec<(Address, Option<CellContents>)> = Vec::new();
+        for (dc, h) in records.header.iter().enumerate() {
+            let addr = Address::new(origin.sheet, origin.col + dc as u16, origin.row);
+            self.write_cell_with_undo(
+                addr,
+                CellContents::Label {
+                    prefix: LabelPrefix::Apostrophe,
+                    text: h.clone(),
+                },
+                &mut writes,
+            );
+        }
+        for (dr, row) in records.rows.iter().enumerate() {
+            for (dc, v) in row.iter().enumerate() {
+                let addr = Address::new(
+                    origin.sheet,
+                    origin.col + dc as u16,
+                    origin.row + 1 + dr as u32,
+                );
+                let contents = match v {
+                    Value::Empty => continue,
+                    Value::Number(n) => CellContents::Constant(Value::Number(*n)),
+                    Value::Text(s) => CellContents::Label {
+                        prefix: LabelPrefix::Apostrophe,
+                        text: s.clone(),
+                    },
+                    Value::Bool(b) => {
+                        CellContents::Constant(Value::Number(if *b { 1.0 } else { 0.0 }))
+                    }
+                    Value::Error(_) => continue,
+                };
+                self.write_cell_with_undo(addr, contents, &mut writes);
+            }
+        }
+        self.finish_range_write(writes);
+    }
+
     fn finish_range_write(&mut self, writes: Vec<(Address, Option<CellContents>)>) {
         if writes.is_empty() {
             return;
@@ -9410,6 +9491,121 @@ impl App {
                 };
                 let table = p.buffer.clone();
                 self.queue_file_import_sqlite(path, table);
+            }
+            PromptNext::DataExternalConnectName => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let name = p.buffer.trim().to_string();
+                if !l123_io::ext_source::is_valid_source_name(&name) {
+                    self.set_error(format!(
+                        "Connect: source name {name:?} must be 1-15 chars, \
+                         starting with a letter or underscore"
+                    ));
+                    return;
+                }
+                self.pending_external_name = Some(name);
+                self.prompt = Some(PromptState {
+                    label: "Enter connection string (sqlite:<path>):".into(),
+                    buffer: String::new(),
+                    next: PromptNext::DataExternalConnectString,
+                    fresh: false,
+                });
+                self.mode = Mode::Menu;
+            }
+            PromptNext::DataExternalConnectString => {
+                if p.buffer.is_empty() {
+                    self.pending_external_name = None;
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let Some(name) = self.pending_external_name.take() else {
+                    self.set_error("Connect: no name stashed");
+                    return;
+                };
+                let conn = p.buffer.trim().to_string();
+                let source = match l123_io::ext_source::parse_connection_string(&conn) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.set_error(format!("Connect {name:?}: {e}"));
+                        return;
+                    }
+                };
+                if let Err(e) = source.test_connection() {
+                    self.set_error(format!("Connect {name:?}: {e}"));
+                    return;
+                }
+                let key = name.to_ascii_lowercase();
+                self.wb_mut().external_sources.insert(
+                    key,
+                    ExternalSource {
+                        name: name.clone(),
+                        connection: conn,
+                    },
+                );
+                self.wb_mut().dirty = true;
+                self.mode = Mode::Ready;
+            }
+            PromptNext::DataExternalUseName => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let name = p.buffer.trim().to_string();
+                if !self
+                    .wb()
+                    .external_sources
+                    .contains_key(&name.to_ascii_lowercase())
+                {
+                    self.set_error(format!(
+                        "Use: no source named {name:?} (try /Data External Connect first)"
+                    ));
+                    return;
+                }
+                self.pending_external_name = Some(name);
+                self.prompt = Some(PromptState {
+                    label: "Enter SQL:".into(),
+                    buffer: String::new(),
+                    next: PromptNext::DataExternalUseQuery,
+                    fresh: false,
+                });
+                self.mode = Mode::Menu;
+            }
+            PromptNext::DataExternalUseQuery => {
+                if p.buffer.is_empty() {
+                    self.pending_external_name = None;
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let Some(name) = self.pending_external_name.take() else {
+                    self.set_error("Use: no source stashed");
+                    return;
+                };
+                let key = name.to_ascii_lowercase();
+                let Some(src) = self.wb().external_sources.get(&key).cloned() else {
+                    self.set_error(format!("Use: source {name:?} disappeared"));
+                    return;
+                };
+                let sql = p.buffer.clone();
+                let source = match l123_io::ext_source::parse_connection_string(&src.connection)
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.set_error(format!("Use {name:?}: {e}"));
+                        return;
+                    }
+                };
+                let records = match source.query(&sql) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.set_error(format!("Use {name:?}: {e}"));
+                        return;
+                    }
+                };
+                let origin = self.wb().pointer;
+                self.write_external_records(origin, &records);
+                self.mode = Mode::Ready;
             }
             PromptNext::FileImportTextFilename => {
                 if p.buffer.is_empty() {

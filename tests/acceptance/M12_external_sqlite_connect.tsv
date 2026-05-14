@@ -1,0 +1,55 @@
+# /Data External — Connect + Use round-trip (M12 v0.4 slice 1)
+# Register a named sqlite source, then bind a query to a worksheet
+# range. Slice 1 ships the read path only; Refresh / List / xlsx
+# round-trip / postgres land in later slices.
+
+SIZE 120 25
+
+# /Data External Connect — prompts for name, then connection string.
+KEY /
+KEY D
+KEY E
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Connect
+KEY C
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter connection name
+KEYS sales
+ENTER
+ASSERT_PANEL_L3  Enter connection string
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+# /Data External Use — name + SQL → cells starting at the pointer.
+KEY /
+KEY D
+KEY E
+KEY U
+ASSERT_PANEL_L3  Enter source name
+KEYS sales
+ENTER
+ASSERT_PANEL_L3  Enter SQL
+KEYS SELECT id, name, qty FROM items ORDER BY id
+ENTER
+ASSERT_MODE      READY
+
+# Header row.
+ASSERT_CELL      A:A1  id
+ASSERT_CELL      A:B1  name
+ASSERT_CELL      A:C1  qty
+
+# Row 1: 1, widget, 100
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+ASSERT_CELL      A:C2  100
+
+# Row 2: 2, gadget, 42
+ASSERT_CELL      A:A3  2
+ASSERT_CELL      A:B3  gadget
+ASSERT_CELL      A:C3  42
+
+# Row 3: 3, gizmo, NULL — NULL renders as an empty cell.
+ASSERT_CELL      A:A4  3
+ASSERT_CELL      A:B4  gizmo
+ASSERT_CELL      A:C4
