@@ -1,0 +1,51 @@
+# /File Import Sqlite — pick file, then pick table (v0.4)
+# After the user enters the path, the loader lists the tables in the
+# file and re-prompts. The user types the table name to load it.
+# v0.4 uses a prompt with inline table-list hint rather than a full
+# arrow-key NAMES picker; the picker is a follow-up.
+
+SIZE 120 25
+
+KEY /
+KEY F
+KEY I
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Sqlite
+KEY S
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter import file name
+KEYS tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+
+# After the path: a second prompt names the available tables.
+ASSERT_PANEL_L3  Pick table
+ASSERT_PANEL_L3  items
+ASSERT_PANEL_L3  suppliers
+KEYS items
+ENTER
+
+ASSERT_MODE      READY
+
+# Header row from items: id, name, qty, rate
+ASSERT_CELL      A:A1  id
+ASSERT_CELL      A:B1  name
+ASSERT_CELL      A:C1  qty
+ASSERT_CELL      A:D1  rate
+
+# Row 1: 1, widget, 100, 0.5
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+ASSERT_CELL      A:C2  100
+ASSERT_CELL      A:D2  0.5
+
+# Row 2: 2, gadget, 42, 1.25
+ASSERT_CELL      A:A3  2
+ASSERT_CELL      A:B3  gadget
+ASSERT_CELL      A:C3  42
+ASSERT_CELL      A:D3  1.25
+
+# Row 3: 3, gizmo, NULL, 3
+ASSERT_CELL      A:A4  3
+ASSERT_CELL      A:B4  gizmo
+ASSERT_CELL      A:C4
+ASSERT_CELL      A:D4  3

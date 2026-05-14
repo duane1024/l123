@@ -10,6 +10,7 @@ license.workspace = true
 wk3 = ["l123-engine/wk3"]
 
 [dependencies]
+l123-cmd = { workspace = true }
 l123-core = { workspace = true }
 l123-engine = { workspace = true }
 l123-help = { workspace = true }

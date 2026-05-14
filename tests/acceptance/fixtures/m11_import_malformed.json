@@ -1,0 +1,3 @@
+[
+  {"id": 1, "name": "widget"},
+  {"id": 2,  -- missing closing brace

@@ -1,0 +1,46 @@
+# /Range Compare — type-mismatch diff_kind (v0.4)
+# Number vs label at the same position is flagged as `type-mismatch`,
+# not `both-different`.
+SIZE 120 25
+
+# Left A:A1 = 10 (number)
+KEYS 10
+ENTER
+
+# Right A:C1 = 'ten (label)
+HOME
+RIGHT
+RIGHT
+KEY '
+KEYS ten
+ENTER
+
+HOME
+KEY /
+KEY R
+KEY C
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  LEFT
+ENTER
+
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  RIGHT
+RIGHT
+RIGHT
+ENTER
+
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  OUTPUT
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ENTER
+
+ASSERT_MODE      READY
+ASSERT_CELL      A:E1  A:A1
+ASSERT_CELL      A:F1  10
+ASSERT_CELL      A:G1  ten
+# diff_kind label spills into the empty column to the right.
+ASSERT_SCREEN    type-mismatch

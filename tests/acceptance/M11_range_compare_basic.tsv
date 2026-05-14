@@ -1,0 +1,99 @@
+# /Range Compare — basic diff (v0.4)
+# Seed two single-column ranges with three differing cells; assert the
+# output range lists each diff with its left/right values and diff_kind.
+# Wider screen so the diff_kind column's label can spill into the
+# adjacent empty column.
+SIZE 120 25
+
+# Left range A:A1..A:A4 = 10, 20, 30, 40
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+DOWN
+KEYS 30
+ENTER
+DOWN
+KEYS 40
+ENTER
+
+# Right range A:C1..A:C3 = 11, 20, 33  (C4 left empty → only-left at row 4)
+HOME
+RIGHT
+RIGHT
+KEYS 11
+ENTER
+DOWN
+KEYS 20
+ENTER
+DOWN
+KEYS 33
+ENTER
+
+# /R C opens the LEFT point.
+HOME
+KEY /
+KEY R
+KEY C
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  LEFT
+
+# Extend LEFT to A:A1..A:A4.
+DOWN
+DOWN
+DOWN
+ASSERT_PANEL_L3  A:A1..A:A4
+ENTER
+
+# RIGHT point: pointer returns to LEFT.start with no anchor; user
+# navigates to C1, anchors, extends to C4 (the regression pattern).
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  RIGHT
+ASSERT_POINTER   A:A1
+RIGHT
+RIGHT
+ASSERT_POINTER   A:C1
+KEY .
+DOWN
+DOWN
+DOWN
+ASSERT_PANEL_L3  A:C1..A:C4
+ENTER
+
+# OUTPUT anchor: move to E1.
+ASSERT_MODE      POINT
+ASSERT_PANEL_L3  OUTPUT
+HOME
+RIGHT
+RIGHT
+RIGHT
+RIGHT
+ASSERT_POINTER   A:E1
+ENTER
+
+ASSERT_MODE      READY
+
+# Three diff rows expected, in row-major order of the left range:
+#   E1 = A:A1, F1 = 10,  G1 = 11,    H1 = both-different
+#   E2 = A:A3, F2 = 30,  G2 = 33,    H2 = both-different
+#   E3 = A:A4, F3 = 40,  G3 = (empty), H3 = only-left
+ASSERT_CELL      A:E1  A:A1
+ASSERT_CELL      A:F1  10
+ASSERT_CELL      A:G1  11
+# diff_kind labels are wider than the default 9-char column and spill
+# into the empty column to the right; ASSERT_SCREEN proves the whole
+# label landed on the rendered buffer.
+ASSERT_SCREEN    both-different
+
+ASSERT_CELL      A:E2  A:A3
+ASSERT_CELL      A:F2  30
+ASSERT_CELL      A:G2  33
+
+ASSERT_CELL      A:E3  A:A4
+ASSERT_CELL      A:F3  40
+ASSERT_SCREEN    only-left
+
+# Originals preserved.
+ASSERT_CELL      A:A1  10
+ASSERT_CELL      A:C1  11

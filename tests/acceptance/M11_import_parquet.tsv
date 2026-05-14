@@ -1,0 +1,44 @@
+# /File Import Parquet — typed columns preserved (v0.4)
+# Fixture has 5 columns × 3 rows with int / string / nullable int /
+# float / bool. Bools widen to 1/0; nulls land as empty cells;
+# numbers carry their full precision into the cell.
+
+KEY /
+KEY F
+KEY I
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Parquet
+KEY P
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter import file name
+KEYS tests/acceptance/fixtures/m11_import.parquet
+ENTER
+ASSERT_MODE      READY
+
+# Header row from the parquet schema, in schema order.
+ASSERT_CELL      A:A1  id
+ASSERT_CELL      A:B1  name
+ASSERT_CELL      A:C1  qty
+ASSERT_CELL      A:D1  rate
+ASSERT_CELL      A:E1  active
+
+# Row 1: 1, widget, 100, 0.5, true
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+ASSERT_CELL      A:C2  100
+ASSERT_CELL      A:D2  0.5
+ASSERT_CELL      A:E2  1
+
+# Row 2: 2, gadget, 42, 1.25, false
+ASSERT_CELL      A:A3  2
+ASSERT_CELL      A:B3  gadget
+ASSERT_CELL      A:C3  42
+ASSERT_CELL      A:D3  1.25
+ASSERT_CELL      A:E3  0
+
+# Row 3: 3, gizmo, NULL, 3, true
+ASSERT_CELL      A:A4  3
+ASSERT_CELL      A:B4  gizmo
+ASSERT_CELL      A:C4
+ASSERT_CELL      A:D4  3
+ASSERT_CELL      A:E4  1

@@ -243,6 +243,10 @@ pub struct App {
     /// Named/Specified-Range` flow — after the filename prompt commits,
     /// the path is stashed here while the user types the source range.
     pending_combine_path: Option<PathBuf>,
+    /// Transient slot for the two-step `/File Import Sqlite` flow —
+    /// the sqlite path is stashed here while the user picks a table
+    /// from the second prompt.
+    pending_sqlite_import_path: Option<PathBuf>,
     /// Overlay state for /File List. When present, the mode is Files
     /// and the grid is obscured by a horizontal picker on lines 2/3.
     file_list: Option<FileListState>,
@@ -823,6 +827,22 @@ fn freeze_to_value(c: Option<CellContents>) -> CellContents {
     }
 }
 
+/// Wrap a `Value` as `CellContents` suitable for writing into a result
+/// range (`/Range Compare` etc.). `Value::Empty` returns `None` so the
+/// caller can skip the write and leave the target cell untouched.
+fn value_to_cell_contents(v: &Value) -> Option<CellContents> {
+    match v {
+        Value::Empty => None,
+        Value::Number(_) | Value::Bool(_) | Value::Error(_) => {
+            Some(CellContents::Constant(v.clone()))
+        }
+        Value::Text(s) => Some(CellContents::Label {
+            prefix: LabelPrefix::Apostrophe,
+            text: s.clone(),
+        }),
+    }
+}
+
 /// Greedy word-wrap of `text` into chunks no wider than `width`
 /// columns. Words longer than `width` are emitted on their own line
 /// and may exceed the limit (1-2-3 R3.4a same-cell behavior — long
@@ -1169,6 +1189,7 @@ impl App {
             erase_confirm: None,
             pending_xtract_path: None,
             pending_combine_path: None,
+            pending_sqlite_import_path: None,
             file_list: None,
             name_list: None,
             help: None,
@@ -3203,6 +3224,7 @@ impl App {
             Action::RangeInput => self.begin_point(PendingCommand::RangeInput),
             Action::RangeValue => self.begin_point(PendingCommand::RangeValueFrom),
             Action::RangeTrans => self.begin_point(PendingCommand::RangeTransFrom),
+            Action::RangeCompare => self.begin_point(PendingCommand::RangeCompareLeft),
             Action::RangeJustify => self.begin_point(PendingCommand::RangeJustify),
             Action::RangeErase => self.begin_point(PendingCommand::RangeErase),
             Action::Copy => self.begin_point(PendingCommand::CopyFrom),
@@ -3513,6 +3535,9 @@ impl App {
             Action::FileXtractFormulas => self.start_file_xtract_prompt(XtractKind::Formulas),
             Action::FileXtractValues => self.start_file_xtract_prompt(XtractKind::Values),
             Action::FileImportNumbers => self.start_file_import_numbers_prompt(),
+            Action::FileImportJson => self.start_file_import_json_prompt(),
+            Action::FileImportParquet => self.start_file_import_parquet_prompt(),
+            Action::FileImportSqlite => self.start_file_import_sqlite_prompt(),
             Action::FileImportText => self.start_file_import_text_prompt(),
             Action::FileNew => self.execute_file_new(),
             Action::FileOpenBefore => self.start_file_open_prompt(true),
@@ -4915,6 +4940,40 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    fn start_file_import_json_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter import file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileImportJsonFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_file_import_parquet_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter import file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileImportParquetFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    fn start_file_import_sqlite_prompt(&mut self) {
+        self.menu = None;
+        self.pending_sqlite_import_path = None;
+        self.prompt = Some(PromptState {
+            label: "Enter import file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileImportSqliteFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
     fn start_file_import_text_prompt(&mut self) {
         self.menu = None;
         self.prompt = Some(PromptState {
@@ -5589,6 +5648,90 @@ impl App {
         self.queue_async_op("Importing", name, queued);
     }
 
+    /// `/File Import Json` — same harness as `queue_file_import`; the
+    /// loader inside the worker (`worker_file_import_json`) auto-
+    /// detects array-of-objects vs JSON-Lines.
+    fn queue_file_import_json(&mut self, path: PathBuf) {
+        let origin = self.wb().pointer;
+        let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
+        let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
+        let name = display_basename(&path);
+        self.queue_async_op(
+            "Importing",
+            name,
+            QueuedOp::FileImportJson {
+                engine,
+                path,
+                origin,
+            },
+        );
+    }
+
+    /// `/File Import Parquet` — worker reads the file via
+    /// `l123_io::parquet_loader` and emits a header + typed rows.
+    fn queue_file_import_parquet(&mut self, path: PathBuf) {
+        let origin = self.wb().pointer;
+        let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
+        let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
+        let name = display_basename(&path);
+        self.queue_async_op(
+            "Importing",
+            name,
+            QueuedOp::FileImportParquet {
+                engine,
+                path,
+                origin,
+            },
+        );
+    }
+
+    /// Second step of `/File Import Sqlite`: synchronously list the
+    /// tables in `path` and open a second prompt for the table
+    /// choice. Listing is fast (a single `sqlite_master` query) so
+    /// it happens on the UI thread; only the actual table read is
+    /// queued async.
+    fn open_sqlite_table_prompt(&mut self, path: PathBuf) {
+        match l123_io::sqlite_loader::list_tables(&path) {
+            Ok(tables) if tables.is_empty() => {
+                self.set_error(format!(
+                    "Sqlite import: no user tables in {}",
+                    path.display()
+                ));
+            }
+            Ok(tables) => {
+                let list = tables.join(", ");
+                self.pending_sqlite_import_path = Some(path);
+                self.prompt = Some(PromptState {
+                    label: format!("Pick table ({list}):"),
+                    buffer: String::new(),
+                    next: PromptNext::FileImportSqliteTable,
+                    fresh: false,
+                });
+                self.mode = Mode::Menu;
+            }
+            Err(e) => self.set_error(format!("Sqlite import: {e}")),
+        }
+    }
+
+    /// `/File Import Sqlite` — worker reads the chosen `table` from
+    /// `path` via `l123_io::sqlite_loader::load`.
+    fn queue_file_import_sqlite(&mut self, path: PathBuf, table: String) {
+        let origin = self.wb().pointer;
+        let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
+        let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
+        let name = format!("{} ({table})", display_basename(&path));
+        self.queue_async_op(
+            "Importing",
+            name,
+            QueuedOp::FileImportSqlite {
+                engine,
+                path,
+                table,
+                origin,
+            },
+        );
+    }
+
     fn commit_erase_confirm(&mut self, choice: usize) {
         let Some(ec) = self.erase_confirm.take() else {
             self.mode = Mode::Ready;
@@ -6086,6 +6229,15 @@ impl App {
                     self.wb_mut().dirty = true;
                     self.mode = Mode::Ready;
                 }
+            }
+            PendingCommand::RangeCompareLeft => {
+                self.transition_point(PendingCommand::RangeCompareRight { left: first })
+            }
+            PendingCommand::RangeCompareRight { left } => {
+                self.transition_point(PendingCommand::RangeCompareOutput { left, right: first })
+            }
+            PendingCommand::RangeCompareOutput { left, right } => {
+                self.execute_range_compare(left, right, first.start);
             }
             PendingCommand::SpecialCopyFrom => {
                 self.transition_point(PendingCommand::SpecialCopyTo { source: first })
@@ -8368,6 +8520,94 @@ impl App {
         self.finish_range_write(writes);
     }
 
+    /// `/Range Compare` (v0.4) — three-POINT diff. The left and right
+    /// ranges' values are collected via the engine, fed to the pure
+    /// diff in `l123-cmd::range_compare`, and each differing pair is
+    /// written as a row of `(addr, left, right, diff-kind)` starting
+    /// at `anchor`. Equal cells produce no row; identical ranges
+    /// write nothing and return to READY. Shape mismatch drops to
+    /// ERROR mode with the diff error as the cause.
+    fn execute_range_compare(&mut self, left: Range, right: Range, anchor: Address) {
+        let left_n = left.normalized();
+        let right_n = right.normalized();
+        let left_values = self.collect_values_in_range(left_n);
+        let right_values = self.collect_values_in_range(right_n);
+
+        let rows = match l123_cmd::range_compare::diff_ranges(
+            left_n,
+            right_n,
+            &left_values,
+            &right_values,
+        ) {
+            Ok(rows) => rows,
+            Err(e) => {
+                self.set_error(format!("/Range Compare: {e}"));
+                return;
+            }
+        };
+
+        let mut writes: Vec<(Address, Option<CellContents>)> = Vec::new();
+        for (i, row) in rows.iter().enumerate() {
+            let base_row = anchor.row + i as u32;
+            let addr_col = anchor.col;
+            let addr_cell = Address::new(anchor.sheet, addr_col, base_row);
+            self.write_cell_with_undo(
+                addr_cell,
+                CellContents::Label {
+                    prefix: LabelPrefix::Apostrophe,
+                    text: row.addr.display_full(),
+                },
+                &mut writes,
+            );
+            if let Some(c) = value_to_cell_contents(&row.left) {
+                self.write_cell_with_undo(
+                    Address::new(anchor.sheet, addr_col + 1, base_row),
+                    c,
+                    &mut writes,
+                );
+            }
+            if let Some(c) = value_to_cell_contents(&row.right) {
+                self.write_cell_with_undo(
+                    Address::new(anchor.sheet, addr_col + 2, base_row),
+                    c,
+                    &mut writes,
+                );
+            }
+            self.write_cell_with_undo(
+                Address::new(anchor.sheet, addr_col + 3, base_row),
+                CellContents::Label {
+                    prefix: LabelPrefix::Apostrophe,
+                    text: row.kind.label().to_string(),
+                },
+                &mut writes,
+            );
+        }
+
+        self.finish_range_write(writes);
+        self.mode = Mode::Ready;
+    }
+
+    /// Read every cell in a normalized range, returning their values in
+    /// row-major order with `Value::Empty` for unset cells.
+    fn collect_values_in_range(&mut self, range: Range) -> Vec<Value> {
+        let r = range.normalized();
+        let mut out = Vec::new();
+        for row in r.start.row..=r.end.row {
+            for col in r.start.col..=r.end.col {
+                let addr = Address::new(r.start.sheet, col, row);
+                let v = self
+                    .wb_mut()
+                    .engine
+                    .get_cell(addr)
+                    .ok()
+                    .map(|cv| cv.value)
+                    .unwrap_or(Value::Empty);
+                out.push(v);
+            }
+        }
+        out
+    }
+
     fn execute_range_justify(&mut self, range: Range) {
         let r = range.normalized();
         let sheet = r.start.sheet;
@@ -9134,6 +9374,43 @@ impl App {
                 let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.queue_file_import(path, /* numeric_split = */ true);
             }
+            PromptNext::FileImportJsonFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
+                self.queue_file_import_json(path);
+            }
+            PromptNext::FileImportParquetFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
+                self.queue_file_import_parquet(path);
+            }
+            PromptNext::FileImportSqliteFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
+                self.open_sqlite_table_prompt(path);
+            }
+            PromptNext::FileImportSqliteTable => {
+                if p.buffer.is_empty() {
+                    self.pending_sqlite_import_path = None;
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let Some(path) = self.pending_sqlite_import_path.take() else {
+                    self.set_error("Sqlite import: no path stashed");
+                    return;
+                };
+                let table = p.buffer.clone();
+                self.queue_file_import_sqlite(path, table);
+            }
             PromptNext::FileImportTextFilename => {
                 if p.buffer.is_empty() {
                     self.mode = Mode::Ready;
@@ -9712,6 +9989,11 @@ impl App {
             PendingCommand::RangeValueTo { src } | PendingCommand::RangeTransTo { src } => {
                 src.start
             }
+            // /Range Compare: snap back to the left range's TL so the
+            // user navigates from a familiar landmark to the right
+            // range and then to the output anchor.
+            PendingCommand::RangeCompareRight { left } => left.start,
+            PendingCommand::RangeCompareOutput { left, .. } => left.start,
             _ => self.wb_mut().pointer,
         };
         self.wb_mut().pointer = source_tl;
@@ -9727,7 +10009,9 @@ impl App {
             | PendingCommand::SpecialMoveTo { .. }
             | PendingCommand::DataDistributionBins { .. }
             | PendingCommand::RangeValueTo { .. }
-            | PendingCommand::RangeTransTo { .. } => None,
+            | PendingCommand::RangeTransTo { .. }
+            | PendingCommand::RangeCompareRight { .. }
+            | PendingCommand::RangeCompareOutput { .. } => None,
             _ => Some(self.wb().pointer),
         };
         self.point = Some(PointState {

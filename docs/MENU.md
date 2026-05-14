@@ -19,8 +19,13 @@ non-MVP leaves display "Not implemented yet" in control-panel line 3.
 
 L123 omits 1-2-3 R3.4a's `/Add-In` menu — add-ins are a DOS-era
 mechanism (`.PLC`/`.ADN` overlays bound to APP1/APP2/APP3 and ADDIN
-keys) we don't intend to recreate. Any future plug-in surface will be
-designed natively for L123 rather than retrofitted onto the menu.
+keys) we don't intend to recreate. The native plug-in surface (SPEC §22,
+v0.4) replaces it: **Alt-F10** (the ADDIN key) toggles the built-in
+**Data Workbench** overlay; APP1/APP2/APP3 (Alt-F7/F8/F9) are reserved
+for user-bindable plug-ins loaded from `~/.l123/plugins.toml`. The
+Workbench has its own non-1-2-3 keymap inside the overlay (vim-style
+hjkl, `/` search, etc.) and is intentionally outside the §20
+Authenticity Contract — see SPEC §22 and PLAN §M13 for its menu surface.
 
 Accelerators are the capitalized first letter. Arrow keys highlight; first
 letter descends immediately; `Esc` backs out one level; `Ctrl-Break` aborts
@@ -151,7 +156,7 @@ Assign/clear the Learn range (where Alt-F5 recorded keystrokes go).
 ## /Range  (R)
 
 ```
-Format  Label  Erase  Name  Justify  Prot  Unprot  Input  Value  Trans  Search
+Format  Label  Erase  Name  Justify  Prot  Unprot  Input  Value  Trans  Search  Compare
 ```
 
 - **Format** → same format list as /Worksheet Global Format, plus **Reset**  **[MVP]**
@@ -164,6 +169,7 @@ Format  Label  Erase  Name  Justify  Prot  Unprot  Input  Value  Trans  Search
 - **Value** (copy formulas → values)  **[CPL]**
 - **Trans** (transpose rows↔cols↔sheets; can convert formulas→values)  **[CPL]**
 - **Search** → Formulas | Labels | Both → Find | Replace  **[CPL]**
+- **Compare**  **[CPL v0.4]** — three-POINT prompt (left range, right range, output anchor); writes one row per differing cell as `(addr, left_value, right_value, diff_kind)` where `diff_kind ∈ {only-left, only-right, both-different, type-mismatch}`. Equal cells produce no output. Different-shape inputs raise ERROR mode.
 
 ---
 
@@ -192,7 +198,12 @@ Retrieve  Save  Combine  Xtract  Erase  List  Import  Dir  New  Open  Admin
 - **Xtract** → Formulas | Values → Cancel | Replace  **[MVP]**
 - **Erase** → Worksheet | Print | Graph | Other  **[CPL]**
 - **List** → Worksheet | Print | Graph | Other | Active | Linked  **[MVP: Worksheet, Active]**
-- **Import** → Text | Numbers  **[MVP: Numbers (CSV)]**
+- **Import** → Text | Numbers | Json | Parquet | Sqlite  **[MVP: Numbers (CSV); CPL v0.4: Json, Parquet, Sqlite]**
+  - Text / Numbers — classic 1-2-3 ASCII-CSV loaders.
+  - Json — array-of-objects or JSON-Lines. Header row from object keys; types widened (bool→1/0, null→empty).
+  - Parquet — typed columns preserved; dates land as `(D1)`-tagged numbers.
+  - Sqlite — file picker, then NAMES-mode picker over the tables in that file. Load goes to the cell pointer.
+  - Malformed input drops to ERROR mode with a one-line cause; no partial load.
 - **Dir** (change session directory)  **[MVP]**
 - **New** → Before | After  **[MVP]**
 - **Open** → Before | After  **[MVP]**
@@ -267,7 +278,15 @@ Fill  Table  Sort  Query  Distribution  Matrix  Regression  Parse  External
 - **Matrix** → Invert | Multiply  **[STR]**
 - **Regression**  **[CPL]**
 - **Parse**  **[CPL]**
-- **External** → Use | List | Create | Delete | Other | Reset | Quit  **[STR]**
+- **External** → Connect | Use | Refresh | List | Reset | Disconnect  **[CPL v0.4]**
+  - Live SQL source (DataLens-equivalent). Drivers: `sqlite` (file path) and `postgres` (libpq URL). Read-only this milestone.
+  - **Connect** prompts for a name (≤15 chars, named-range rules) and connection string; tests connectivity.
+  - **Use** *name* *query* runs SQL, populates a pointer-anchored range marked external-bound (PROT visible).
+  - **Refresh** re-runs the query in WAIT mode; replaces values in place.
+  - **List** overlay shows all connections + last-refresh timestamps.
+  - **Reset** / **Disconnect** clear bindings and credentials.
+  - Bindings round-trip in xlsx custom properties; passwords resolved from `~/.l123/credentials` or env on reconnect.
+  - F9 recalc uses cached values; refresh is explicit (`/DER`) only.
 
 ---
 

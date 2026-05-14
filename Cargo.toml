@@ -49,7 +49,16 @@ ratatui        = "0.30"
 crossterm      = "0.28"
 thiserror      = "2"
 anyhow         = "1"
-serde_json     = "1"
+serde_json     = { version = "1", features = ["preserve_order"] }
+# Parquet reader for `/File Import Parquet` (v0.4). The arrow feature
+# is needed for both the row-record reader and the fixture generator
+# (examples/gen_m11_parquet.rs). Compression backends stay off.
+parquet        = { version = "54", default-features = false, features = ["arrow"] }
+arrow-array    = "54"
+arrow-schema   = "54"
+# SQLite reader for `/File Import Sqlite` (v0.4). `bundled` builds
+# libsqlite3 from source so we don't depend on a system install.
+rusqlite       = { version = "0.32", features = ["bundled"] }
 plotters       = { version = "0.3", default-features = false, features = ["svg_backend", "bitmap_backend", "bitmap_encoder", "line_series", "point_series", "histogram", "full_palette", "ttf"] }
 image          = { version = "0.25", default-features = false, features = ["png"] }
 ratatui-image  = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }

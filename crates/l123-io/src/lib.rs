@@ -7,3 +7,7 @@
 pub mod cell_formats;
 pub mod csv;
 pub mod formula_sources;
+pub mod json_loader;
+pub mod parquet_loader;
+pub mod records;
+pub mod sqlite_loader;
