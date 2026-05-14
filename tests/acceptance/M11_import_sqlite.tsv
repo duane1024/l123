@@ -1,8 +1,7 @@
-# /File Import Sqlite — pick file, then pick table (v0.4)
-# After the user enters the path, the loader lists the tables in the
-# file and re-prompts. The user types the table name to load it.
-# v0.4 uses a prompt with inline table-list hint rather than a full
-# arrow-key NAMES picker; the picker is a follow-up.
+# /File Import Sqlite — pick file, then pick table from a NAMES-style
+# overlay (v0.4). Tables in the file are listed alphabetically; the
+# user navigates with arrow keys and commits with Enter, mirroring
+# the /Range Name Use F3 picker. Esc cancels back to READY.
 
 SIZE 120 25
 
@@ -17,11 +16,21 @@ ASSERT_PANEL_L3  Enter import file name
 KEYS tests/acceptance/fixtures/m11_import.sqlite
 ENTER
 
-# After the path: a second prompt names the available tables.
-ASSERT_PANEL_L3  Pick table
+# After the path commits: NAMES-style overlay enumerating the tables.
+# Fixture has two tables (alphabetical): items, suppliers.
+ASSERT_MODE      NAMES
+ASSERT_SCREEN    items
+ASSERT_SCREEN    suppliers
+# Highlight starts on the first row; line 3 names it.
 ASSERT_PANEL_L3  items
+
+# Arrow down moves the highlight to "suppliers"…
+DOWN
 ASSERT_PANEL_L3  suppliers
-KEYS items
+
+# …and back up to "items" for the actual load.
+UP
+ASSERT_PANEL_L3  items
 ENTER
 
 ASSERT_MODE      READY

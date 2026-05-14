@@ -518,6 +518,8 @@ impl App {
         let (main_area, icon_area) = self.split_for_icon_panel(chunks[1]);
         if self.help.is_some() {
             self.render_help_overlay(chunks[1], buf);
+        } else if self.sqlite_table_picker.is_some() {
+            self.render_sqlite_table_picker_overlay(chunks[1], buf);
         } else if self.name_list.is_some() {
             self.render_name_list_overlay(chunks[1], buf);
         } else if self.file_list.is_some() {
@@ -1397,7 +1399,9 @@ impl App {
         // save-confirm take absolute precedence (they own the
         // keyboard); then a command-argument prompt; then
         // mode-specific rendering.
-        let (line2, line3) = if self.name_list.is_some() {
+        let (line2, line3) = if self.sqlite_table_picker.is_some() {
+            self.render_sqlite_table_picker_lines()
+        } else if self.name_list.is_some() {
             self.render_name_list_lines()
         } else if self.file_list.is_some() {
             self.render_file_list_lines()
@@ -1620,6 +1624,70 @@ impl App {
                 Style::default()
             };
             set_line(buf, area.x, area.y + 1 + i as u16, &row, area.width, style);
+        }
+    }
+
+    /// Panel lines 2 / 3 while the `/File Import Sqlite` table picker
+    /// is on screen. Line 2 names the picker; line 3 echoes the
+    /// highlighted table + key hints.
+    pub(super) fn render_sqlite_table_picker_lines(&self) -> (Line<'_>, Line<'_>) {
+        let Some(p) = self.sqlite_table_picker.as_ref() else {
+            return (Line::from(""), Line::from(""));
+        };
+        let basename = p
+            .path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.path.display().to_string());
+        let header = format!(" Pick table from {basename}");
+        let tail = if p.tables.is_empty() {
+            " (no user tables)".to_string()
+        } else {
+            format!(
+                " {}   [{}/{}]   Enter: load  Esc: cancel",
+                p.tables[p.highlight],
+                p.highlight + 1,
+                p.tables.len(),
+            )
+        };
+        (Line::from(header), Line::from(tail))
+    }
+
+    /// Draw the sqlite table picker — one row per table, highlight in
+    /// reverse video. Mirrors `render_name_list_overlay` but without
+    /// the secondary RANGE column.
+    pub(super) fn render_sqlite_table_picker_overlay(&self, area: Rect, buf: &mut Buffer) {
+        let Some(p) = self.sqlite_table_picker.as_ref() else {
+            return;
+        };
+        let width = area.width as usize;
+        let rows = area.height as usize;
+        if rows == 0 || width == 0 {
+            return;
+        }
+        set_line(buf, area.x, area.y, "TABLE", area.width, Style::default());
+        if p.tables.is_empty() {
+            set_line(
+                buf,
+                area.x,
+                area.y + 1,
+                "(no user tables)",
+                area.width,
+                Style::default(),
+            );
+            return;
+        }
+        let visible_rows = rows.saturating_sub(1);
+        let start = p.view_offset.min(p.tables.len());
+        let end = (start + visible_rows).min(p.tables.len());
+        for (i, name) in p.tables[start..end].iter().enumerate() {
+            let idx = start + i;
+            let style = if idx == p.highlight {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            set_line(buf, area.x, area.y + 1 + i as u16, name, area.width, style);
         }
     }
 
