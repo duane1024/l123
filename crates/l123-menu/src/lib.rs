@@ -381,6 +381,11 @@ pub enum Action {
     /// data rows below. Type widening per PLAN §M11 (bool→1/0,
     /// null→Empty, strings as labels). Errors drop to ERROR mode.
     FileImportJson,
+    /// `/File Import Parquet` (v0.4) — read a parquet file via the
+    /// arrow row API. Header from the schema, typed cells per PLAN
+    /// §M11. Date/timestamp columns surface as raw integers (D1
+    /// format-tag plumbing is a follow-up).
+    FileImportParquet,
     /// `/File Combine Copy Entire-File` — overwrite cells starting at
     /// the pointer with the contents of every non-empty cell in the
     /// source file.
@@ -3140,6 +3145,13 @@ const FILE_IMPORT_MENU: &[MenuItem] = &[
         help: "Import array-of-objects or JSON-Lines into typed cells",
         help_page: "",
         body: MenuBody::Action(Action::FileImportJson),
+    },
+    MenuItem {
+        letter: 'P',
+        name: "Parquet",
+        help: "Import a Parquet file; types preserved per schema",
+        help_page: "",
+        body: MenuBody::Action(Action::FileImportParquet),
     },
 ];
 

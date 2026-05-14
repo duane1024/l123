@@ -1149,6 +1149,14 @@ pub(super) enum QueuedOp {
         path: PathBuf,
         origin: Address,
     },
+    /// `/File Import Parquet` (v0.4) — read a typed parquet file via
+    /// the arrow row API. Header row from the schema, typed cells
+    /// per PLAN §M11.
+    FileImportParquet {
+        engine: IronCalcEngine,
+        path: PathBuf,
+        origin: Address,
+    },
     /// F9 recalc, gated on cell count > `super::RECALC_WAIT_CELL_THRESHOLD`.
     Recalc { engine: IronCalcEngine },
 }
@@ -1253,6 +1261,9 @@ pub(super) enum PromptNext {
     /// `/File Import Json` — prompts for the path to a `.json` /
     /// `.jsonl` file (v0.4).
     FileImportJsonFilename,
+    /// `/File Import Parquet` — prompts for the path to a `.parquet`
+    /// file (v0.4).
+    FileImportParquetFilename,
     /// After the user types a filename, read the file as plain text and
     /// paint each line as a label down a single column starting at the
     /// pointer (no CSV semantics — the whole line, including embedded
@@ -1539,6 +1550,7 @@ impl PromptNext {
             | PromptNext::FileImportNumbersFilename
             | PromptNext::FileImportTextFilename
             | PromptNext::FileImportJsonFilename
+            | PromptNext::FileImportParquetFilename
             | PromptNext::FileEraseFilename
             | PromptNext::FileCombineFilename { .. }
             | PromptNext::FileDirPath

@@ -187,6 +187,15 @@ impl App {
                     let _ = tx.send(worker_file_import_json(engine, path, origin, progress));
                 });
             }
+            QueuedOp::FileImportParquet {
+                engine,
+                path,
+                origin,
+            } => {
+                self.runtime.spawn_blocking(move || {
+                    let _ = tx.send(worker_file_import_parquet(engine, path, origin, progress));
+                });
+            }
             QueuedOp::Recalc { engine } => {
                 self.runtime.spawn_blocking(move || {
                     let _ = tx.send(worker_recalc(engine, progress));
@@ -640,32 +649,63 @@ fn worker_file_import(
 /// `AsyncResult::Errored` so the apply path drops to ERROR mode and
 /// the workbook recovers its engine.
 fn worker_file_import_json(
-    mut engine: IronCalcEngine,
+    engine: IronCalcEngine,
     path: std::path::PathBuf,
     origin: Address,
     progress: AsyncProgress,
 ) -> AsyncResult {
+    run_record_import("Json import", engine, origin, progress, || {
+        l123_io::json_loader::load(&path)
+    })
+}
+
+/// `/File Import Parquet` worker (v0.4). Same shape as the JSON
+/// worker; the loader is `l123_io::parquet_loader`.
+fn worker_file_import_parquet(
+    engine: IronCalcEngine,
+    path: std::path::PathBuf,
+    origin: Address,
+    progress: AsyncProgress,
+) -> AsyncResult {
+    run_record_import("Parquet import", engine, origin, progress, || {
+        l123_io::parquet_loader::load(&path)
+    })
+}
+
+/// Shared driver for the v0.4 typed-record importers (JSON, Parquet,
+/// and Sqlite). `verb` is the user-visible error prefix; `load_fn`
+/// reads the underlying file into a `LoadedRecords`. The driver
+/// handles progress, cancellation, header / row writes, and engine
+/// recalc.
+fn run_record_import<F>(
+    verb: &str,
+    mut engine: IronCalcEngine,
+    origin: Address,
+    progress: AsyncProgress,
+    load_fn: F,
+) -> AsyncResult
+where
+    F: FnOnce() -> Result<l123_io::records::LoadedRecords, l123_io::records::LoadError>,
+{
     if progress.cancel.load(Ordering::Relaxed) {
         return AsyncResult::Cancelled {
             engine: Some(engine),
         };
     }
-    let records = match l123_io::json_loader::load(&path) {
+    let records = match load_fn() {
         Ok(r) => r,
         Err(e) => {
             return AsyncResult::Errored {
                 engine: Some(engine),
-                message: format!("Json import: {e}"),
+                message: format!("{verb}: {e}"),
             };
         }
     };
-    let total = (records.rows.len() as u64) + 1; // +1 for header
+    let total = (records.rows.len() as u64) + 1;
     progress.done.store(0, Ordering::Relaxed);
     progress.total.store(total.max(1), Ordering::Relaxed);
 
     let mut cells: Vec<(Address, CellContents)> = Vec::new();
-
-    // Header row — apostrophe-prefixed labels at `origin`.
     for (dc, h) in records.header.iter().enumerate() {
         let addr = Address::new(origin.sheet, origin.col + dc as u16, origin.row);
         let engine_input = format!("'{h}");
@@ -710,8 +750,6 @@ fn worker_file_import_json(
                         },
                     ));
                 }
-                // bool widening happens inside the loader; Error
-                // shouldn't occur but keep the match exhaustive.
                 Value::Bool(b) => {
                     let n = if *b { 1.0 } else { 0.0 };
                     let s = l123_core::format_number_general(n);

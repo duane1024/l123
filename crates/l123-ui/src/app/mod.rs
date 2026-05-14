@@ -3504,6 +3504,7 @@ impl App {
             Action::FileXtractValues => self.start_file_xtract_prompt(XtractKind::Values),
             Action::FileImportNumbers => self.start_file_import_numbers_prompt(),
             Action::FileImportJson => self.start_file_import_json_prompt(),
+            Action::FileImportParquet => self.start_file_import_parquet_prompt(),
             Action::FileImportText => self.start_file_import_text_prompt(),
             Action::FileNew => self.execute_file_new(),
             Action::FileOpenBefore => self.start_file_open_prompt(true),
@@ -4917,6 +4918,17 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    fn start_file_import_parquet_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter import file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileImportParquetFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
     fn start_file_import_text_prompt(&mut self) {
         self.menu = None;
         self.prompt = Some(PromptState {
@@ -5603,6 +5615,24 @@ impl App {
             "Importing",
             name,
             QueuedOp::FileImportJson {
+                engine,
+                path,
+                origin,
+            },
+        );
+    }
+
+    /// `/File Import Parquet` — worker reads the file via
+    /// `l123_io::parquet_loader` and emits a header + typed rows.
+    fn queue_file_import_parquet(&mut self, path: PathBuf) {
+        let origin = self.wb().pointer;
+        let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
+        let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
+        let name = display_basename(&path);
+        self.queue_async_op(
+            "Importing",
+            name,
+            QueuedOp::FileImportParquet {
                 engine,
                 path,
                 origin,
@@ -9162,6 +9192,14 @@ impl App {
                 }
                 let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.queue_file_import_json(path);
+            }
+            PromptNext::FileImportParquetFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
+                self.queue_file_import_parquet(path);
             }
             PromptNext::FileImportTextFilename => {
                 if p.buffer.is_empty() {
