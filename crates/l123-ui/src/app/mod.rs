@@ -61,11 +61,11 @@ use types::{
     IconPanelGeom, JournalEntry, LabelDirection, MacroState, MenuState, PendingAsyncOp,
     PendingCommand, PointState, PrintDestination, PrintSession, PromptNext, PromptState, QueuedOp,
     SaveConfirmState, SearchScope, SearchSession, SortDir, SortKeySlot, StatView, Workbook,
-    FILE_LIST_PAGE_SIZE, NAME_LIST_PAGE_SIZE,
+    FILE_LIST_PAGE_SIZE, NAME_LIST_PAGE_SIZE, SQLITE_TABLE_PICKER_PAGE_SIZE,
 };
 pub(crate) use types::{
     CombineKind, ExternalSource, FileListKind, FileListState, NameListOrigin, NameListState,
-    TitlesKind, XtractKind,
+    SqliteTablePickerState, TitlesKind, XtractKind,
 };
 pub use types::GraphTitleSlot;
 
@@ -249,10 +249,6 @@ pub struct App {
     /// name typed in the first prompt while the user types the
     /// connection string / SQL in the second.
     pending_external_name: Option<String>,
-    /// Transient slot for the two-step `/File Import Sqlite` flow —
-    /// the sqlite path is stashed here while the user picks a table
-    /// from the second prompt.
-    pending_sqlite_import_path: Option<PathBuf>,
     /// Overlay state for /File List. When present, the mode is Files
     /// and the grid is obscured by a horizontal picker on lines 2/3.
     file_list: Option<FileListState>,
@@ -260,6 +256,11 @@ pub struct App {
     /// the grid is obscured by a vertical name picker. Underlying
     /// POINT / prompt state is preserved so dismissal returns to it.
     name_list: Option<NameListState>,
+    /// Overlay state for `/File Import Sqlite`'s table picker (v0.4
+    /// follow-up). Mirrors `name_list` but the entries are bare
+    /// strings — there's no range to render in a second column.
+    /// Mode is Names while this is `Some`; dismissal returns to READY.
+    sqlite_table_picker: Option<SqliteTablePickerState>,
     /// Overlay state for F1 HELP. Some while the help overlay is open;
     /// underlying mode is restored on Esc.
     help: Option<HelpState>,
@@ -996,6 +997,14 @@ fn adjust_name_list_view(nl: &mut NameListState) {
     }
 }
 
+fn adjust_sqlite_table_picker_view(p: &mut SqliteTablePickerState) {
+    if p.highlight < p.view_offset {
+        p.view_offset = p.highlight;
+    } else if p.highlight >= p.view_offset + SQLITE_TABLE_PICKER_PAGE_SIZE {
+        p.view_offset = p.highlight + 1 - SQLITE_TABLE_PICKER_PAGE_SIZE;
+    }
+}
+
 /// List every worksheet file (`.xlsx`, plus `.WK3` when built with
 /// the `wk3` feature) in `dir`, sorted by filename. Hidden files and
 /// non-file entries are skipped.
@@ -1196,9 +1205,9 @@ impl App {
             pending_xtract_path: None,
             pending_combine_path: None,
             pending_external_name: None,
-            pending_sqlite_import_path: None,
             file_list: None,
             name_list: None,
+            sqlite_table_picker: None,
             help: None,
             active_files: vec![Workbook::new()],
             current: 0,
@@ -4974,7 +4983,6 @@ impl App {
 
     fn start_file_import_sqlite_prompt(&mut self) {
         self.menu = None;
-        self.pending_sqlite_import_path = None;
         self.prompt = Some(PromptState {
             label: "Enter import file name:".into(),
             buffer: String::new(),
@@ -5724,10 +5732,10 @@ impl App {
     }
 
     /// Second step of `/File Import Sqlite`: synchronously list the
-    /// tables in `path` and open a second prompt for the table
-    /// choice. Listing is fast (a single `sqlite_master` query) so
-    /// it happens on the UI thread; only the actual table read is
-    /// queued async.
+    /// tables in `path` and open a NAMES-style overlay so the user
+    /// picks one with the arrow keys. Listing is fast (a single
+    /// `sqlite_master` query) so it happens on the UI thread; only
+    /// the actual table read is queued async.
     fn open_sqlite_table_prompt(&mut self, path: PathBuf) {
         match l123_io::sqlite_loader::list_tables(&path) {
             Ok(tables) if tables.is_empty() => {
@@ -5737,15 +5745,13 @@ impl App {
                 ));
             }
             Ok(tables) => {
-                let list = tables.join(", ");
-                self.pending_sqlite_import_path = Some(path);
-                self.prompt = Some(PromptState {
-                    label: format!("Pick table ({list}):"),
-                    buffer: String::new(),
-                    next: PromptNext::FileImportSqliteTable,
-                    fresh: false,
+                self.sqlite_table_picker = Some(SqliteTablePickerState {
+                    tables,
+                    highlight: 0,
+                    view_offset: 0,
+                    path,
                 });
-                self.mode = Mode::Menu;
+                self.mode = Mode::Names;
             }
             Err(e) => self.set_error(format!("Sqlite import: {e}")),
         }
@@ -9478,19 +9484,6 @@ impl App {
                 }
                 let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.open_sqlite_table_prompt(path);
-            }
-            PromptNext::FileImportSqliteTable => {
-                if p.buffer.is_empty() {
-                    self.pending_sqlite_import_path = None;
-                    self.mode = Mode::Ready;
-                    return;
-                }
-                let Some(path) = self.pending_sqlite_import_path.take() else {
-                    self.set_error("Sqlite import: no path stashed");
-                    return;
-                };
-                let table = p.buffer.clone();
-                self.queue_file_import_sqlite(path, table);
             }
             PromptNext::DataExternalConnectName => {
                 if p.buffer.is_empty() {

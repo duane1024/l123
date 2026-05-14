@@ -1295,12 +1295,10 @@ pub(super) enum PromptNext {
     /// file (v0.4).
     FileImportParquetFilename,
     /// `/File Import Sqlite` — first prompt: pick the .sqlite file.
-    /// On commit the loader lists tables and the prompt transitions
-    /// to [`FileImportSqliteTable`].
+    /// On commit the loader lists tables and opens a NAMES-style
+    /// table picker overlay (v0.4 follow-up). The picker carries
+    /// the path directly; there's no second prompt variant.
     FileImportSqliteFilename,
-    /// `/File Import Sqlite` — second prompt: pick a table from the
-    /// path stashed in `App::pending_sqlite_import_path`.
-    FileImportSqliteTable,
     /// `/Data External Connect` (M12 v0.4) — first prompt: source
     /// name (≤15 ASCII chars, named-range rules).
     DataExternalConnectName,
@@ -1567,6 +1565,28 @@ pub(crate) struct NameListState {
 
 pub(super) const NAME_LIST_PAGE_SIZE: usize = 10;
 
+/// `/File Import Sqlite` table picker (v0.4 follow-up).
+///
+/// Shares the NAMES-style overlay shape with [`NameListState`] but
+/// each entry is a plain table name — there's no `Range` to render
+/// in a second column. On Enter the picker dispatches the chosen
+/// table through `queue_file_import_sqlite` with the stashed
+/// sqlite path; on Esc it cancels back to READY.
+#[derive(Debug, Clone)]
+pub(crate) struct SqliteTablePickerState {
+    /// Tables in the sqlite file, sorted alphabetically (the same
+    /// ordering `l123_io::sqlite_loader::list_tables` returns).
+    pub(super) tables: Vec<String>,
+    pub(super) highlight: usize,
+    pub(super) view_offset: usize,
+    /// The path the user picked in the first prompt; carried here
+    /// so Enter can dispatch the async load without a separate
+    /// `pending_*_path` slot on App.
+    pub(super) path: PathBuf,
+}
+
+pub(super) const SQLITE_TABLE_PICKER_PAGE_SIZE: usize = 10;
+
 impl PromptNext {
     pub(super) fn accepts_char(self, c: char) -> bool {
         match self {
@@ -1602,7 +1622,6 @@ impl PromptNext {
             | PromptNext::FileImportJsonFilename
             | PromptNext::FileImportParquetFilename
             | PromptNext::FileImportSqliteFilename
-            | PromptNext::FileImportSqliteTable
             | PromptNext::DataExternalConnectName
             | PromptNext::DataExternalUseName
             | PromptNext::FileEraseFilename
