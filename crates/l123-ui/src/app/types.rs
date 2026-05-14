@@ -1196,11 +1196,15 @@ pub(super) enum AsyncResult {
         path: PathBuf,
         result: std::result::Result<(), String>,
     },
-    /// Import op completed (text or numbers). `cells` is the run of
-    /// UI-side entries to merge into `Workbook::cells`.
+    /// Import op completed (text / numbers / json / parquet / sqlite).
+    /// `cells` are the UI-side entries to merge into `Workbook::cells`;
+    /// `formats` are the optional per-cell format overrides the
+    /// loader collected (currently used by the parquet loader to tag
+    /// date columns as `(D1)`).
     FileImport {
         engine: IronCalcEngine,
         cells: Vec<(Address, CellContents)>,
+        formats: Vec<(Address, Format)>,
     },
     /// F9 recalc done — engine carries the recomputed values.
     Recalc { engine: IronCalcEngine },

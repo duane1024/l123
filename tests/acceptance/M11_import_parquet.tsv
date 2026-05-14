@@ -1,7 +1,11 @@
 # /File Import Parquet — typed columns preserved (v0.4)
-# Fixture has 5 columns × 3 rows with int / string / nullable int /
-# float / bool. Bools widen to 1/0; nulls land as empty cells;
-# numbers carry their full precision into the cell.
+# Fixture has 6 columns × 3 rows: int / string / nullable int /
+# float / bool / nullable Date32. Bools widen to 1/0; nulls land as
+# empty cells; Date32 columns are converted to Excel serials AND
+# tagged with the (D1) format so cells render as DD-MMM-YY.
+# Wider screen so the "purchased_on" header (12 chars > the 9-wide
+# default column) can spill into the adjacent empty column.
+SIZE 120 25
 
 KEY /
 KEY F
@@ -21,24 +25,30 @@ ASSERT_CELL      A:B1  name
 ASSERT_CELL      A:C1  qty
 ASSERT_CELL      A:D1  rate
 ASSERT_CELL      A:E1  active
+# "purchased_on" (12 chars) spills into the empty column on the right.
+ASSERT_SCREEN    purchased_on
 
-# Row 1: 1, widget, 100, 0.5, true
+# Row 1: 1, widget, 100, 0.5, true, 2024-01-01
 ASSERT_CELL      A:A2  1
 ASSERT_CELL      A:B2  widget
 ASSERT_CELL      A:C2  100
 ASSERT_CELL      A:D2  0.5
 ASSERT_CELL      A:E2  1
+# Date column tagged (D1) renders DD-MMM-YY.
+ASSERT_CELL      A:F2  01-JAN-24
 
-# Row 2: 2, gadget, 42, 1.25, false
+# Row 2: 2, gadget, 42, 1.25, false, 2024-07-15
 ASSERT_CELL      A:A3  2
 ASSERT_CELL      A:B3  gadget
 ASSERT_CELL      A:C3  42
 ASSERT_CELL      A:D3  1.25
 ASSERT_CELL      A:E3  0
+ASSERT_CELL      A:F3  15-JUL-24
 
-# Row 3: 3, gizmo, NULL, 3, true
+# Row 3: 3, gizmo, NULL, 3, true, NULL
 ASSERT_CELL      A:A4  3
 ASSERT_CELL      A:B4  gizmo
 ASSERT_CELL      A:C4
 ASSERT_CELL      A:D4  3
 ASSERT_CELL      A:E4  1
+ASSERT_CELL      A:F4
