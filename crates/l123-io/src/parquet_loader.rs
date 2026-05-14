@@ -7,9 +7,9 @@
 //!   float* → Value::Number
 //!   utf8   → Value::Text
 //!   null   → Value::Empty
-//!   date/timestamp → Value::Number raw integer (D1 format-tag plumbing
-//!     is a follow-up; today the user sees the raw days-since-epoch /
-//!     nanos value and can apply a date format manually)
+//!   Date32 / Date64 / Timestamp(*) → Value::Number Excel serial
+//!     (days since 1899-12-30) AND `column_formats[col] = Some((D1))`
+//!     so cells render as `DD-MMM-YY` instead of raw integers.
 //!   nested types → stringified via Debug (v0.4 punt — same idea as the
 //!     JSON loader's nested-object handling)
 
@@ -18,14 +18,25 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::{
-    Array, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Array, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow_schema::{DataType, Schema};
-use l123_core::Value;
+use arrow_schema::{DataType, Schema, TimeUnit};
+use l123_core::{Format, FormatKind, Value};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use crate::records::{LoadError, LoadedRecords};
+
+/// Days between 1899-12-30 (Excel epoch) and 1970-01-01 (Unix epoch).
+/// Add this to a Date32 (days since 1970-01-01) to get a 1-2-3 /
+/// Excel date serial.
+const EPOCH_OFFSET_DAYS: i64 = 25_569;
+const SECS_PER_DAY: i64 = 86_400;
+const MILLIS_PER_DAY: i64 = SECS_PER_DAY * 1_000;
+const MICROS_PER_DAY: i64 = MILLIS_PER_DAY * 1_000;
+const NANOS_PER_DAY: i64 = MICROS_PER_DAY * 1_000;
 
 pub fn load(path: &Path) -> Result<LoadedRecords, LoadError> {
     let file = File::open(path).map_err(|e| LoadError::Io(e.to_string()))?;
@@ -36,6 +47,11 @@ pub fn load(path: &Path) -> Result<LoadedRecords, LoadError> {
         })?;
     let schema = builder.schema().clone();
     let header: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+    let column_formats: Vec<Option<Format>> = schema
+        .fields()
+        .iter()
+        .map(|f| format_for_data_type(f.data_type()))
+        .collect();
     let reader = builder.build().map_err(|e| LoadError::Parse {
         location: "parquet reader".into(),
         message: e.to_string(),
@@ -49,7 +65,22 @@ pub fn load(path: &Path) -> Result<LoadedRecords, LoadError> {
         })?;
         append_batch_rows(&batch, &schema, &mut rows)?;
     }
-    Ok(LoadedRecords { header, rows })
+    Ok(LoadedRecords {
+        header,
+        rows,
+        column_formats,
+    })
+}
+
+/// Per-column format hint. Date / timestamp columns get the 1-2-3
+/// `(D1)` format so the Excel serial we emit renders as `DD-MMM-YY`.
+fn format_for_data_type(t: &DataType) -> Option<Format> {
+    match t {
+        DataType::Date32
+        | DataType::Date64
+        | DataType::Timestamp(_, _) => Some(Format::from_kind(FormatKind::DateDmy)),
+        _ => None,
+    }
 }
 
 fn append_batch_rows(
@@ -105,15 +136,53 @@ fn extract_value(
         DataType::Utf8 => Ok(Value::Text(
             downcast::<StringArray>(array).value(row).to_string(),
         )),
-        // Dates / timestamps surface as their raw integer value for
-        // v0.4. The (D1) format-tag plumbing is a follow-up; for now
-        // the user can apply a date format manually via /RFD1.
-        DataType::Date32 => Ok(Value::Number(downcast::<Int32Array>(array).value(row) as f64)),
-        DataType::Date64 => Ok(Value::Number(downcast::<Int64Array>(array).value(row) as f64)),
+        // Date / timestamp columns are converted to 1-2-3 / Excel
+        // serial (days since 1899-12-30) here; the loader also tags
+        // the column with `(D1)` so the renderer formats it as
+        // `DD-MMM-YY`.
+        DataType::Date32 => {
+            let days = downcast::<Date32Array>(array).value(row) as i64;
+            Ok(Value::Number((days + EPOCH_OFFSET_DAYS) as f64))
+        }
+        DataType::Date64 => {
+            let ms = downcast::<Date64Array>(array).value(row);
+            let days = div_floor(ms, MILLIS_PER_DAY);
+            Ok(Value::Number((days + EPOCH_OFFSET_DAYS) as f64))
+        }
+        DataType::Timestamp(unit, _tz) => {
+            let raw = match unit {
+                TimeUnit::Second => downcast::<TimestampSecondArray>(array).value(row),
+                TimeUnit::Millisecond => downcast::<TimestampMillisecondArray>(array).value(row),
+                TimeUnit::Microsecond => downcast::<TimestampMicrosecondArray>(array).value(row),
+                TimeUnit::Nanosecond => downcast::<TimestampNanosecondArray>(array).value(row),
+            };
+            let divisor = match unit {
+                TimeUnit::Second => SECS_PER_DAY,
+                TimeUnit::Millisecond => MILLIS_PER_DAY,
+                TimeUnit::Microsecond => MICROS_PER_DAY,
+                TimeUnit::Nanosecond => NANOS_PER_DAY,
+            };
+            let days = div_floor(raw, divisor);
+            Ok(Value::Number((days + EPOCH_OFFSET_DAYS) as f64))
+        }
         // Anything we don't have explicit support for falls through
         // to a debug-stringified Text cell so the user at least
         // sees the data.
         _ => Ok(Value::Text(format!("{array:?}"))),
+    }
+}
+
+/// Euclidean division — `(-1).div_floor(86_400)` is `-1`, not `0`, so
+/// dates before the Unix epoch round to the correct earlier day. Pre-
+/// 1970 timestamps shouldn't show up in modern parquet data but the
+/// arithmetic stays honest at the boundary.
+fn div_floor(n: i64, d: i64) -> i64 {
+    let q = n / d;
+    let r = n % d;
+    if (r != 0) && ((r < 0) != (d < 0)) {
+        q - 1
+    } else {
+        q
     }
 }
 
@@ -140,7 +209,10 @@ mod tests {
     #[test]
     fn header_in_schema_order() {
         let r = load(&fixture()).expect("fixture loads");
-        assert_eq!(r.header, vec!["id", "name", "qty", "rate", "active"]);
+        assert_eq!(
+            r.header,
+            vec!["id", "name", "qty", "rate", "active", "purchased_on"]
+        );
     }
 
     #[test]
@@ -169,11 +241,42 @@ mod tests {
     }
 
     #[test]
+    fn date32_converts_to_excel_serial() {
+        let r = load(&fixture()).expect("fixture loads");
+        // 2024-01-01 fixture: Date32 19723 -> serial 45292.
+        assert_eq!(r.rows[0][5], Value::Number(45_292.0));
+        // 2024-07-15: Date32 19919 -> serial 45488.
+        assert_eq!(r.rows[1][5], Value::Number(45_488.0));
+        // NULL stays empty.
+        assert_eq!(r.rows[2][5], Value::Empty);
+    }
+
+    #[test]
+    fn date32_column_tagged_with_d1_format() {
+        let r = load(&fixture()).expect("fixture loads");
+        let purchased_on = r.column_formats[5].as_ref().expect("date column tagged");
+        assert_eq!(purchased_on.kind, FormatKind::DateDmy);
+        // Non-date columns stay untagged.
+        assert!(r.column_formats[0].is_none());
+        assert!(r.column_formats[3].is_none());
+    }
+
+    #[test]
     fn missing_file_is_io_error() {
         let p = PathBuf::from("/no/such/path.parquet");
         match load(&p) {
             Err(LoadError::Io(_)) => {}
             other => panic!("expected Io error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn div_floor_handles_negative_inputs() {
+        assert_eq!(div_floor(0, 86_400), 0);
+        assert_eq!(div_floor(86_400, 86_400), 1);
+        assert_eq!(div_floor(86_399, 86_400), 0);
+        assert_eq!(div_floor(-1, 86_400), -1);
+        assert_eq!(div_floor(-86_400, 86_400), -1);
+        assert_eq!(div_floor(-86_401, 86_400), -2);
     }
 }

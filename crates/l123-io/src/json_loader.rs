@@ -78,10 +78,7 @@ fn parse_array(body: &str) -> Result<LoadedRecords, LoadError> {
         .iter()
         .map(|map| project_row(map, &headers))
         .collect();
-    Ok(LoadedRecords {
-        header: headers,
-        rows,
-    })
+    Ok(LoadedRecords::new(headers, rows))
 }
 
 fn parse_lines(body: &str) -> Result<LoadedRecords, LoadError> {
@@ -112,10 +109,7 @@ fn parse_lines(body: &str) -> Result<LoadedRecords, LoadError> {
         .iter()
         .map(|map| project_row(map, &headers))
         .collect();
-    Ok(LoadedRecords {
-        header: headers,
-        rows,
-    })
+    Ok(LoadedRecords::new(headers, rows))
 }
 
 fn project_row(map: &serde_json::Map<String, JsonValue>, headers: &[String]) -> Vec<Value> {

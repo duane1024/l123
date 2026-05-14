@@ -282,10 +282,17 @@ impl App {
                     self.set_error(format!("Cannot save: {msg}"));
                 }
             }
-            AsyncResult::FileImport { engine, cells } => {
+            AsyncResult::FileImport {
+                engine,
+                cells,
+                formats,
+            } => {
                 self.wb_mut().engine = engine;
                 for (a, c) in cells {
                     self.wb_mut().cells.insert(a, c);
+                }
+                for (a, f) in formats {
+                    self.wb_mut().cell_formats.insert(a, f);
                 }
                 self.refresh_formula_caches();
             }
@@ -652,7 +659,11 @@ fn worker_file_import(
         }
     }
     engine.recalc();
-    AsyncResult::FileImport { engine, cells }
+    AsyncResult::FileImport {
+        engine,
+        cells,
+        formats: Vec::new(),
+    }
 }
 
 /// `/File Import Json` worker (v0.4). Reads the file off the UI
@@ -733,6 +744,7 @@ where
     progress.total.store(total.max(1), Ordering::Relaxed);
 
     let mut cells: Vec<(Address, CellContents)> = Vec::new();
+    let mut formats: Vec<(Address, l123_core::Format)> = Vec::new();
     for (dc, h) in records.header.iter().enumerate() {
         let addr = Address::new(origin.sheet, origin.col + dc as u16, origin.row);
         let engine_input = format!("'{h}");
@@ -759,12 +771,13 @@ where
                 origin.col + dc as u16,
                 origin.row + 1 + dr as u32,
             );
-            match v {
-                Value::Empty => continue,
+            let wrote = match v {
+                Value::Empty => false,
                 Value::Number(n) => {
                     let s = l123_core::format_number_general(*n);
                     let _ = engine.set_user_input(addr, &s);
                     cells.push((addr, CellContents::Constant(Value::Number(*n))));
+                    true
                 }
                 Value::Text(s) => {
                     let engine_input = format!("'{s}");
@@ -776,20 +789,35 @@ where
                             text: s.clone(),
                         },
                     ));
+                    true
                 }
                 Value::Bool(b) => {
                     let n = if *b { 1.0 } else { 0.0 };
                     let s = l123_core::format_number_general(n);
                     let _ = engine.set_user_input(addr, &s);
                     cells.push((addr, CellContents::Constant(Value::Number(n))));
+                    true
                 }
-                Value::Error(_) => continue,
+                Value::Error(_) => false,
+            };
+            // Apply the per-column format hint (parquet date columns
+            // tag themselves as (D1)). Skipped for cells we didn't
+            // write so we don't paint format on stale neighbors.
+            if wrote {
+                if let Some(Some(fmt)) = records.column_formats.get(dc) {
+                    let _ = engine.set_cell_format(addr, *fmt);
+                    formats.push((addr, *fmt));
+                }
             }
         }
         progress.done.store(2 + dr as u64, Ordering::Relaxed);
     }
     engine.recalc();
-    AsyncResult::FileImport { engine, cells }
+    AsyncResult::FileImport {
+        engine,
+        cells,
+        formats,
+    }
 }
 
 /// §4.7 worker — F9 recalc on a workbook above `super::RECALC_WAIT_CELL_THRESHOLD`.
