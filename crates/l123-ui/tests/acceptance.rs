@@ -1536,11 +1536,15 @@ transcripts! {
     function_emulations => "function_emulations.tsv",
     function_reload_round_trip => "function_reload_round_trip.tsv",
     function_sidecar_round_trip => "function_sidecar_round_trip.tsv",
-    m11_import_json        => "M11_import_json.tsv",
-    m11_import_jsonl       => "M11_import_jsonl.tsv",
-    m11_import_json_error  => "M11_import_json_error.tsv",
-    m11_import_parquet     => "M11_import_parquet.tsv",
-    m11_import_sqlite      => "M11_import_sqlite.tsv",
+    m11_import_json                  => "M11_import_json.tsv",
+    m11_import_jsonl                 => "M11_import_jsonl.tsv",
+    m11_import_json_error            => "M11_import_json_error.tsv",
+    m11_import_parquet               => "M11_import_parquet.tsv",
+    m11_import_sqlite                => "M11_import_sqlite.tsv",
+    m11_range_compare_basic          => "M11_range_compare_basic.tsv",
+    m11_range_compare_type_mismatch  => "M11_range_compare_type_mismatch.tsv",
+    m11_range_compare_size_mismatch  => "M11_range_compare_size_mismatch.tsv",
+    m11_range_compare_clean          => "M11_range_compare_clean.tsv",
 }
 
 #[cfg(feature = "wk3")]

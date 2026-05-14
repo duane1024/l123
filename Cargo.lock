@@ -1695,6 +1695,7 @@ dependencies = [
  "anyhow",
  "crossterm 0.28.1",
  "image 0.25.10",
+ "l123-cmd",
  "l123-core",
  "l123-engine",
  "l123-graph",
