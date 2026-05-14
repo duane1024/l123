@@ -1,0 +1,30 @@
+# /File Import Json — JSON-Lines variant (v0.4)
+# One JSON object per line; same header / type semantics as the
+# array-of-objects form. Detection is by extension and/or content
+# heuristic (leading byte `{` and a newline before EOF).
+
+KEY /
+KEY F
+KEY I
+KEY J
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter import file name
+KEYS tests/acceptance/fixtures/m11_import.jsonl
+ENTER
+ASSERT_MODE      READY
+
+# Header row.
+ASSERT_CELL      A:A1  id
+ASSERT_CELL      A:B1  name
+ASSERT_CELL      A:C1  qty
+
+# Three data rows.
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+ASSERT_CELL      A:C2  100
+ASSERT_CELL      A:A3  2
+ASSERT_CELL      A:B3  gadget
+ASSERT_CELL      A:C3  42
+ASSERT_CELL      A:A4  3
+ASSERT_CELL      A:B4  gizmo
+ASSERT_CELL      A:C4  7

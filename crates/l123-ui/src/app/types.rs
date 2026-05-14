@@ -1141,6 +1141,14 @@ pub(super) enum QueuedOp {
         path: PathBuf,
         origin: Address,
     },
+    /// `/File Import Json` (v0.4) — array-of-objects or JSON-Lines.
+    /// Header row at `origin`; data rows below. Auto-detected by the
+    /// first non-whitespace byte.
+    FileImportJson {
+        engine: IronCalcEngine,
+        path: PathBuf,
+        origin: Address,
+    },
     /// F9 recalc, gated on cell count > `super::RECALC_WAIT_CELL_THRESHOLD`.
     Recalc { engine: IronCalcEngine },
 }
@@ -1242,6 +1250,9 @@ pub(super) enum PromptNext {
     /// After the user types a filename, parse it as CSV and paint the
     /// values into cells starting at the pointer.
     FileImportNumbersFilename,
+    /// `/File Import Json` — prompts for the path to a `.json` /
+    /// `.jsonl` file (v0.4).
+    FileImportJsonFilename,
     /// After the user types a filename, read the file as plain text and
     /// paint each line as a label down a single column starting at the
     /// pointer (no CSV semantics — the whole line, including embedded
@@ -1527,6 +1538,7 @@ impl PromptNext {
             | PromptNext::FileXtractFilename { .. }
             | PromptNext::FileImportNumbersFilename
             | PromptNext::FileImportTextFilename
+            | PromptNext::FileImportJsonFilename
             | PromptNext::FileEraseFilename
             | PromptNext::FileCombineFilename { .. }
             | PromptNext::FileDirPath

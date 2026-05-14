@@ -3503,6 +3503,7 @@ impl App {
             Action::FileXtractFormulas => self.start_file_xtract_prompt(XtractKind::Formulas),
             Action::FileXtractValues => self.start_file_xtract_prompt(XtractKind::Values),
             Action::FileImportNumbers => self.start_file_import_numbers_prompt(),
+            Action::FileImportJson => self.start_file_import_json_prompt(),
             Action::FileImportText => self.start_file_import_text_prompt(),
             Action::FileNew => self.execute_file_new(),
             Action::FileOpenBefore => self.start_file_open_prompt(true),
@@ -4905,6 +4906,17 @@ impl App {
         self.mode = Mode::Menu;
     }
 
+    fn start_file_import_json_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Enter import file name:".into(),
+            buffer: String::new(),
+            next: PromptNext::FileImportJsonFilename,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
     fn start_file_import_text_prompt(&mut self) {
         self.menu = None;
         self.prompt = Some(PromptState {
@@ -5577,6 +5589,25 @@ impl App {
             }
         };
         self.queue_async_op("Importing", name, queued);
+    }
+
+    /// `/File Import Json` — same harness as `queue_file_import`; the
+    /// loader inside the worker (`worker_file_import_json`) auto-
+    /// detects array-of-objects vs JSON-Lines.
+    fn queue_file_import_json(&mut self, path: PathBuf) {
+        let origin = self.wb().pointer;
+        let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
+        let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
+        let name = display_basename(&path);
+        self.queue_async_op(
+            "Importing",
+            name,
+            QueuedOp::FileImportJson {
+                engine,
+                path,
+                origin,
+            },
+        );
     }
 
     fn commit_erase_confirm(&mut self, choice: usize) {
@@ -9123,6 +9154,14 @@ impl App {
                 }
                 let path = PathBuf::from(clean_dropped_path(&p.buffer));
                 self.queue_file_import(path, /* numeric_split = */ true);
+            }
+            PromptNext::FileImportJsonFilename => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let path = PathBuf::from(clean_dropped_path(&p.buffer));
+                self.queue_file_import_json(path);
             }
             PromptNext::FileImportTextFilename => {
                 if p.buffer.is_empty() {

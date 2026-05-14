@@ -376,6 +376,11 @@ pub enum Action {
     /// as a label down a single column starting at the pointer. The
     /// counterpart to `FileImportNumbers`; no CSV parsing.
     FileImportText,
+    /// `/File Import Json` (v0.4) — read an array-of-objects or
+    /// JSON-Lines file. Header row from object keys at the pointer;
+    /// data rows below. Type widening per PLAN §M11 (bool→1/0,
+    /// null→Empty, strings as labels). Errors drop to ERROR mode.
+    FileImportJson,
     /// `/File Combine Copy Entire-File` — overwrite cells starting at
     /// the pointer with the contents of every non-empty cell in the
     /// source file.
@@ -3128,6 +3133,13 @@ const FILE_IMPORT_MENU: &[MenuItem] = &[
         help: "Parse CSV: numeric tokens as values, quoted strings as labels",
         help_page: "",
         body: MenuBody::Action(Action::FileImportNumbers),
+    },
+    MenuItem {
+        letter: 'J',
+        name: "Json",
+        help: "Import array-of-objects or JSON-Lines into typed cells",
+        help_page: "",
+        body: MenuBody::Action(Action::FileImportJson),
     },
 ];
 

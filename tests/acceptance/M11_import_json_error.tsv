@@ -1,0 +1,18 @@
+# /File Import Json — malformed JSON drops to ERROR mode with a
+# one-line cause; no partial load (cells stay empty). (v0.4)
+
+KEY /
+KEY F
+KEY I
+KEY J
+ASSERT_MODE      MENU
+KEYS tests/acceptance/fixtures/m11_import_malformed.json
+ENTER
+
+# Parser rejects the file → ERROR mode, cause on L2 (matches the
+# /File Retrieve and /Worksheet Hide error idioms).
+ASSERT_MODE      ERROR
+ASSERT_PANEL_L2  Json import
+
+# No partial load: A:A1 is still empty.
+ASSERT_CELL      A:A1

@@ -1,0 +1,41 @@
+# /File Import Json — load array-of-objects (v0.4)
+# Headers come from object keys in JSON file order; bool widens to
+# 1/0; JSON null lands as an empty cell.
+
+KEY /
+KEY F
+KEY I
+ASSERT_MODE      MENU
+ASSERT_PANEL_L2  Json
+KEY J
+ASSERT_MODE      MENU
+ASSERT_PANEL_L3  Enter import file name
+KEYS tests/acceptance/fixtures/m11_import.json
+ENTER
+ASSERT_MODE      READY
+
+# Header row at row 1, keys in JSON file order.
+ASSERT_CELL      A:A1  id
+ASSERT_CELL      A:B1  name
+ASSERT_CELL      A:C1  qty
+ASSERT_CELL      A:D1  active
+
+# Row 1 of data.
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+ASSERT_CELL      A:C2  100
+# bool true → 1
+ASSERT_CELL      A:D2  1
+
+# Row 2 of data.
+ASSERT_CELL      A:A3  2
+ASSERT_CELL      A:B3  gadget
+ASSERT_CELL      A:C3  42
+# bool false → 0
+ASSERT_CELL      A:D3  0
+
+# Row 3: null in qty stays empty.
+ASSERT_CELL      A:A4  3
+ASSERT_CELL      A:B4  gizmo
+ASSERT_CELL      A:C4
+ASSERT_CELL      A:D4  1

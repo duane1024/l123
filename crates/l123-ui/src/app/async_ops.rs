@@ -178,6 +178,15 @@ impl App {
                     ));
                 });
             }
+            QueuedOp::FileImportJson {
+                engine,
+                path,
+                origin,
+            } => {
+                self.runtime.spawn_blocking(move || {
+                    let _ = tx.send(worker_file_import_json(engine, path, origin, progress));
+                });
+            }
             QueuedOp::Recalc { engine } => {
                 self.runtime.spawn_blocking(move || {
                     let _ = tx.send(worker_recalc(engine, progress));
@@ -620,6 +629,99 @@ fn worker_file_import(
             }
             progress.done.store((dr as u64) + 1, Ordering::Relaxed);
         }
+    }
+    engine.recalc();
+    AsyncResult::FileImport { engine, cells }
+}
+
+/// `/File Import Json` worker (v0.4). Reads the file off the UI
+/// thread, decodes via `l123_io::json_loader`, and writes the header
+/// at `origin` with rows below.  Errors come back as
+/// `AsyncResult::Errored` so the apply path drops to ERROR mode and
+/// the workbook recovers its engine.
+fn worker_file_import_json(
+    mut engine: IronCalcEngine,
+    path: std::path::PathBuf,
+    origin: Address,
+    progress: AsyncProgress,
+) -> AsyncResult {
+    if progress.cancel.load(Ordering::Relaxed) {
+        return AsyncResult::Cancelled {
+            engine: Some(engine),
+        };
+    }
+    let records = match l123_io::json_loader::load(&path) {
+        Ok(r) => r,
+        Err(e) => {
+            return AsyncResult::Errored {
+                engine: Some(engine),
+                message: format!("Json import: {e}"),
+            };
+        }
+    };
+    let total = (records.rows.len() as u64) + 1; // +1 for header
+    progress.done.store(0, Ordering::Relaxed);
+    progress.total.store(total.max(1), Ordering::Relaxed);
+
+    let mut cells: Vec<(Address, CellContents)> = Vec::new();
+
+    // Header row — apostrophe-prefixed labels at `origin`.
+    for (dc, h) in records.header.iter().enumerate() {
+        let addr = Address::new(origin.sheet, origin.col + dc as u16, origin.row);
+        let engine_input = format!("'{h}");
+        let _ = engine.set_user_input(addr, &engine_input);
+        cells.push((
+            addr,
+            CellContents::Label {
+                prefix: LabelPrefix::Apostrophe,
+                text: h.clone(),
+            },
+        ));
+    }
+    progress.done.store(1, Ordering::Relaxed);
+
+    for (dr, row) in records.rows.iter().enumerate() {
+        if progress.cancel.load(Ordering::Relaxed) {
+            return AsyncResult::Cancelled {
+                engine: Some(engine),
+            };
+        }
+        for (dc, v) in row.iter().enumerate() {
+            let addr = Address::new(
+                origin.sheet,
+                origin.col + dc as u16,
+                origin.row + 1 + dr as u32,
+            );
+            match v {
+                Value::Empty => continue,
+                Value::Number(n) => {
+                    let s = l123_core::format_number_general(*n);
+                    let _ = engine.set_user_input(addr, &s);
+                    cells.push((addr, CellContents::Constant(Value::Number(*n))));
+                }
+                Value::Text(s) => {
+                    let engine_input = format!("'{s}");
+                    let _ = engine.set_user_input(addr, &engine_input);
+                    cells.push((
+                        addr,
+                        CellContents::Label {
+                            prefix: LabelPrefix::Apostrophe,
+                            text: s.clone(),
+                        },
+                    ));
+                }
+                // bool widening happens inside the loader; Error
+                // shouldn't occur but keep the match exhaustive.
+                Value::Bool(b) => {
+                    let n = if *b { 1.0 } else { 0.0 };
+                    let s = l123_core::format_number_general(n);
+                    let _ = engine.set_user_input(addr, &s);
+                    cells.push((addr, CellContents::Constant(Value::Number(n))));
+                }
+                Value::Error(_) => continue,
+            }
+        }
+        progress.done.store(2 + dr as u64, Ordering::Relaxed);
     }
     engine.recalc();
     AsyncResult::FileImport { engine, cells }

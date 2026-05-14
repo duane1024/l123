@@ -1536,6 +1536,9 @@ transcripts! {
     function_emulations => "function_emulations.tsv",
     function_reload_round_trip => "function_reload_round_trip.tsv",
     function_sidecar_round_trip => "function_sidecar_round_trip.tsv",
+    m11_import_json        => "M11_import_json.tsv",
+    m11_import_jsonl       => "M11_import_jsonl.tsv",
+    m11_import_json_error  => "M11_import_json_error.tsv",
 }
 
 #[cfg(feature = "wk3")]
