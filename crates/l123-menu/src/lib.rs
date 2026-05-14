@@ -386,6 +386,10 @@ pub enum Action {
     /// §M11. Date/timestamp columns surface as raw integers (D1
     /// format-tag plumbing is a follow-up).
     FileImportParquet,
+    /// `/File Import Sqlite` (v0.4) — pick a SQLite file, then pick
+    /// a table within it; load that table's rows into typed cells
+    /// per PLAN §M11. Read-only.
+    FileImportSqlite,
     /// `/File Combine Copy Entire-File` — overwrite cells starting at
     /// the pointer with the contents of every non-empty cell in the
     /// source file.
@@ -3152,6 +3156,13 @@ const FILE_IMPORT_MENU: &[MenuItem] = &[
         help: "Import a Parquet file; types preserved per schema",
         help_page: "",
         body: MenuBody::Action(Action::FileImportParquet),
+    },
+    MenuItem {
+        letter: 'S',
+        name: "Sqlite",
+        help: "Import a table from a SQLite database file",
+        help_page: "",
+        body: MenuBody::Action(Action::FileImportSqlite),
     },
 ];
 

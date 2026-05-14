@@ -196,6 +196,18 @@ impl App {
                     let _ = tx.send(worker_file_import_parquet(engine, path, origin, progress));
                 });
             }
+            QueuedOp::FileImportSqlite {
+                engine,
+                path,
+                table,
+                origin,
+            } => {
+                self.runtime.spawn_blocking(move || {
+                    let _ = tx.send(worker_file_import_sqlite(
+                        engine, path, table, origin, progress,
+                    ));
+                });
+            }
             QueuedOp::Recalc { engine } => {
                 self.runtime.spawn_blocking(move || {
                     let _ = tx.send(worker_recalc(engine, progress));
@@ -669,6 +681,21 @@ fn worker_file_import_parquet(
 ) -> AsyncResult {
     run_record_import("Parquet import", engine, origin, progress, || {
         l123_io::parquet_loader::load(&path)
+    })
+}
+
+/// `/File Import Sqlite` worker (v0.4). The first prompt's table-list
+/// step ran synchronously on the UI thread; this worker only reads
+/// the chosen table.
+fn worker_file_import_sqlite(
+    engine: IronCalcEngine,
+    path: std::path::PathBuf,
+    table: String,
+    origin: Address,
+    progress: AsyncProgress,
+) -> AsyncResult {
+    run_record_import("Sqlite import", engine, origin, progress, || {
+        l123_io::sqlite_loader::load(&path, &table)
     })
 }
 

@@ -1540,6 +1540,7 @@ transcripts! {
     m11_import_jsonl       => "M11_import_jsonl.tsv",
     m11_import_json_error  => "M11_import_json_error.tsv",
     m11_import_parquet     => "M11_import_parquet.tsv",
+    m11_import_sqlite      => "M11_import_sqlite.tsv",
 }
 
 #[cfg(feature = "wk3")]

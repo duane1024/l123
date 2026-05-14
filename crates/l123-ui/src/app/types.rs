@@ -1157,6 +1157,15 @@ pub(super) enum QueuedOp {
         path: PathBuf,
         origin: Address,
     },
+    /// `/File Import Sqlite` (v0.4) — load the named table from the
+    /// sqlite file. The path was picked in the first prompt and
+    /// the table in the second.
+    FileImportSqlite {
+        engine: IronCalcEngine,
+        path: PathBuf,
+        table: String,
+        origin: Address,
+    },
     /// F9 recalc, gated on cell count > `super::RECALC_WAIT_CELL_THRESHOLD`.
     Recalc { engine: IronCalcEngine },
 }
@@ -1264,6 +1273,13 @@ pub(super) enum PromptNext {
     /// `/File Import Parquet` — prompts for the path to a `.parquet`
     /// file (v0.4).
     FileImportParquetFilename,
+    /// `/File Import Sqlite` — first prompt: pick the .sqlite file.
+    /// On commit the loader lists tables and the prompt transitions
+    /// to [`FileImportSqliteTable`].
+    FileImportSqliteFilename,
+    /// `/File Import Sqlite` — second prompt: pick a table from the
+    /// path stashed in `App::pending_sqlite_import_path`.
+    FileImportSqliteTable,
     /// After the user types a filename, read the file as plain text and
     /// paint each line as a label down a single column starting at the
     /// pointer (no CSV semantics — the whole line, including embedded
@@ -1551,6 +1567,8 @@ impl PromptNext {
             | PromptNext::FileImportTextFilename
             | PromptNext::FileImportJsonFilename
             | PromptNext::FileImportParquetFilename
+            | PromptNext::FileImportSqliteFilename
+            | PromptNext::FileImportSqliteTable
             | PromptNext::FileEraseFilename
             | PromptNext::FileCombineFilename { .. }
             | PromptNext::FileDirPath
