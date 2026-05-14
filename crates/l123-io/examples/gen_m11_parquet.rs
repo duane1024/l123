@@ -7,18 +7,24 @@
 //! produced and lets us regenerate after a parquet/arrow bump.
 //!
 //! Schema (3 rows):
-//!   id (Int32):    1, 2, 3
-//!   name (Utf8):   widget, gadget, gizmo
-//!   qty (Int64):   100, 42, NULL
-//!   rate (F64):    0.5, 1.25, 3.0
-//!   active (Bool): true, false, true
+//!   id (Int32):           1, 2, 3
+//!   name (Utf8):          widget, gadget, gizmo
+//!   qty (Int64):          100, 42, NULL
+//!   rate (F64):           0.5, 1.25, 3.0
+//!   active (Bool):        true, false, true
+//!   purchased_on (Date32): 2024-01-01, 2024-07-15, NULL
+//!
+//! Date32 values are days since 1970-01-01:
+//!   19723 = 2024-01-01
+//!   19919 = 2024-07-15
 
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
+    ArrayRef, BooleanArray, Date32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
+    StringArray,
 };
 use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::ArrowWriter;
@@ -31,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Field::new("qty", DataType::Int64, true),
         Field::new("rate", DataType::Float64, false),
         Field::new("active", DataType::Boolean, false),
+        Field::new("purchased_on", DataType::Date32, true),
     ]));
 
     let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
@@ -38,8 +45,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let qty: ArrayRef = Arc::new(Int64Array::from(vec![Some(100), Some(42), None]));
     let rate: ArrayRef = Arc::new(Float64Array::from(vec![0.5, 1.25, 3.0]));
     let active: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+    let purchased_on: ArrayRef =
+        Arc::new(Date32Array::from(vec![Some(19723), Some(19919), None]));
 
-    let batch = RecordBatch::try_new(schema.clone(), vec![id, name, qty, rate, active])?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![id, name, qty, rate, active, purchased_on],
+    )?;
 
     let out = Path::new("tests/acceptance/fixtures/m11_import.parquet");
     let file = File::create(out)?;

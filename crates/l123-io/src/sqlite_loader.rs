@@ -93,7 +93,7 @@ pub fn load(path: &Path, table: &str) -> Result<LoadedRecords, LoadError> {
         }
         rows.push(out_row);
     }
-    Ok(LoadedRecords { header, rows })
+    Ok(LoadedRecords::new(header, rows))
 }
 
 fn map_value_ref(v: rusqlite::types::ValueRef<'_>) -> Value {
