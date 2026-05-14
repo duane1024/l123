@@ -11,10 +11,13 @@ use anyhow::Result;
 enum Action {
     /// Run the TUI, optionally opening `path`. `theme` is `Some` only
     /// when the user passed `--theme`; otherwise the resolved
-    /// [`l123_ui::Config`] decides.
+    /// [`l123_ui::Config`] decides. `replay` is `Some` when the user
+    /// passed `--replay <path>` — the sidecar is applied to the
+    /// workbook (fresh or `path`) before the event loop begins.
     Run {
         path: Option<PathBuf>,
         theme: Option<l123_ui::Theme>,
+        replay: Option<PathBuf>,
     },
     /// Print --help to stdout and exit 0.
     Help,
@@ -48,6 +51,10 @@ OPTIONS:
     -V, --version         Print version and exit
         --theme <NAME>    Chrome theme: default | dos. Overrides
                           L123_THEME and L123.CNF `theme=`.
+        --replay <FILE>   Apply a `.l123log` sidecar to the workbook
+                          before the event loop begins. Used as a
+                          regression-test harness for acceptance
+                          scenarios that exceed `.tsv` expressiveness.
 
 SUBCOMMANDS:
     config                 Show effective configuration and sources
@@ -82,7 +89,11 @@ fn main() -> ExitCode {
     let _log_guard = init_tracing();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match parse(&args) {
-        Action::Run { path, theme } => match run(path, theme) {
+        Action::Run {
+            path,
+            theme,
+            replay,
+        } => match run(path, theme, replay) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 tracing::error!(error = %e, "l123 run failed");
@@ -166,6 +177,7 @@ fn parse(args: &[OsString]) -> Action {
 
     let mut positional: Option<PathBuf> = None;
     let mut theme: Option<l123_ui::Theme> = None;
+    let mut replay: Option<PathBuf> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         let s = arg.to_string_lossy();
@@ -197,6 +209,16 @@ fn parse(args: &[OsString]) -> Action {
                     }
                 }
             }
+            "--replay" => {
+                let Some(val) = iter.next() else {
+                    return Action::Usage("l123: --replay requires a file path".into());
+                };
+                replay = Some(PathBuf::from(val));
+            }
+            flag if flag.starts_with("--replay=") => {
+                let raw = &flag["--replay=".len()..];
+                replay = Some(PathBuf::from(raw));
+            }
             flag if flag.starts_with('-') && flag != "-" => {
                 return Action::Usage(format!("l123: unknown option '{flag}'"));
             }
@@ -213,6 +235,7 @@ fn parse(args: &[OsString]) -> Action {
     Action::Run {
         path: positional,
         theme,
+        replay,
     }
 }
 
@@ -256,8 +279,12 @@ fn parse_config_subcommand(args: &[OsString]) -> Action {
     })
 }
 
-fn run(path: Option<PathBuf>, theme: Option<l123_ui::Theme>) -> Result<()> {
-    l123_ui::App::run_with(path, theme)
+fn run(
+    path: Option<PathBuf>,
+    theme: Option<l123_ui::Theme>,
+    replay: Option<PathBuf>,
+) -> Result<()> {
+    l123_ui::App::run_with_replay(path, theme, replay)
 }
 
 /// Install a tracing subscriber that appends to `log_file` from the
@@ -315,7 +342,8 @@ mod tests {
             parse(&osv(&[])),
             Action::Run {
                 path: None,
-                theme: None
+                theme: None,
+                replay: None,
             }
         );
     }
@@ -326,7 +354,8 @@ mod tests {
             parse(&osv(&["sheet.xlsx"])),
             Action::Run {
                 path: Some(PathBuf::from("sheet.xlsx")),
-                theme: None
+                theme: None,
+                replay: None,
             }
         );
     }
@@ -436,6 +465,7 @@ mod tests {
             Action::Run {
                 path: Some(PathBuf::from("./config")),
                 theme: None,
+                replay: None,
             },
         );
     }
@@ -447,6 +477,7 @@ mod tests {
             Action::Run {
                 path: None,
                 theme: Some(l123_ui::Theme::Dos),
+                replay: None,
             },
         );
     }
@@ -458,6 +489,7 @@ mod tests {
             Action::Run {
                 path: None,
                 theme: Some(l123_ui::Theme::Dos),
+                replay: None,
             },
         );
     }
@@ -469,6 +501,7 @@ mod tests {
             Action::Run {
                 path: None,
                 theme: Some(l123_ui::Theme::Default),
+                replay: None,
             },
         );
     }
@@ -480,6 +513,7 @@ mod tests {
             Action::Run {
                 path: Some(PathBuf::from("sheet.xlsx")),
                 theme: Some(l123_ui::Theme::Dos),
+                replay: None,
             },
         );
     }
@@ -491,6 +525,7 @@ mod tests {
             Action::Run {
                 path: Some(PathBuf::from("sheet.xlsx")),
                 theme: Some(l123_ui::Theme::Dos),
+                replay: None,
             },
         );
     }
@@ -534,5 +569,49 @@ mod tests {
     #[test]
     fn global_help_before_config_still_wins() {
         assert_eq!(parse(&osv(&["--help", "config"])), Action::Help);
+    }
+
+    #[test]
+    fn replay_flag_separate_value_parses() {
+        assert_eq!(
+            parse(&osv(&["--replay", "session.l123log"])),
+            Action::Run {
+                path: None,
+                theme: None,
+                replay: Some(PathBuf::from("session.l123log")),
+            },
+        );
+    }
+
+    #[test]
+    fn replay_flag_equals_form_parses() {
+        assert_eq!(
+            parse(&osv(&["--replay=session.l123log"])),
+            Action::Run {
+                path: None,
+                theme: None,
+                replay: Some(PathBuf::from("session.l123log")),
+            },
+        );
+    }
+
+    #[test]
+    fn replay_flag_with_file_arg() {
+        assert_eq!(
+            parse(&osv(&["--replay", "session.l123log", "sheet.xlsx"])),
+            Action::Run {
+                path: Some(PathBuf::from("sheet.xlsx")),
+                theme: None,
+                replay: Some(PathBuf::from("session.l123log")),
+            },
+        );
+    }
+
+    #[test]
+    fn replay_flag_missing_value_is_usage_error() {
+        match parse(&osv(&["--replay"])) {
+            Action::Usage(m) => assert!(m.contains("--replay"), "msg: {m}"),
+            other => panic!("expected Usage, got {other:?}"),
+        }
     }
 }

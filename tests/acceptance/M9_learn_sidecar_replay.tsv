@@ -1,0 +1,77 @@
+# `.l123log` sidecar + --replay (M9 v0.4)
+#
+# While LEARN is on, the macro tokens that flow into learn_buffer are
+# also streamed to a sidecar file as one JSON record per token. The
+# sidecar is replayable via app.replay_sidecar (and via the
+# `l123 --replay` CLI flag) — the regression-test harness for
+# acceptance scenarios that exceed .tsv's expressiveness.
+#
+# This transcript records a session, wipes the workbook, replays the
+# sidecar, and asserts the end state matches the pre-wipe state.
+
+# Stash a sidecar path inside the sandbox. Production derives this
+# from active_path; the test bypass keeps the test free of /File Save.
+SET_LEARN_SIDECAR_PATH $TMPDIR/session.l123log
+
+# /WLR — set the learn range at B1..B3 (the cells where macro source
+# also lands on flush). The sidecar is the streaming counterpart.
+F 5
+KEYS B1
+ENTER
+KEY /
+KEY W
+KEY L
+KEY R
+KEY .
+F 5
+KEYS B3
+ENTER
+ENTER
+ASSERT_MODE      READY
+
+# Pointer back to A1 for the recording.
+F 5
+KEYS A1
+ENTER
+
+# Alt-F5: arm recording. LEARN indicator lights and the sidecar opens.
+ALT_F 5
+ASSERT_STATUS    LEARN
+
+# Recorded keystrokes: 10 ENTER DOWN 20 ENTER → A1=10, A2=20.
+KEYS 10
+ENTER
+DOWN
+KEYS 20
+ENTER
+
+# Alt-F5: disarm. Sidecar flushes + closes.
+ALT_F 5
+ASSERT_SCREEN_NOT_CONTAINS LEARN
+
+# Sanity-check the recording landed in the worksheet.
+ASSERT_CELL      A:A1  10
+ASSERT_CELL      A:A2  20
+
+# Sanity-check the sidecar exists and carries JSON tokens. compact
+# serde_json (no spaces) writes `{"keys":"1"}` per line, etc.
+ASSERT_FILE_CONTAINS  $TMPDIR/session.l123log  "keys":"1"
+ASSERT_FILE_CONTAINS  $TMPDIR/session.l123log  "keys":"~"
+ASSERT_FILE_CONTAINS  $TMPDIR/session.l123log  "keys":"{DOWN}"
+
+# Wipe the workbook — clears all cells; pointer back to A1.
+KEY /
+KEY W
+KEY E
+KEY Y
+ASSERT_MODE      READY
+ASSERT_CELL      A:A1
+ASSERT_CELL      A:A2
+
+# Replay the sidecar. Tokens dispatch through the macro interpreter
+# (run_macro_text) → handle_key, just like LEARN's playback path.
+REPLAY  $TMPDIR/session.l123log
+
+# Post-replay state matches the pre-wipe state.
+ASSERT_CELL      A:A1  10
+ASSERT_CELL      A:A2  20

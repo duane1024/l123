@@ -38,6 +38,17 @@ impl App {
         path: Option<PathBuf>,
         theme_override: Option<crate::Theme>,
     ) -> anyhow::Result<()> {
+        Self::run_with_replay(path, theme_override, None)
+    }
+
+    /// `run_with` plus an optional `.l123log` sidecar to replay before
+    /// the event loop starts. Used by `l123 --replay <file>` (M9 v0.4)
+    /// so a user can hand a saved session to a fresh workbook.
+    pub fn run_with_replay(
+        path: Option<PathBuf>,
+        theme_override: Option<crate::Theme>,
+        replay: Option<PathBuf>,
+    ) -> anyhow::Result<()> {
         let mut stdout = io::stdout();
         enable_raw_mode()?;
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -52,6 +63,10 @@ impl App {
         app.set_beep_enabled(cfg.error_beep_enabled());
         app.set_theme(theme_override.unwrap_or_else(|| cfg.theme()));
         app.probe_image_picker();
+        if let Some(rp) = replay.as_ref() {
+            app.replay_sidecar(rp)
+                .map_err(|e| anyhow::anyhow!("--replay {}: {e}", rp.display()))?;
+        }
         let result = app.event_loop(&mut terminal);
 
         disable_raw_mode()?;

@@ -528,6 +528,9 @@ impl App {
 
     /// Alt-F5 LEARN toggle. Off→On arms recording; On→Off flushes
     /// the buffered macro source to cells of the learn range.
+    /// v0.4: also opens / closes the `.l123log` sidecar writer
+    /// (one JSON record per token) so the session is replayable
+    /// outside the learn range.
     pub(super) fn toggle_learn_recording(&mut self) {
         if self.learn_range.is_none() {
             // No range set — Lotus would beep with "no learn range
@@ -537,10 +540,99 @@ impl App {
         if self.learn_recording {
             self.learn_recording = false;
             self.flush_learn_buffer();
+            self.close_learn_sidecar();
         } else {
             self.learn_buffer.clear();
             self.learn_recording = true;
+            self.open_learn_sidecar();
         }
+    }
+
+    /// Open the `.l123log` sidecar writer for a fresh LEARN session.
+    /// Path source order: explicit `learn_sidecar_path` (test hook) →
+    /// `<active_path>.l123log` derived from the saved workbook. With
+    /// neither, the sidecar stays closed and LEARN behaves as
+    /// pre-v0.4 (in-range macro only).
+    fn open_learn_sidecar(&mut self) {
+        let path = match self.learn_sidecar_path.clone() {
+            Some(p) => Some(p),
+            None => self
+                .wb()
+                .active_path
+                .as_ref()
+                .map(|p| p.with_extension("l123log")),
+        };
+        let Some(path) = path else {
+            return;
+        };
+        match std::fs::File::create(&path) {
+            Ok(f) => {
+                self.learn_sidecar_writer = Some(std::io::BufWriter::new(f));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "could not open learn sidecar {}: {e}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// Flush + drop the sidecar writer. Always called when LEARN
+    /// turns off (even if `open_learn_sidecar` failed silently).
+    fn close_learn_sidecar(&mut self) {
+        if let Some(mut w) = self.learn_sidecar_writer.take() {
+            use std::io::Write;
+            let _ = w.flush();
+        }
+    }
+
+    /// Append one JSON record `{"keys": "<token>"}` to the sidecar
+    /// writer if one is open. Errors are swallowed (LEARN is the
+    /// primary contract; the sidecar is additive).
+    fn append_learn_sidecar(&mut self, token: &str) {
+        let Some(w) = self.learn_sidecar_writer.as_mut() else {
+            return;
+        };
+        use std::io::Write;
+        let line = serde_json::json!({ "keys": token }).to_string();
+        let _ = writeln!(w, "{line}");
+    }
+
+    /// Replay a `.l123log` sidecar onto the current App state. Each
+    /// line is a JSON object with a `keys` string of macro tokens;
+    /// the concatenation is dispatched through `run_macro_text` (which
+    /// lexes the tokens and feeds them to `handle_key`). The
+    /// regression-test harness invokes this via the `REPLAY` directive;
+    /// `l123 --replay <path>` is the CLI counterpart.
+    pub fn replay_sidecar(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let body =
+            std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut src = String::new();
+        for (i, line) in body.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let parsed: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| format!("{}: line {}: {e}", path.display(), i + 1))?;
+            let Some(tok) = parsed.get("keys").and_then(|v| v.as_str()) else {
+                return Err(format!(
+                    "{}: line {}: missing or non-string \"keys\" field",
+                    path.display(),
+                    i + 1
+                ));
+            };
+            src.push_str(tok);
+        }
+        self.run_macro_text(&src);
+        Ok(())
+    }
+
+    /// Test hook: pin the sidecar path used by the next LEARN session,
+    /// bypassing the `active_path` derivation. Production code leaves
+    /// `learn_sidecar_path` at `None`.
+    pub fn test_set_learn_sidecar_path(&mut self, path: Option<std::path::PathBuf>) {
+        self.learn_sidecar_path = path;
     }
 
     /// Write `learn_buffer` into the cells of `learn_range`,
@@ -600,6 +692,7 @@ impl App {
         }
         if let Some(token) = key_event_to_macro_source(k) {
             self.learn_buffer.push_str(&token);
+            self.append_learn_sidecar(&token);
         }
     }
 

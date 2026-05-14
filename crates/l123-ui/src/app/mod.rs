@@ -386,6 +386,14 @@ pub struct App {
     /// Buffered macro source for the current learn session. Flushed
     /// to `learn_range` cells when the user toggles recording off.
     learn_buffer: String,
+    /// Explicit sidecar path for the next LEARN session (v0.4).
+    /// Production code leaves this `None` and the sidecar is derived
+    /// from `wb().active_path` at LEARN-on time; the test harness
+    /// pins an explicit path via `test_set_learn_sidecar_path`.
+    learn_sidecar_path: Option<PathBuf>,
+    /// While LEARN is on with a resolved sidecar path, the open
+    /// writer that receives one JSON record per macro token.
+    learn_sidecar_writer: Option<std::io::BufWriter<std::fs::File>>,
     /// Macro STEP mode (Alt-F2). When true, every macro action
     /// pauses for the user to advance with Space. Lights the STEP
     /// indicator on the status line; the running macro additionally
@@ -1194,6 +1202,8 @@ impl App {
             learn_range: None,
             learn_recording: false,
             learn_buffer: String::new(),
+            learn_sidecar_path: None,
+            learn_sidecar_writer: None,
             step_mode: false,
             data_sort: DataSortState::default(),
             pending_sort_key_slot: None,

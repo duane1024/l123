@@ -161,6 +161,21 @@ fn run_transcript(path: &Path) {
                 app.test_seed_async_progress(done, total);
             }
             "MACRO" => app.run_macro_text(rest),
+            // M9 v0.4 — pin the .l123log sidecar path for the next
+            // LEARN session so the transcript can assert / replay it
+            // without going through /File Save.
+            "SET_LEARN_SIDECAR_PATH" => {
+                let path = std::path::PathBuf::from(rest);
+                app.test_set_learn_sidecar_path(Some(path));
+            }
+            // M9 v0.4 — read the .l123log sidecar at `path` and
+            // dispatch each `{"keys": "..."}` token through the macro
+            // interpreter, exactly as `l123 --replay <path>` would.
+            "REPLAY" => {
+                let path = std::path::PathBuf::from(rest);
+                app.replay_sidecar(&path)
+                    .unwrap_or_else(|e| panic!("{}:{line_no}: replay: {e}", path.display()));
+            }
 
             // ---- assertions ----
             "ASSERT_POINTER" => {
@@ -1536,6 +1551,7 @@ transcripts! {
     function_emulations => "function_emulations.tsv",
     function_reload_round_trip => "function_reload_round_trip.tsv",
     function_sidecar_round_trip => "function_sidecar_round_trip.tsv",
+    m9_learn_sidecar_replay => "M9_learn_sidecar_replay.tsv",
 }
 
 #[cfg(feature = "wk3")]

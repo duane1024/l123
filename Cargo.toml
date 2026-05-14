@@ -49,6 +49,7 @@ ratatui        = "0.30"
 crossterm      = "0.28"
 thiserror      = "2"
 anyhow         = "1"
+serde_json     = "1"
 plotters       = { version = "0.3", default-features = false, features = ["svg_backend", "bitmap_backend", "bitmap_encoder", "line_series", "point_series", "histogram", "full_palette", "ttf"] }
 image          = { version = "0.25", default-features = false, features = ["png"] }
 ratatui-image  = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
