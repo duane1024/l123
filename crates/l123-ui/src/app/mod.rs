@@ -61,11 +61,12 @@ use types::{
     IconPanelGeom, JournalEntry, LabelDirection, MacroState, MenuState, PendingAsyncOp,
     PendingCommand, PointState, PrintDestination, PrintSession, PromptNext, PromptState, QueuedOp,
     SaveConfirmState, SearchScope, SearchSession, SortDir, SortKeySlot, StatView, Workbook,
-    FILE_LIST_PAGE_SIZE, NAME_LIST_PAGE_SIZE, SQLITE_TABLE_PICKER_PAGE_SIZE,
+    EXTERNAL_LIST_PAGE_SIZE, FILE_LIST_PAGE_SIZE, NAME_LIST_PAGE_SIZE,
+    SQLITE_TABLE_PICKER_PAGE_SIZE,
 };
 pub(crate) use types::{
-    CombineKind, ExternalSource, FileListKind, FileListState, NameListOrigin, NameListState,
-    SqliteTablePickerState, TitlesKind, XtractKind,
+    CombineKind, ExternalListState, ExternalSource, FileListKind, FileListState, NameListOrigin,
+    NameListState, SqliteTablePickerState, TitlesKind, XtractKind,
 };
 pub use types::GraphTitleSlot;
 
@@ -261,6 +262,10 @@ pub struct App {
     /// strings — there's no range to render in a second column.
     /// Mode is Names while this is `Some`; dismissal returns to READY.
     sqlite_table_picker: Option<SqliteTablePickerState>,
+    /// Overlay state for `/Data External List` (M12 v0.4 slice 2).
+    /// Read-only view of every registered external source. Mode is
+    /// Names while this is `Some`; ESC dismisses.
+    external_list: Option<ExternalListState>,
     /// Overlay state for F1 HELP. Some while the help overlay is open;
     /// underlying mode is restored on Esc.
     help: Option<HelpState>,
@@ -850,6 +855,40 @@ fn value_to_cell_contents(v: &Value) -> Option<CellContents> {
     }
 }
 
+/// Dimensions of the cell range a `/Data External Use` write occupies,
+/// given the result `records` and the user-pointed `origin`. Header
+/// claims one row; data rows follow. An empty header (degenerate query)
+/// collapses to a single-cell range.
+fn external_range_from_origin(
+    origin: Address,
+    records: &l123_io::records::LoadedRecords,
+) -> Range {
+    if records.header.is_empty() {
+        return Range::single(origin);
+    }
+    let cols = records.header.len() as u16;
+    let rows = (records.rows.len() as u32) + 1; // +1 for header
+    Range {
+        start: origin,
+        end: Address::new(
+            origin.sheet,
+            origin.col + cols - 1,
+            origin.row + rows - 1,
+        ),
+    }
+}
+
+/// Seconds since the Unix epoch, saturating at 0 on a clock skew
+/// (no real system goes pre-1970, but `SystemTime::duration_since`
+/// is technically fallible). Used for `last_refreshed_at` and the
+/// `/Data External List` overlay.
+fn unix_seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Greedy word-wrap of `text` into chunks no wider than `width`
 /// columns. Words longer than `width` are emitted on their own line
 /// and may exceed the limit (1-2-3 R3.4a same-cell behavior — long
@@ -1002,6 +1041,14 @@ fn adjust_sqlite_table_picker_view(p: &mut SqliteTablePickerState) {
         p.view_offset = p.highlight;
     } else if p.highlight >= p.view_offset + SQLITE_TABLE_PICKER_PAGE_SIZE {
         p.view_offset = p.highlight + 1 - SQLITE_TABLE_PICKER_PAGE_SIZE;
+    }
+}
+
+fn adjust_external_list_view(el: &mut ExternalListState) {
+    if el.highlight < el.view_offset {
+        el.view_offset = el.highlight;
+    } else if el.highlight >= el.view_offset + EXTERNAL_LIST_PAGE_SIZE {
+        el.view_offset = el.highlight + 1 - EXTERNAL_LIST_PAGE_SIZE;
     }
 }
 
@@ -1208,6 +1255,7 @@ impl App {
             file_list: None,
             name_list: None,
             sqlite_table_picker: None,
+            external_list: None,
             help: None,
             active_files: vec![Workbook::new()],
             current: 0,
@@ -4102,6 +4150,8 @@ impl App {
             }
             Action::DataExternalConnect => self.start_data_external_connect_prompt(),
             Action::DataExternalUse => self.start_data_external_use_prompt(),
+            Action::DataExternalRefresh => self.start_data_external_refresh_prompt(),
+            Action::DataExternalList => self.open_external_list(),
         }
     }
 
@@ -5015,6 +5065,39 @@ impl App {
             label: "Enter source name:".into(),
             buffer: String::new(),
             next: PromptNext::DataExternalUseName,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Data External Refresh` — one-prompt flow: source name. The
+    /// commit handler re-runs the stashed query and replaces the
+    /// bound range's values in place.
+    /// `/Data External List` — open the read-only NAMES-style overlay
+    /// enumerating every registered source.
+    fn open_external_list(&mut self) {
+        self.menu = None;
+        let mut entries: Vec<(String, String, Option<u64>)> = self
+            .wb()
+            .external_sources
+            .values()
+            .map(|s| (s.name.clone(), s.connection.clone(), s.last_refreshed_at))
+            .collect();
+        entries.sort_by_key(|(name, _, _)| name.to_ascii_lowercase());
+        self.external_list = Some(ExternalListState {
+            entries,
+            highlight: 0,
+            view_offset: 0,
+        });
+        self.mode = Mode::Names;
+    }
+
+    fn start_data_external_refresh_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Refresh which source:".into(),
+            buffer: String::new(),
+            next: PromptNext::DataExternalRefreshName,
             fresh: false,
         });
         self.mode = Mode::Menu;
@@ -9535,6 +9618,9 @@ impl App {
                     ExternalSource {
                         name: name.clone(),
                         connection: conn,
+                        last_query: None,
+                        last_range: None,
+                        last_refreshed_at: None,
                     },
                 );
                 self.wb_mut().dirty = true;
@@ -9597,7 +9683,57 @@ impl App {
                     }
                 };
                 let origin = self.wb().pointer;
+                let written_range = external_range_from_origin(origin, &records);
                 self.write_external_records(origin, &records);
+                if let Some(entry) = self.wb_mut().external_sources.get_mut(&key) {
+                    entry.last_query = Some(sql);
+                    entry.last_range = Some(written_range);
+                    entry.last_refreshed_at = Some(unix_seconds_now());
+                }
+                self.mode = Mode::Ready;
+            }
+            PromptNext::DataExternalRefreshName => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let name = p.buffer.trim().to_string();
+                let key = name.to_ascii_lowercase();
+                let Some(src) = self.wb().external_sources.get(&key).cloned() else {
+                    self.set_error(format!("Refresh: no source named {name:?}"));
+                    return;
+                };
+                let Some(sql) = src.last_query.clone() else {
+                    self.set_error(format!(
+                        "Refresh {name:?}: never bound (run /Data External Use first)"
+                    ));
+                    return;
+                };
+                let Some(origin) = src.last_range.map(|r| r.start) else {
+                    self.set_error(format!("Refresh {name:?}: no binding range stashed"));
+                    return;
+                };
+                let source = match l123_io::ext_source::parse_connection_string(&src.connection)
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.set_error(format!("Refresh {name:?}: {e}"));
+                        return;
+                    }
+                };
+                let records = match source.query(&sql) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.set_error(format!("Refresh {name:?}: {e}"));
+                        return;
+                    }
+                };
+                let written_range = external_range_from_origin(origin, &records);
+                self.write_external_records(origin, &records);
+                if let Some(entry) = self.wb_mut().external_sources.get_mut(&key) {
+                    entry.last_range = Some(written_range);
+                    entry.last_refreshed_at = Some(unix_seconds_now());
+                }
                 self.mode = Mode::Ready;
             }
             PromptNext::FileImportTextFilename => {

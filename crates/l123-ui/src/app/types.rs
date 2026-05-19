@@ -481,10 +481,20 @@ pub(super) struct Workbook {
 /// connection string is stored verbatim; the typed [`DataSource`]
 /// (in `l123-io`) is recreated on demand from it so we don't have to
 /// hold a live db handle across the prompt chain.
+///
+/// `last_query` / `last_range` / `last_refreshed_at` snapshot the
+/// most recent `/Data External Use` binding so `/Data External
+/// Refresh` (M12 v0.4 slice 2) has something to re-run and
+/// `/Data External List` has timestamps to render.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExternalSource {
     pub(super) name: String,
     pub(super) connection: String,
+    pub(super) last_query: Option<String>,
+    pub(super) last_range: Option<Range>,
+    /// Seconds-since-Unix-epoch of the most recent `/DEU` or `/DER`.
+    /// `None` means the source has been Connect'ed but never Used.
+    pub(super) last_refreshed_at: Option<u64>,
 }
 
 impl Workbook {
@@ -1312,6 +1322,10 @@ pub(super) enum PromptNext {
     /// `/Data External Use` — second prompt: SQL query. The source
     /// name is stashed in `App::pending_external_name`.
     DataExternalUseQuery,
+    /// `/Data External Refresh` (M12 v0.4 slice 2) — one-prompt
+    /// flow: source name. Re-runs the stashed query and replaces
+    /// the bound range in place.
+    DataExternalRefreshName,
     /// After the user types a filename, read the file as plain text and
     /// paint each line as a label down a single column starting at the
     /// pointer (no CSV semantics — the whole line, including embedded
@@ -1565,6 +1579,21 @@ pub(crate) struct NameListState {
 
 pub(super) const NAME_LIST_PAGE_SIZE: usize = 10;
 
+/// `/Data External List` overlay state (M12 v0.4 slice 2). Read-only
+/// view of every registered external source with its connection
+/// string and last-refresh timestamp. Mode::Names while present;
+/// ESC closes back to READY.
+#[derive(Debug, Clone)]
+pub(crate) struct ExternalListState {
+    /// (name, connection, last_refreshed_at) sorted ascending by
+    /// lowercased name.
+    pub(super) entries: Vec<(String, String, Option<u64>)>,
+    pub(super) highlight: usize,
+    pub(super) view_offset: usize,
+}
+
+pub(super) const EXTERNAL_LIST_PAGE_SIZE: usize = 10;
+
 /// `/File Import Sqlite` table picker (v0.4 follow-up).
 ///
 /// Shares the NAMES-style overlay shape with [`NameListState`] but
@@ -1624,6 +1653,7 @@ impl PromptNext {
             | PromptNext::FileImportSqliteFilename
             | PromptNext::DataExternalConnectName
             | PromptNext::DataExternalUseName
+            | PromptNext::DataExternalRefreshName
             | PromptNext::FileEraseFilename
             | PromptNext::FileCombineFilename { .. }
             | PromptNext::FileDirPath

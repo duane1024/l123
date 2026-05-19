@@ -5,8 +5,8 @@ use l123_core::{Address, Mode};
 
 use super::types::*;
 use super::{
-    adjust_file_list_view, adjust_name_list_view, adjust_sqlite_table_picker_view,
-    is_retrievable_workbook, App,
+    adjust_external_list_view, adjust_file_list_view, adjust_name_list_view,
+    adjust_sqlite_table_picker_view, is_retrievable_workbook, App,
 };
 
 impl App {
@@ -52,6 +52,12 @@ impl App {
         // Esc cancels or Enter loads the chosen table.
         if self.sqlite_table_picker.is_some() {
             self.handle_key_sqlite_table_picker(k);
+            return;
+        }
+        // `/Data External List` overlay (M12 v0.4 slice 2) — read-only;
+        // owns the keyboard until Esc closes.
+        if self.external_list.is_some() {
+            self.handle_key_external_list(k);
             return;
         }
         // /File List overlay takes precedence when active — it owns the
@@ -511,6 +517,53 @@ impl App {
     /// Keys while the `/File Import Sqlite` table picker owns the
     /// overlay. Mirrors `handle_key_names` but committing dispatches
     /// `queue_file_import_sqlite` with the highlighted table.
+    /// Keys while the `/Data External List` overlay is open
+    /// (M12 v0.4 slice 2). Read-only browser: arrows scroll the
+    /// highlight; Esc closes back to READY. No Enter action yet
+    /// (slice 5 may turn this into the source-picker for Reset /
+    /// Disconnect).
+    fn handle_key_external_list(&mut self, k: KeyEvent) {
+        let Some(el) = self.external_list.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                self.external_list = None;
+                self.mode = Mode::Ready;
+                return;
+            }
+            KeyCode::Up | KeyCode::Left => {
+                if el.highlight > 0 {
+                    el.highlight -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Right => {
+                if el.highlight + 1 < el.entries.len() {
+                    el.highlight += 1;
+                }
+            }
+            KeyCode::PageUp => {
+                el.highlight = el.highlight.saturating_sub(EXTERNAL_LIST_PAGE_SIZE);
+            }
+            KeyCode::PageDown => {
+                if !el.entries.is_empty() {
+                    el.highlight = (el.highlight + EXTERNAL_LIST_PAGE_SIZE)
+                        .min(el.entries.len() - 1);
+                }
+            }
+            KeyCode::Home => el.highlight = 0,
+            KeyCode::End => {
+                if !el.entries.is_empty() {
+                    el.highlight = el.entries.len() - 1;
+                }
+            }
+            _ => return,
+        }
+        if let Some(el) = self.external_list.as_mut() {
+            adjust_external_list_view(el);
+        }
+    }
+
     fn handle_key_sqlite_table_picker(&mut self, k: KeyEvent) {
         let Some(p) = self.sqlite_table_picker.as_mut() else {
             return;

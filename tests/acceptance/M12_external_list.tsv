@@ -1,0 +1,43 @@
+# /Data External List (M12 v0.4 slice 2)
+# Overlay listing every registered source + its connection string +
+# last-refresh timestamp. Two sources to prove the picker enumerates;
+# ESC dismisses back to READY.
+
+SIZE 120 25
+
+# Connect two sources against the existing m11_import.sqlite fixture.
+# Same connection string, two names — exercises the picker without
+# needing a second binary fixture.
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS sales
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS stock
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+# /DEL — overlay opens, sources listed alphabetically.
+KEY /
+KEY D
+KEY E
+KEY L
+ASSERT_MODE      NAMES
+ASSERT_SCREEN    sales
+ASSERT_SCREEN    stock
+ASSERT_SCREEN    sqlite:tests/acceptance/fixtures/m11_import.sqlite
+
+# ESC closes back to READY.
+ESC
+ASSERT_MODE      READY

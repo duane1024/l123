@@ -1,0 +1,58 @@
+# /Data External Refresh (M12 v0.4 slice 2)
+# /DER re-runs the most recent /DEU query against a registered source
+# and replaces values in place. Verify it by overwriting a bound cell
+# and watching the refresh restore it.
+
+SIZE 120 25
+
+# Connect "sales" against the existing m11_import.sqlite fixture.
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS sales
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+# /DEU runs the query and writes header + 3 rows at A1..C4.
+KEY /
+KEY D
+KEY E
+KEY U
+KEYS sales
+ENTER
+KEYS SELECT id, name, qty FROM items ORDER BY id
+ENTER
+ASSERT_MODE      READY
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+
+# Overwrite the bound cell A:B2 with a label that doesn't match the
+# query result. Slice 2 has no PROT enforcement yet — that's slice 6.
+F 5
+KEYS B2
+ENTER
+KEYS junk
+ENTER
+ASSERT_CELL      A:B2  junk
+
+# /DER refreshes the binding — re-runs the stashed query, restores
+# A:B2 to "widget".
+KEY /
+KEY D
+KEY E
+KEY R
+ASSERT_PANEL_L3  Refresh
+KEYS sales
+ENTER
+ASSERT_MODE      READY
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+ASSERT_CELL      A:C2  100
+
+# Other rows survive the round-trip too.
+ASSERT_CELL      A:A4  3
+ASSERT_CELL      A:B4  gizmo
+ASSERT_CELL      A:C4

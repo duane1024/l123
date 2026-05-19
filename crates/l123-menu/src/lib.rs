@@ -1048,6 +1048,15 @@ pub enum Action {
     /// registered source and write the result starting at the cell
     /// pointer.
     DataExternalUse,
+    /// `/Data External Refresh` (M12 v0.4) — re-run the stashed
+    /// query against a source and replace the output range's values
+    /// in place. Synchronous in slice 2; WAIT-mode async lands when
+    /// postgres does.
+    DataExternalRefresh,
+    /// `/Data External List` (M12 v0.4) — overlay listing every
+    /// registered source with its connection string and last-refresh
+    /// timestamp. Read-only; ESC dismisses.
+    DataExternalList,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -5754,11 +5763,18 @@ const DATA_EXTERNAL_MENU: &[MenuItem] = &[
         body: MenuBody::Action(Action::DataExternalUse),
     },
     MenuItem {
+        letter: 'R',
+        name: "Refresh",
+        help: "Re-run the stashed query and replace the bound range",
+        help_page: "0211-data-external-reset.html",
+        body: MenuBody::Action(Action::DataExternalRefresh),
+    },
+    MenuItem {
         letter: 'L',
         name: "List",
-        help: "List available external tables / fields",
+        help: "Overlay listing every registered source",
         help_page: "0191-data-external-list.html",
-        body: MenuBody::Action(Action::DataExternalStub),
+        body: MenuBody::Action(Action::DataExternalList),
     },
     MenuItem {
         letter: 'D',
@@ -5772,13 +5788,6 @@ const DATA_EXTERNAL_MENU: &[MenuItem] = &[
         name: "Other",
         help: "Driver-specific options (Send / Translation)",
         help_page: "0207-data-external-other.html",
-        body: MenuBody::Action(Action::DataExternalStub),
-    },
-    MenuItem {
-        letter: 'R',
-        name: "Reset",
-        help: "Disconnect all external tables",
-        help_page: "0211-data-external-reset.html",
         body: MenuBody::Action(Action::DataExternalStub),
     },
     MenuItem {
