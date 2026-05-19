@@ -1153,6 +1153,11 @@ pub(super) enum QueuedOp {
         path: PathBuf,
         formula_sources: HashMap<Address, String>,
         cell_format_extras: l123_io::cell_formats::CellFormatExtras,
+        /// Snapshot of the `/Data External` source registry; the
+        /// worker writes it as a sidecar inside the xlsx zip so
+        /// `/File Retrieve` can restore the bindings (M12 v0.4
+        /// slice 3).
+        external_sources: HashMap<String, l123_io::external_sources::ExternalSourceSnapshot>,
     },
     /// `/File Import Numbers` — workbook engine taken out; the
     /// worker fills it from the parsed CSV starting at `origin`.

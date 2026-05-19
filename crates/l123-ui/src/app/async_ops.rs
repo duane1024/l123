@@ -145,6 +145,7 @@ impl App {
                 path,
                 formula_sources,
                 cell_format_extras,
+                external_sources,
             } => {
                 self.runtime.spawn_blocking(move || {
                     let _ = tx.send(worker_file_save(
@@ -152,6 +153,7 @@ impl App {
                         path,
                         formula_sources,
                         cell_format_extras,
+                        external_sources,
                         progress,
                     ));
                 });
@@ -552,6 +554,7 @@ fn worker_file_save(
     path: std::path::PathBuf,
     formula_sources: HashMap<Address, String>,
     cell_format_extras: l123_io::cell_formats::CellFormatExtras,
+    external_sources: HashMap<String, l123_io::external_sources::ExternalSourceSnapshot>,
     progress: AsyncProgress,
 ) -> AsyncResult {
     if progress.cancel.load(Ordering::Relaxed) {
@@ -573,6 +576,7 @@ fn worker_file_save(
     }
     let _ = l123_io::formula_sources::write_to_xlsx(&path, &formula_sources);
     let _ = l123_io::cell_formats::write_to_xlsx(&path, &cell_format_extras);
+    let _ = l123_io::external_sources::write_to_xlsx(&path, &external_sources);
     AsyncResult::FileSave {
         engine,
         path,

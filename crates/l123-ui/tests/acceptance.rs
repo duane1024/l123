@@ -1564,6 +1564,7 @@ transcripts! {
     m12_external_sqlite_connect      => "M12_external_sqlite_connect.tsv",
     m12_external_refresh             => "M12_external_refresh.tsv",
     m12_external_list                => "M12_external_list.tsv",
+    m12_external_xlsx_roundtrip      => "M12_external_xlsx_roundtrip.tsv",
 }
 
 #[cfg(feature = "wk3")]

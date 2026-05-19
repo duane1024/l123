@@ -878,6 +878,25 @@ fn external_range_from_origin(
     }
 }
 
+/// Inverse of `external_sources_snapshot` — rebuild an [`ExternalSource`]
+/// from the driver-agnostic shape `l123-io::external_sources` reads off
+/// disk. Used by `repopulate_after_xlsx_load` after `/File Retrieve`.
+fn ext_source_from_snapshot(
+    snap: l123_io::external_sources::ExternalSourceSnapshot,
+) -> ExternalSource {
+    let range = snap.last_range.map(|r| Range {
+        start: Address::new(SheetId(r.sheet), r.start_col, r.start_row),
+        end: Address::new(SheetId(r.sheet), r.end_col, r.end_row),
+    });
+    ExternalSource {
+        name: snap.name,
+        connection: snap.connection,
+        last_query: snap.last_query,
+        last_range: range,
+        last_refreshed_at: snap.last_refreshed_at,
+    }
+}
+
 /// Seconds since the Unix epoch, saturating at 0 on a clock skew
 /// (no real system goes pre-1970, but `SystemTime::duration_since`
 /// is technically fallible). Used for `last_refreshed_at` and the
@@ -4467,6 +4486,7 @@ impl App {
         self.wb_mut().hidden_cols.clear();
         self.wb_mut().named_ranges.clear();
         self.wb_mut().name_notes.clear();
+        self.wb_mut().external_sources.clear();
         self.entry = None;
         self.menu = None;
         self.prompt = None;
@@ -5387,6 +5407,7 @@ impl App {
         self.wb_mut().hidden_cols.clear();
         self.wb_mut().named_ranges.clear();
         self.wb_mut().name_notes.clear();
+        self.wb_mut().external_sources.clear();
         self.entry = None;
         self.wb_mut().pointer = Address::A1;
         self.wb_mut().viewport_col_offset = 0;
@@ -5425,6 +5446,17 @@ impl App {
         }
         for (addr, raw) in self.wb_mut().engine.used_cell_format_strings() {
             self.wb_mut().cell_format_overrides.insert(addr, raw);
+        }
+        // /Data External sidecar — restore the workbook's bound
+        // sources so /Refresh, /List etc. light up on reload (M12
+        // v0.4 slice 3). Missing sidecar (vanilla Excel xlsx, or an
+        // older L123 file) yields an empty registry.
+        if let Ok(snaps) = l123_io::external_sources::read_from_xlsx(&path) {
+            for (key, snap) in snaps {
+                self.wb_mut()
+                    .external_sources
+                    .insert(key, ext_source_from_snapshot(snap));
+            }
         }
         // Layer the cell-format-extras sidecar on top of the engine's
         // num_fmt-based view (kind override for non-Excel kinds, parens
@@ -5735,6 +5767,7 @@ impl App {
         self.push_ui_overrides_into_engine();
         let formula_sources = self.formula_sources_snapshot();
         let cell_format_extras = self.cell_format_extras_snapshot();
+        let external_sources = self.external_sources_snapshot();
         let placeholder = IronCalcEngine::new().expect("IronCalc placeholder engine init");
         let engine = std::mem::replace(&mut self.wb_mut().engine, placeholder);
         let name = display_basename(&path);
@@ -5746,8 +5779,44 @@ impl App {
                 path,
                 formula_sources,
                 cell_format_extras,
+                external_sources,
             },
         );
+    }
+
+    /// Convert the live `Workbook::external_sources` registry into the
+    /// driver-agnostic snapshot shape `l123-io::external_sources`
+    /// persists. Called on `/File Save`; the inverse runs in
+    /// `repopulate_after_xlsx_load`.
+    fn external_sources_snapshot(
+        &self,
+    ) -> HashMap<String, l123_io::external_sources::ExternalSourceSnapshot> {
+        self.wb()
+            .external_sources
+            .iter()
+            .map(|(key, src)| {
+                let range = src.last_range.map(|r| {
+                    let n = r.normalized();
+                    l123_io::external_sources::RangeSnapshot {
+                        sheet: n.start.sheet.0,
+                        start_col: n.start.col,
+                        start_row: n.start.row,
+                        end_col: n.end.col,
+                        end_row: n.end.row,
+                    }
+                });
+                (
+                    key.clone(),
+                    l123_io::external_sources::ExternalSourceSnapshot {
+                        name: src.name.clone(),
+                        connection: src.connection.clone(),
+                        last_query: src.last_query.clone(),
+                        last_range: range,
+                        last_refreshed_at: src.last_refreshed_at,
+                    },
+                )
+            })
+            .collect()
     }
 
     /// Queue an async `/File Import {Numbers,Text}`. Engine is

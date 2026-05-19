@@ -1,0 +1,79 @@
+# /Data External xlsx round-trip (M12 v0.4 slice 3)
+# /File Save persists the workbook's external_sources registry as a
+# sidecar inside the xlsx zip; /File Retrieve loads it back. The
+# binding (connection + last query) survives a save → close → reopen.
+
+SIZE 120 25
+RM_FILE $TMPDIR/m12_external_roundtrip.xlsx
+
+# Connect "sales" and bind a query.
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS sales
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+KEY /
+KEY D
+KEY E
+KEY U
+KEYS sales
+ENTER
+KEYS SELECT id, name, qty FROM items ORDER BY id
+ENTER
+ASSERT_MODE      READY
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+
+# Save the workbook to disk.
+KEY /
+KEY F
+KEY S
+KEYS $TMPDIR/m12_external_roundtrip.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# Retrieve the workbook — wipes memory, re-reads from disk.
+KEY /
+KEY F
+KEY R
+KEYS $TMPDIR/m12_external_roundtrip.xlsx
+ENTER
+ASSERT_MODE      READY
+
+# The /Use cell values landed in the workbook proper, so they survive
+# a vanilla reload regardless of the sidecar.
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+
+# The binding itself round-trips through the sidecar: /DEL on the
+# reloaded workbook shows "sales" still registered.
+KEY /
+KEY D
+KEY E
+KEY L
+ASSERT_MODE      NAMES
+ASSERT_SCREEN    sales
+ASSERT_SCREEN    sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ESC
+ASSERT_MODE      READY
+
+# Refresh proves the *binding* survived too — the stashed query
+# replays and rewrites the bound range.
+KEY /
+KEY D
+KEY E
+KEY R
+KEYS sales
+ENTER
+ASSERT_MODE      READY
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+ASSERT_CELL      A:C2  100
+ASSERT_CELL      A:A4  3
+ASSERT_CELL      A:B4  gizmo
+ASSERT_CELL      A:C4
