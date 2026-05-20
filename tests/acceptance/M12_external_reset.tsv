@@ -1,0 +1,45 @@
+# /Data External Reset (M12 v0.4 slice 5)
+# Wipes the entire external-source registry. No confirm prompt;
+# user has Esc to back out of the menu before the leaf fires.
+
+SIZE 120 25
+
+# Connect two sources.
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS sales
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS stock
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+# /DES — reset clears the entire registry.
+KEY /
+KEY D
+KEY E
+KEY S
+ASSERT_MODE      READY
+
+# /DEL — overlay shows the empty-registry placeholder.
+KEY /
+KEY D
+KEY E
+KEY L
+ASSERT_MODE      NAMES
+ASSERT_SCREEN    no sources connected
+ASSERT_SCREEN_NOT_CONTAINS sales
+ASSERT_SCREEN_NOT_CONTAINS stock
+ESC
+ASSERT_MODE      READY

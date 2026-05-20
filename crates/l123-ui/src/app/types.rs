@@ -1353,6 +1353,9 @@ pub(super) enum PromptNext {
     /// flow: source name. Re-runs the stashed query and replaces
     /// the bound range in place.
     DataExternalRefreshName,
+    /// `/Data External Disconnect` (M12 v0.4 slice 5) — one-prompt
+    /// flow: source name. Drops that source from the registry.
+    DataExternalDisconnectName,
     /// After the user types a filename, read the file as plain text and
     /// paint each line as a label down a single column starting at the
     /// pointer (no CSV semantics — the whole line, including embedded
@@ -1681,6 +1684,7 @@ impl PromptNext {
             | PromptNext::DataExternalConnectName
             | PromptNext::DataExternalUseName
             | PromptNext::DataExternalRefreshName
+            | PromptNext::DataExternalDisconnectName
             | PromptNext::FileEraseFilename
             | PromptNext::FileCombineFilename { .. }
             | PromptNext::FileDirPath

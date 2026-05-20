@@ -4171,6 +4171,8 @@ impl App {
             Action::DataExternalUse => self.start_data_external_use_prompt(),
             Action::DataExternalRefresh => self.start_data_external_refresh_prompt(),
             Action::DataExternalList => self.open_external_list(),
+            Action::DataExternalDisconnect => self.start_data_external_disconnect_prompt(),
+            Action::DataExternalReset => self.execute_data_external_reset(),
         }
     }
 
@@ -5121,6 +5123,36 @@ impl App {
             fresh: false,
         });
         self.mode = Mode::Menu;
+    }
+
+    /// `/Data External Disconnect` — one-prompt flow that drops a
+    /// single named source from the registry. The cell range the
+    /// binding wrote stays put; only the *registration* is removed,
+    /// matching the R3.4a "Disconnect" semantics described in
+    /// SPEC §10.
+    fn start_data_external_disconnect_prompt(&mut self) {
+        self.menu = None;
+        self.prompt = Some(PromptState {
+            label: "Disconnect which source:".into(),
+            buffer: String::new(),
+            next: PromptNext::DataExternalDisconnectName,
+            fresh: false,
+        });
+        self.mode = Mode::Menu;
+    }
+
+    /// `/Data External Reset` — drop the entire source registry.
+    /// No confirm prompt in v0.4 (user has Esc to back out of the
+    /// menu before the leaf fires). Same in-place semantics as
+    /// Disconnect: the cell values previously written by /Use stay
+    /// where they are.
+    fn execute_data_external_reset(&mut self) {
+        self.menu = None;
+        if !self.wb().external_sources.is_empty() {
+            self.wb_mut().external_sources.clear();
+            self.wb_mut().dirty = true;
+        }
+        self.mode = Mode::Ready;
     }
 
     fn start_file_import_text_prompt(&mut self) {
@@ -9838,6 +9870,20 @@ impl App {
                     return;
                 };
                 self.queue_data_external_refresh(name, src.connection.clone(), sql, origin);
+            }
+            PromptNext::DataExternalDisconnectName => {
+                if p.buffer.is_empty() {
+                    self.mode = Mode::Ready;
+                    return;
+                }
+                let name = p.buffer.trim().to_string();
+                let key = name.to_ascii_lowercase();
+                if self.wb_mut().external_sources.remove(&key).is_none() {
+                    self.set_error(format!("Disconnect: no source named {name:?}"));
+                    return;
+                }
+                self.wb_mut().dirty = true;
+                self.mode = Mode::Ready;
             }
             PromptNext::FileImportTextFilename => {
                 if p.buffer.is_empty() {

@@ -1,0 +1,59 @@
+# /Data External Disconnect (M12 v0.4 slice 5)
+# Remove a single named source from the registry. The other sources
+# stay registered.
+
+SIZE 120 25
+
+# Connect two sources against the existing fixture.
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS sales
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS stock
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+# /DED stock — removes only "stock".
+KEY /
+KEY D
+KEY E
+KEY D
+ASSERT_PANEL_L3  Disconnect
+KEYS stock
+ENTER
+ASSERT_MODE      READY
+
+# /DEL — overlay shows "sales" but not "stock".
+KEY /
+KEY D
+KEY E
+KEY L
+ASSERT_MODE      NAMES
+ASSERT_SCREEN    sales
+ASSERT_SCREEN_NOT_CONTAINS stock
+ESC
+ASSERT_MODE      READY
+
+# /DED again with the now-gone name → ERROR mode, no change.
+KEY /
+KEY D
+KEY E
+KEY D
+KEYS stock
+ENTER
+ASSERT_MODE      ERROR
+ASSERT_PANEL_L2  Disconnect: no source named
+ESC
+ASSERT_MODE      READY

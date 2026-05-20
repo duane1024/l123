@@ -1057,6 +1057,13 @@ pub enum Action {
     /// registered source with its connection string and last-refresh
     /// timestamp. Read-only; ESC dismisses.
     DataExternalList,
+    /// `/Data External Disconnect` (M12 v0.4 slice 5) — drop a
+    /// single named source from the workbook's registry.
+    DataExternalDisconnect,
+    /// `/Data External Reset` (M12 v0.4 slice 5) — drop every
+    /// registered source. Letter `S` (reSet) because `R` is taken
+    /// by Refresh.
+    DataExternalReset,
 }
 
 /// Resolve a path of letter accelerators from the root menu.  Returns
@@ -5777,25 +5784,18 @@ const DATA_EXTERNAL_MENU: &[MenuItem] = &[
         body: MenuBody::Action(Action::DataExternalList),
     },
     MenuItem {
+        letter: 'S',
+        name: "Reset",
+        help: "Drop every registered source",
+        help_page: "0211-data-external-reset.html",
+        body: MenuBody::Action(Action::DataExternalReset),
+    },
+    MenuItem {
         letter: 'D',
-        name: "Delete",
-        help: "Delete an external table",
+        name: "Disconnect",
+        help: "Drop a single registered source by name",
         help_page: "0206-data-external-delete.html",
-        body: MenuBody::Action(Action::DataExternalStub),
-    },
-    MenuItem {
-        letter: 'O',
-        name: "Other",
-        help: "Driver-specific options (Send / Translation)",
-        help_page: "0207-data-external-other.html",
-        body: MenuBody::Action(Action::DataExternalStub),
-    },
-    MenuItem {
-        letter: 'Q',
-        name: "Quit",
-        help: "Return to READY",
-        help_page: "",
-        body: MenuBody::Action(Action::DataExternalStub),
+        body: MenuBody::Action(Action::DataExternalDisconnect),
     },
 ];
 
@@ -7589,8 +7589,9 @@ mod tests {
                 "D M {c} should be a leaf"
             );
         }
-        // External → Use, List, Create, Delete, Other, Reset, Quit
-        for c in ['U', 'L', 'C', 'D', 'O', 'R', 'Q'] {
+        // External → Connect, Use, Refresh, List, reSet, Disconnect
+        // (M12 v0.4 layout; Reset uses S since R is taken by Refresh).
+        for c in ['C', 'U', 'R', 'L', 'S', 'D'] {
             let n = resolve(&['D', 'E', c]).unwrap_or_else(|| panic!("D E {c}"));
             assert!(
                 matches!(n.body, MenuBody::NotImplemented(_) | MenuBody::Action(_)),
