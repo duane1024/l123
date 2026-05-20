@@ -5928,6 +5928,61 @@ impl App {
         );
     }
 
+    /// `/Data External Refresh` — queue the async query against
+    /// the registered source (M12 v0.4 slice 4). The engine is
+    /// *not* taken out: the query hits the external db, not the
+    /// workbook, so the UI keeps reading the existing cells while
+    /// the worker runs.
+    fn queue_data_external_refresh(
+        &mut self,
+        name: String,
+        connection: String,
+        sql: String,
+        origin: Address,
+    ) {
+        let display = name.clone();
+        self.queue_async_op(
+            "Refreshing",
+            display,
+            QueuedOp::DataExternalRefresh {
+                name,
+                connection,
+                sql,
+                origin,
+            },
+        );
+    }
+
+    /// Apply the result of a queued `/Data External Refresh`. On
+    /// success, replaces the bound range's values starting at
+    /// `origin` and updates the registry's `last_range` /
+    /// `last_refreshed_at`. On error, drops to ERROR mode and leaves
+    /// the workbook untouched.
+    fn apply_data_external_refresh(
+        &mut self,
+        name: String,
+        origin: Address,
+        result: std::result::Result<l123_io::records::LoadedRecords, String>,
+    ) {
+        let records = match result {
+            Ok(r) => r,
+            Err(msg) => {
+                if msg == "cancelled" {
+                    return;
+                }
+                self.set_error(format!("Refresh {name:?}: {msg}"));
+                return;
+            }
+        };
+        let written_range = external_range_from_origin(origin, &records);
+        self.write_external_records(origin, &records);
+        let key = name.to_ascii_lowercase();
+        if let Some(entry) = self.wb_mut().external_sources.get_mut(&key) {
+            entry.last_range = Some(written_range);
+            entry.last_refreshed_at = Some(unix_seconds_now());
+        }
+    }
+
     fn commit_erase_confirm(&mut self, choice: usize) {
         let Some(ec) = self.erase_confirm.take() else {
             self.mode = Mode::Ready;
@@ -9782,28 +9837,7 @@ impl App {
                     self.set_error(format!("Refresh {name:?}: no binding range stashed"));
                     return;
                 };
-                let source = match l123_io::ext_source::parse_connection_string(&src.connection)
-                {
-                    Ok(s) => s,
-                    Err(e) => {
-                        self.set_error(format!("Refresh {name:?}: {e}"));
-                        return;
-                    }
-                };
-                let records = match source.query(&sql) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        self.set_error(format!("Refresh {name:?}: {e}"));
-                        return;
-                    }
-                };
-                let written_range = external_range_from_origin(origin, &records);
-                self.write_external_records(origin, &records);
-                if let Some(entry) = self.wb_mut().external_sources.get_mut(&key) {
-                    entry.last_range = Some(written_range);
-                    entry.last_refreshed_at = Some(unix_seconds_now());
-                }
-                self.mode = Mode::Ready;
+                self.queue_data_external_refresh(name, src.connection.clone(), sql, origin);
             }
             PromptNext::FileImportTextFilename => {
                 if p.buffer.is_empty() {

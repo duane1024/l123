@@ -1200,6 +1200,18 @@ pub(super) enum QueuedOp {
     },
     /// F9 recalc, gated on cell count > `super::RECALC_WAIT_CELL_THRESHOLD`.
     Recalc { engine: IronCalcEngine },
+    /// `/Data External Refresh` (M12 v0.4 slice 4) — re-run a
+    /// stashed SQL query against a registered source off the UI
+    /// thread. The engine *isn't* taken out for this op: the query
+    /// hits the external db, not the workbook, so the engine stays
+    /// in the UI's hands the whole time. Worker carries the
+    /// connection string verbatim (parser re-runs at query time).
+    DataExternalRefresh {
+        name: String,
+        connection: String,
+        sql: String,
+        origin: Address,
+    },
 }
 
 /// What the worker hands back over the oneshot. Each variant carries
@@ -1240,6 +1252,16 @@ pub(super) enum AsyncResult {
     },
     /// F9 recalc done — engine carries the recomputed values.
     Recalc { engine: IronCalcEngine },
+    /// `/Data External Refresh` (M12 v0.4 slice 4) — query
+    /// completed off-thread. `name` keys back into the registry so
+    /// the apply path can update `last_range` / `last_refreshed_at`;
+    /// `origin` is the cell pointer at queue time. `result` is the
+    /// loaded records or a stringified error.
+    DataExternalRefresh {
+        name: String,
+        origin: Address,
+        result: std::result::Result<l123_io::records::LoadedRecords, String>,
+    },
     /// Worker bailed because of a cancel flag or pre-spawn check.
     /// Engine is returned so the main thread can put it back.
     Cancelled { engine: Option<IronCalcEngine> },

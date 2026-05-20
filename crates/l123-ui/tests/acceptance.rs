@@ -1565,6 +1565,7 @@ transcripts! {
     m12_external_refresh             => "M12_external_refresh.tsv",
     m12_external_list                => "M12_external_list.tsv",
     m12_external_xlsx_roundtrip      => "M12_external_xlsx_roundtrip.tsv",
+    m12_external_refresh_wait        => "M12_external_refresh_wait.tsv",
 }
 
 #[cfg(feature = "wk3")]

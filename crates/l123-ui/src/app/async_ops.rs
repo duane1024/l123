@@ -215,6 +215,18 @@ impl App {
                     let _ = tx.send(worker_recalc(engine, progress));
                 });
             }
+            QueuedOp::DataExternalRefresh {
+                name,
+                connection,
+                sql,
+                origin,
+            } => {
+                self.runtime.spawn_blocking(move || {
+                    let _ = tx.send(worker_data_external_refresh(
+                        name, connection, sql, origin, progress,
+                    ));
+                });
+            }
         }
         rx
     }
@@ -314,6 +326,13 @@ impl App {
                 }
                 self.set_error(message);
             }
+            AsyncResult::DataExternalRefresh {
+                name,
+                origin,
+                result,
+            } => {
+                self.apply_data_external_refresh(name, origin, result);
+            }
         }
     }
 
@@ -370,7 +389,9 @@ impl App {
     /// success metadata so the workbook looks like nothing happened.
     fn restore_engine_only(&mut self, res: AsyncResult) {
         let engine = match res {
-            AsyncResult::FileRetrieveXlsx { .. } | AsyncResult::FileRetrieveCsv { .. } => None,
+            AsyncResult::FileRetrieveXlsx { .. }
+            | AsyncResult::FileRetrieveCsv { .. }
+            | AsyncResult::DataExternalRefresh { .. } => None,
             AsyncResult::FileSave { engine, .. }
             | AsyncResult::FileImport { engine, .. }
             | AsyncResult::Recalc { engine } => Some(engine),
@@ -836,4 +857,36 @@ fn worker_recalc(mut engine: IronCalcEngine, progress: AsyncProgress) -> AsyncRe
     }
     engine.recalc();
     AsyncResult::Recalc { engine }
+}
+
+/// `/Data External Refresh` worker (M12 v0.4 slice 4). Re-parses
+/// the connection string into a [`DataSource`] and runs the stashed
+/// SQL off the UI thread. The result rides back through
+/// `AsyncResult::DataExternalRefresh` and the apply path writes the
+/// records and updates the registry's `last_range` /
+/// `last_refreshed_at`. Cancel is honored before the query; once the
+/// driver has the connection, the call is opaque.
+fn worker_data_external_refresh(
+    name: String,
+    connection: String,
+    sql: String,
+    origin: Address,
+    progress: AsyncProgress,
+) -> AsyncResult {
+    if progress.cancel.load(Ordering::Relaxed) {
+        return AsyncResult::DataExternalRefresh {
+            name,
+            origin,
+            result: Err("cancelled".into()),
+        };
+    }
+    let result = match l123_io::ext_source::parse_connection_string(&connection) {
+        Ok(s) => s.query(&sql).map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    AsyncResult::DataExternalRefresh {
+        name,
+        origin,
+        result,
+    }
 }

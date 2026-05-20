@@ -1,0 +1,60 @@
+# /Data External Refresh — WAIT mode mid-flight (M12 v0.4 slice 4)
+# /DER now runs the SQL on a background tokio task; the user sees
+# WAIT + a "Refreshing <name>" hint on line 3 until the worker
+# returns. BLOCK_NEXT_OP parks the op pre-spawn so the transcript
+# can observe the WAIT frame deterministically.
+
+SIZE 120 25
+
+# Connect "sales" and bind a query so /DER has something to re-run.
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS sales
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+ASSERT_MODE      READY
+
+KEY /
+KEY D
+KEY E
+KEY U
+KEYS sales
+ENTER
+KEYS SELECT id, name, qty FROM items ORDER BY id
+ENTER
+ASSERT_MODE      READY
+ASSERT_CELL      A:B2  widget
+
+# Overwrite the bound cell so we can prove the refresh actually fires.
+F 5
+KEYS B2
+ENTER
+KEYS junk
+ENTER
+ASSERT_CELL      A:B2  junk
+
+# Park the next op so the WAIT frame is observable.
+BLOCK_NEXT_OP
+
+# /DER sales — queues the refresh; mode flips to WAIT but the
+# parked op hasn't run, so the cell still shows "junk".
+KEY /
+KEY D
+KEY E
+KEY R
+KEYS sales
+ENTER
+ASSERT_MODE      WAIT
+ASSERT_PANEL_L3  Refreshing sales
+ASSERT_CELL      A:B2  junk
+
+# Drain the parked op. The worker runs, writes the records back, and
+# the apply path returns the App to READY.
+RESUME_OP
+ASSERT_MODE      READY
+ASSERT_CELL      A:A2  1
+ASSERT_CELL      A:B2  widget
+ASSERT_CELL      A:C2  100
