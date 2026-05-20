@@ -1,0 +1,62 @@
+# /Data External — bound cells are display-protected (M12 v0.4
+# slice 6). After `/Use` writes the result, the cells inside
+# `last_range` are marked external-bound: the PROT status
+# indicator lights when the pointer is on them and direct edit
+# (typing, F2) is refused. SPEC §10.
+
+SIZE 120 25
+
+# Connect + Use against the existing fixture; the binding lands
+# at A1..C4 (4 rows × 3 cols: header + 3 data rows).
+KEY /
+KEY D
+KEY E
+KEY C
+KEYS sales
+ENTER
+KEYS sqlite:tests/acceptance/fixtures/m11_import.sqlite
+ENTER
+KEY /
+KEY D
+KEY E
+KEY U
+KEYS sales
+ENTER
+KEYS SELECT id, name, qty FROM items ORDER BY id
+ENTER
+ASSERT_MODE      READY
+ASSERT_CELL      A:B2  widget
+
+# Move to a bound cell — PROT lights on the status line.
+F 5
+KEYS B2
+ENTER
+ASSERT_POINTER   A:B2
+ASSERT_STATUS    PROT
+
+# Try to type a value over the binding → refused, ERROR mode,
+# B2 still shows "widget".
+KEYS 99
+ASSERT_MODE      ERROR
+ASSERT_PANEL_L2  externally bound
+ESC
+ASSERT_MODE      READY
+ASSERT_CELL      A:B2  widget
+
+# F2 edit on a bound cell also refuses.
+F 2
+ASSERT_MODE      ERROR
+ASSERT_PANEL_L2  externally bound
+ESC
+ASSERT_MODE      READY
+
+# Move to an unbound cell (column D is outside the 3-col bound
+# range that covers A..C). PROT goes away; typing succeeds.
+F 5
+KEYS D2
+ENTER
+ASSERT_POINTER   A:D2
+ASSERT_SCREEN_NOT_CONTAINS PROT
+KEYS 42
+ENTER
+ASSERT_CELL      A:D2  42

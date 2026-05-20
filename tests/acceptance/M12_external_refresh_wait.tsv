@@ -1,8 +1,9 @@
-# /Data External Refresh — WAIT mode mid-flight (M12 v0.4 slice 4)
-# /DER now runs the SQL on a background tokio task; the user sees
-# WAIT + a "Refreshing <name>" hint on line 3 until the worker
-# returns. BLOCK_NEXT_OP parks the op pre-spawn so the transcript
-# can observe the WAIT frame deterministically.
+# /Data External Refresh — WAIT mode mid-flight (M12 v0.4 slice 4;
+# updated for slice 6 PROT enforcement). /DER runs the SQL on a
+# background tokio task; the user sees WAIT + a "Refreshing <name>"
+# hint on line 3 until the worker returns. BLOCK_NEXT_OP parks the
+# op pre-spawn so the transcript can observe the WAIT frame
+# deterministically.
 
 SIZE 120 25
 
@@ -28,19 +29,12 @@ ENTER
 ASSERT_MODE      READY
 ASSERT_CELL      A:B2  widget
 
-# Overwrite the bound cell so we can prove the refresh actually fires.
-F 5
-KEYS B2
-ENTER
-KEYS junk
-ENTER
-ASSERT_CELL      A:B2  junk
-
 # Park the next op so the WAIT frame is observable.
 BLOCK_NEXT_OP
 
 # /DER sales — queues the refresh; mode flips to WAIT but the
-# parked op hasn't run, so the cell still shows "junk".
+# parked op hasn't run yet, so the bound cells are unchanged
+# from the original /DEU write.
 KEY /
 KEY D
 KEY E
@@ -49,7 +43,6 @@ KEYS sales
 ENTER
 ASSERT_MODE      WAIT
 ASSERT_PANEL_L3  Refreshing sales
-ASSERT_CELL      A:B2  junk
 
 # Drain the parked op. The worker runs, writes the records back, and
 # the apply path returns the App to READY.

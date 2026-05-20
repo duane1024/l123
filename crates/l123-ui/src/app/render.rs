@@ -2682,6 +2682,13 @@ impl App {
         if self.recalc_pending {
             indicators.push("CALC");
         }
+        // M12 v0.4 slice 6 — light PROT when the pointer is over a
+        // cell inside any `/Data External Use` binding. Direct edit
+        // on those cells is refused; the user has to /DER or /DED
+        // to mutate them.
+        if self.addr_is_externally_bound(self.wb().pointer) {
+            indicators.push("PROT");
+        }
         if self.learn_recording {
             indicators.push("LEARN");
         }

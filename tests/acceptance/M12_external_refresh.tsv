@@ -1,7 +1,7 @@
-# /Data External Refresh (M12 v0.4 slice 2)
-# /DER re-runs the most recent /DEU query against a registered source
-# and replaces values in place. Verify it by overwriting a bound cell
-# and watching the refresh restore it.
+# /Data External Refresh (M12 v0.4 slice 2; updated for slice 6
+# PROT enforcement). /DER re-runs the most recent /DEU query
+# against a registered source and replaces values in place,
+# leaving adjacent (unbound) cells untouched.
 
 SIZE 120 25
 
@@ -29,17 +29,16 @@ ASSERT_MODE      READY
 ASSERT_CELL      A:A2  1
 ASSERT_CELL      A:B2  widget
 
-# Overwrite the bound cell A:B2 with a label that doesn't match the
-# query result. Slice 2 has no PROT enforcement yet — that's slice 6.
+# Drop a value into an unbound adjacent cell (column D is outside
+# the A..C bound range). Refresh must leave this untouched.
 F 5
-KEYS B2
+KEYS D2
 ENTER
-KEYS junk
+KEYS adjacent
 ENTER
-ASSERT_CELL      A:B2  junk
+ASSERT_CELL      A:D2  adjacent
 
-# /DER refreshes the binding — re-runs the stashed query, restores
-# A:B2 to "widget".
+# /DER refreshes the binding — re-runs the stashed query.
 KEY /
 KEY D
 KEY E
@@ -48,11 +47,14 @@ ASSERT_PANEL_L3  Refresh
 KEYS sales
 ENTER
 ASSERT_MODE      READY
+
+# Bound cells re-rendered correctly.
 ASSERT_CELL      A:A2  1
 ASSERT_CELL      A:B2  widget
 ASSERT_CELL      A:C2  100
-
-# Other rows survive the round-trip too.
 ASSERT_CELL      A:A4  3
 ASSERT_CELL      A:B4  gizmo
 ASSERT_CELL      A:C4
+
+# Adjacent unbound cell survived the refresh.
+ASSERT_CELL      A:D2  adjacent

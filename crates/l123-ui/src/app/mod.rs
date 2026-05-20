@@ -1578,8 +1578,28 @@ impl App {
         self.start_name_prompt("Enter address to go to:", PromptNext::Goto);
     }
 
+    /// `true` when `addr` falls inside any registered external
+    /// source's `last_range` (M12 v0.4 slice 6). External-bound
+    /// cells light the `PROT` indicator and refuse direct edit so
+    /// the user can't desynchronize the worksheet from its source
+    /// of truth — they have to go through `/DER` or `/DED`.
+    pub(super) fn addr_is_externally_bound(&self, addr: Address) -> bool {
+        self.wb().external_sources.values().any(|src| {
+            src.last_range
+                .map(|r| r.normalized().contains(addr))
+                .unwrap_or(false)
+        })
+    }
+
     fn begin_edit(&mut self) {
         let pointer = self.wb().pointer;
+        if self.addr_is_externally_bound(pointer) {
+            self.set_error(format!(
+                "{} is externally bound; use /Data External Refresh to update it",
+                pointer.display_full()
+            ));
+            return;
+        }
         let source = self
             .wb()
             .cells
@@ -1696,6 +1716,16 @@ impl App {
         // label-prefix chars (`'`/`"`/`^`/`\`/`|`) still pick their
         // own prefix — the user is being explicit, so honor them.
         let pointer = self.wb().pointer;
+        // M12 v0.4 slice 6 — external-bound cells refuse direct edit;
+        // the user has to go through `/Data External Refresh` or
+        // `/Data External Disconnect` to mutate them.
+        if self.addr_is_externally_bound(pointer) {
+            self.set_error(format!(
+                "{} is externally bound; use /Data External Refresh to update it",
+                pointer.display_full()
+            ));
+            return;
+        }
         let label_only = matches!(
             self.wb().cell_formats.get(&pointer).copied(),
             Some(f) if matches!(f.kind, FormatKind::LabelOnly)

@@ -1568,6 +1568,7 @@ transcripts! {
     m12_external_refresh_wait        => "M12_external_refresh_wait.tsv",
     m12_external_disconnect          => "M12_external_disconnect.tsv",
     m12_external_reset               => "M12_external_reset.tsv",
+    m12_external_protected           => "M12_external_protected.tsv",
 }
 
 #[cfg(feature = "wk3")]
