@@ -5841,7 +5841,13 @@ impl App {
                     key.clone(),
                     l123_io::external_sources::ExternalSourceSnapshot {
                         name: src.name.clone(),
-                        connection: src.connection.clone(),
+                        // M12 v0.4 slice 4b — passwords stay in
+                        // memory; the on-disk sidecar carries the
+                        // bare URL so xlsx files can travel between
+                        // hosts / users without leaking credentials.
+                        // Reconnect resolves via the libpq
+                        // PGPASSWORD env var (or re-/DEC).
+                        connection: l123_io::ext_source::strip_credentials(&src.connection),
                         last_query: src.last_query.clone(),
                         last_range: range,
                         last_refreshed_at: src.last_refreshed_at,

@@ -4591,3 +4591,42 @@ fn corner_follows_active_sheet_after_insert() {
         "after /WISB the original sheet shifts to B and the pointer follows; got {corner:?}"
     );
 }
+
+#[test]
+fn external_sources_snapshot_strips_postgres_password() {
+    // M12 v0.4 slice 4b — verify the save-time snapshot scrubs
+    // passwords from postgres URLs before they hit the xlsx
+    // sidecar. Sqlite URLs pass through unchanged.
+    let mut app = App::new();
+    app.wb_mut().external_sources.insert(
+        "live".into(),
+        ExternalSource {
+            name: "live".into(),
+            connection: "postgres://alice:s3cret@db.local/sales".into(),
+            last_query: Some("SELECT 1".into()),
+            last_range: None,
+            last_refreshed_at: None,
+        },
+    );
+    app.wb_mut().external_sources.insert(
+        "local".into(),
+        ExternalSource {
+            name: "local".into(),
+            connection: "sqlite:/tmp/x.db".into(),
+            last_query: None,
+            last_range: None,
+            last_refreshed_at: None,
+        },
+    );
+    let snap = app.external_sources_snapshot();
+    assert_eq!(
+        snap.get("live").unwrap().connection,
+        "postgres://alice@db.local/sales",
+        "password should be stripped before persisting"
+    );
+    assert_eq!(
+        snap.get("local").unwrap().connection,
+        "sqlite:/tmp/x.db",
+        "sqlite paths pass through unchanged"
+    );
+}

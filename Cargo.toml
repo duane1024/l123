@@ -59,6 +59,12 @@ arrow-schema   = "54"
 # SQLite reader for `/File Import Sqlite` (v0.4). `bundled` builds
 # libsqlite3 from source so we don't depend on a system install.
 rusqlite       = { version = "0.32", features = ["bundled"] }
+# Pure-rust Postgres driver for `/Data External` (M12 v0.4 slice 4b).
+# Sync API — workers call it from spawn_blocking. Default features
+# stay off so type-conversion trait crates (chrono / bigdecimal /
+# uuid / etc.) don't get pulled in transitively; the loader maps
+# everything to Value::Text or Value::Number via the bare types.
+postgres       = { version = "0.19", default-features = false }
 plotters       = { version = "0.3", default-features = false, features = ["svg_backend", "bitmap_backend", "bitmap_encoder", "line_series", "point_series", "histogram", "full_palette", "ttf"] }
 image          = { version = "0.25", default-features = false, features = ["png"] }
 ratatui-image  = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
